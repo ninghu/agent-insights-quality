@@ -132,11 +132,12 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             "contract_digest": "sha256:" + "f" * 64,
         },
         "validation_mode": "deterministic",
-        "n": 5,
-        "k": 5,
+        "n": 10,
+        "k": 6,
         "execution_digest": "sha256:" + "1" * 64,
         "required_surfaces": ["semantic"],
-        "issue_trace_gap_acceptance": None,
+        "trace_maturity_proof": None,
+        "trace_unknown_acceptance": None,
         "evidence_reference": "sha256:" + "b" * 64,
         "runtime_status": "observed",
         "error_code": None,
@@ -156,12 +157,12 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             }
         ],
         "endpoint_evidence": {
-            "request_count": 5,
-            "response_count": 5,
-            "usable_response_count": 5,
+            "request_count": 10,
+            "response_count": 10,
+            "usable_response_count": 10,
             "trace_contract_verified": True,
-            "semantic_assertion_count": 5,
-            "semantic_assertions_passed": 5,
+            "semantic_assertion_count": 10,
+            "semantic_assertions_passed": 10,
             "trace_assertion_count": 0,
             "trace_assertions_passed": 0,
             "request_summaries": [
@@ -186,7 +187,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                     "function_call_count": 0,
                     "error_code": None,
                 }
-                for index in range(5)
+                for index in range(10)
             ],
         },
         "full_request_trace_proof": _trace_proof(),
@@ -383,16 +384,17 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         load_assessments([path], {"issue-001"}, packages, manifest)
 
 
-def test_assessment_excludes_cards_linked_to_foreign_operations() -> None:
+def test_assessment_rejects_any_card_linked_to_foreign_operations() -> None:
     exact = SimpleNamespace(linked_operation_ids=("a" * 32,))
     mixed = SimpleNamespace(linked_operation_ids=("a" * 32, "b" * 32))
     foreign = SimpleNamespace(linked_operation_ids=("b" * 32,))
     unlinked = SimpleNamespace(linked_operation_ids=())
 
-    assert _cards_for_operations(
-        [exact, mixed, foreign, unlinked],
-        {"a" * 32},
-    ) == [exact]
+    with pytest.raises(ContractError, match="invalid, duplicate, or out-of-scope"):
+        _cards_for_operations(
+            [exact, mixed, foreign, unlinked],
+            {"a" * 32},
+        )
     assert _linked_baseline_operations(exact, {"a" * 32}) == ("a" * 32,)
     with pytest.raises(ContractError, match="exclusively linked"):
         _linked_baseline_operations(mixed, {"a" * 32})
@@ -464,22 +466,22 @@ def _complete_prompt_baseline_package() -> dict:
             "function_call_count": 0,
             "error_code": None,
         }
-        for index in range(5)
+        for index in range(10)
     ]
     endpoint = {
-        "request_count": 5,
-        "response_count": 5,
-        "usable_response_count": 5,
+        "request_count": 10,
+        "response_count": 10,
+        "usable_response_count": 10,
         "trace_contract_verified": True,
-        "semantic_assertion_count": 5,
-        "semantic_assertions_passed": 5,
+        "semantic_assertion_count": 10,
+        "semantic_assertions_passed": 10,
         "trace_assertion_count": 0,
         "trace_assertions_passed": 0,
         "request_summaries": summaries,
     }
-    proof = _trace_proof(operation_count=5, terminal_count=5)
+    proof = _trace_proof(operation_count=10, terminal_count=10)
     contract = {
-        "request_count": 5,
+        "request_count": 10,
         "terminal_response": "direct_prompt",
         "semantic_assertions": "required_per_request",
         "function_calling": "forbidden",
@@ -487,8 +489,12 @@ def _complete_prompt_baseline_package() -> dict:
         "validation_mode": "baseline",
     }
     return {
+        "n": 10,
+        "k": 6,
         "endpoint_evidence": endpoint,
         "full_request_trace_proof": proof,
+        "trace_maturity_proof": None,
+        "trace_unknown_acceptance": None,
         "behavior_summary": _baseline_behavior_summary(
             endpoint,
             proof,
@@ -535,12 +541,12 @@ def test_baseline_behavior_counts_setup_as_traffic_not_observations() -> None:
         )
     endpoint = {
         **package["endpoint_evidence"],
-        "request_count": 10,
-        "response_count": 10,
-        "usable_response_count": 10,
+        "request_count": 20,
+        "response_count": 20,
+        "usable_response_count": 20,
         "request_summaries": summaries,
     }
-    proof = _trace_proof(operation_count=10, terminal_count=10)
+    proof = _trace_proof(operation_count=20, terminal_count=20)
 
     behavior = _baseline_behavior_summary(
         endpoint,
@@ -581,7 +587,7 @@ def test_zero_request_baseline_has_no_success_shaped_evidence() -> None:
         },
         {},
         {
-            "request_count": 5,
+            "request_count": 10,
             "terminal_response": "direct_prompt",
             "semantic_assertions": "required_per_request",
             "function_calling": "forbidden",
@@ -662,33 +668,23 @@ def test_issue_activation_requires_every_designated_assertion() -> None:
     assert _issue_activation_complete(package) is False
 
 
-def test_issue_activation_uses_reviewed_five_of_seven_required_surface() -> None:
+def test_issue_activation_rejects_semantic_contradictions_below_ten() -> None:
     package = _complete_prompt_baseline_package()
     summaries = package["endpoint_evidence"]["request_summaries"]
     for summary in summaries:
         summary["activation_gate"] = True
-    for index in range(5, 7):
-        summaries.append(
+    for summary in summaries[-4:]:
+        summary["semantic_assertions_passed"] = 0
+        summary["assertion_results"] = [
             {
-                **deepcopy(summaries[0]),
-                "request_index": index,
-                "semantic_assertions_passed": 0,
-                "assertion_results": [
-                    {
-                        "assertion": "synthetic_contract",
-                        "passed": False,
-                        "evidence_sufficient": True,
-                    }
-                ],
+                "assertion": "synthetic_contract",
+                "passed": False,
+                "evidence_sufficient": True,
             }
-        )
+        ]
     package["endpoint_evidence"].update(
         {
-            "request_count": 7,
-            "response_count": 7,
-            "usable_response_count": 7,
-            "semantic_assertion_count": 7,
-            "semantic_assertions_passed": 5,
+            "semantic_assertions_passed": 6,
         }
     )
     package.update(
@@ -697,13 +693,13 @@ def test_issue_activation_uses_reviewed_five_of_seven_required_surface() -> None
                 "verified": True,
                 "contract_digest": "sha256:" + "a" * 64,
             },
-            "n": 7,
-            "k": 5,
+            "n": 10,
+            "k": 6,
             "required_surfaces": ["semantic"],
         }
     )
 
-    assert _issue_activation_complete(package) is True
+    assert _issue_activation_complete(package) is False
     package["required_surfaces"] = ["trace"]
     assert _issue_activation_complete(package) is False
 
@@ -1129,12 +1125,12 @@ def test_malformed_assessment_packages_raise_contract_error(
                 "contract_digest": "sha256:" + "c" * 64,
             },
             "validation_mode": "baseline",
-            "n": 5,
-            "k": 5,
+            "n": 10,
+            "k": 6,
             "execution_digest": "sha256:" + "1" * 64,
             "runtime_status": "not_at_bar",
             "error_code": None,
-            "operation_count": 5,
+            "operation_count": 10,
             "observed_insights": [
                 {
                     "reference": "sha256:" + "d" * 64,

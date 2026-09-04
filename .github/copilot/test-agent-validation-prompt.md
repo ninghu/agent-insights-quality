@@ -52,16 +52,17 @@ time. Claims are hidden, worktree-bound, distinct, and leased; status exposes on
 After the verification barrier, have the coordinator run
 `python -m agent_insights_quality compose-test-agent-validation`.
 
-For a baseline, create one batched stable telemetry snapshot covering all five attempts. For an issue,
+For a baseline, create one batched stable telemetry snapshot covering all ten attempts. For an issue,
 create exactly two target batches: one stable snapshot for all issue attempts and one for all
 paired-`v0` attempts. Never query or stabilize attempts independently. Correlate every response to one
 unique exact-name/version `invoke_agent` anchor and its complete descendant tree. Reject orphaned,
 cyclic, duplicate, conflicting, cross-root, or late contradictory spans.
 
 Persist one immutable generation-fenced authority result immediately after deciding it and before
-claiming another. Keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply baseline `5/5`,
-deterministic `5/5` or the audited first-mature `3/5 + up to 2 trace-only unknown` issue-side
-exception plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
+claiming another. Keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply the shared mature-batch
+policy: baseline `6/10` with at most four trace-only unknowns and no observed failure; every issue
+mode `>=6/10` with at most four trace-only unknowns; and paired `v0` `0/10` with six proven controls
+plus at most four trace-only unknowns. Unknowns remain explicitly incomplete and never count as observations.
 Complete stable evidence below threshold is `FAIL`; missing, ambiguous, partial, or unstable evidence
 is `INCOMPLETE`. Later failures never discard completed authority results. Retry only missing,
 `INCOMPLETE`, or exact-binding-changed authorities. Final composition requires exact current results
@@ -74,13 +75,13 @@ assignment, and never accept run/generation IDs or authority IDs. Use
 `run-test-agent-validation` only for status and next-action guidance; it never creates sub-sessions
 or executes phase work.
 
-Keep required content-addressed history, desired state, receipts, registries, and evidence under
+Keep generation lifecycle, desired state, receipts, registries, and evidence under
 `~/.aiq-runtime/agent-insights-quality/test-agent-validation/`. Starting a new validation records
 `SUPERSEDED` and atomically swaps active state. There is no cleanup: never delete any provider object,
-receipt, or evidence.
+receipt, or evidence. A fresh advisory run validates all 41 authorities. Recovery may reference only
+its immediately preceding source generation and never scans global PASS history.
 Never create a monitor, run Agent Insights, assess or report cards, publish ADX, send email, run
 Daily, or write validation lifecycle/evidence to Blob.
 
-The successful result creates no approval artifact. Only after explicit user approval may the
-separate `approve-test-agent-validation` command re-read the exact PR head and READY evidence, then
-create the one minimal immutable approved Blob record. Merge remains manual.
+The successful result creates no approval artifact. Staging status is advisory; Daily never consumes
+it as an admission gate. Merge and the decision to manually invoke Daily remain human actions.

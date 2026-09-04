@@ -213,8 +213,8 @@
       {
         "id": "support-ticket-agent-baseline-health",
         "validation_mode": "baseline",
-        "n": 5,
-        "k": 5,
+        "n": 10,
+        "k": 6,
         "fixtures": [],
         "attempts": [
           {
@@ -725,6 +725,515 @@
                 }
               }
             ]
+          },
+          {
+            "index": 6,
+            "conversation_group": "support-ticket-agent-v0-attempt-06",
+            "parameters": {
+              "case_id": "case-06",
+              "source_request_ids": [
+                "support-ticket-agent-v0-grounded"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "support-ticket-agent-v0-setup-06-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "support-ticket-agent-v0-probe-06-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 06. Read ticket-demo-1."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "ticket-demo-1",
+                      "revision 3",
+                      "open"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "required_operation_sequence",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "invoke_agent",
+                        "execute_tool",
+                        "chat"
+                      ]
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 7,
+            "conversation_group": "support-ticket-agent-v0-attempt-07",
+            "parameters": {
+              "case_id": "case-07",
+              "source_request_ids": [
+                "support-ticket-agent-v0-bounded"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "support-ticket-agent-v0-setup-07-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "support-ticket-agent-v0-probe-07-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 07. Summarize ticket-demo-2 in one sentence."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "ticket-demo-2",
+                      "revision 1"
+                    ],
+                    "max_words": 40
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "required_operation_sequence",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "invoke_agent",
+                        "execute_tool",
+                        "chat"
+                      ]
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 8,
+            "conversation_group": "support-ticket-agent-v0-attempt-08",
+            "parameters": {
+              "case_id": "case-08",
+              "source_request_ids": [
+                "support-ticket-agent-v0-ordinary"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "support-ticket-agent-v0-setup-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "support-ticket-agent-v0-probe-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. Confirm update for ticket-demo-1 at revision 3."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "ticket-demo-1",
+                      "succeeded",
+                      "revision 3"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "required_operation_sequence",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "invoke_agent",
+                        "execute_tool",
+                        "chat"
+                      ]
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 9,
+            "conversation_group": "support-ticket-agent-v0-attempt-09",
+            "parameters": {
+              "case_id": "case-09",
+              "source_request_ids": [
+                "support-ticket-agent-v0-transient"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "support-ticket-agent-v0-setup-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "support-ticket-agent-v0-probe-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. Recover ticket-demo-1 after one temporary read failure."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "succeeded",
+                      "retry"
+                    ],
+                    "forbidden_claims": [
+                      "retry failed",
+                      "did not succeed",
+                      "recovery failed"
+                    ]
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "required_operation_sequence",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "invoke_agent",
+                        "execute_tool",
+                        "chat"
+                      ]
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 10,
+            "conversation_group": "support-ticket-agent-v0-attempt-10",
+            "parameters": {
+              "case_id": "case-10",
+              "source_request_ids": [
+                "support-ticket-agent-v0-partial"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "support-ticket-agent-v0-setup-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "support-ticket-agent-v0-probe-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. Read ticket-demo-1 while its optional history is unavailable."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "exact_text": "Ticket ID ticket-demo-1; revision 3; status open; summary Synthetic printer setup; optional history unavailable."
+                  },
+                  "trace_assertions": [
+                    {
+                      "name": "required_operation_sequence",
+                      "kind": "operation_sequence",
+                      "operations": [
+                        "invoke_agent",
+                        "execute_tool"
+                      ]
+                    }
+                  ],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
           }
         ],
         "healthy_predicate": {
@@ -734,9 +1243,9 @@
           "kind": "never"
         },
         "v0_control_predicate": null,
-        "execution_digest": "sha256:84751f97b74290ff4d24e8108d706c274a21bcb9e0d0903eb27ec05c0af3df6d"
+        "execution_digest": "sha256:80033beef687a920349d0b68c33f8fe6cf3467e36457b30cdae0d16c2c907b46"
       }
     ],
-    "execution_digest": "sha256:58c53a8ab9e66497fa704cb946e91e20fc9e37bb30bd3d200fd3a332e3049329"
+    "execution_digest": "sha256:7309dcab2000536ad3f9819c607a990d5952ddf8c62d5840c9d6283d197b9a81"
   }
 }

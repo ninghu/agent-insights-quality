@@ -10,7 +10,6 @@ param storageAccountPrefix string
 param storageResourceRole string
 param qualityArtifactContainerName string
 param deploymentRegistryContainerName string
-param approvedRecordContainerName string
 
 var commonTags = {
   purpose: 'agent-insights-quality'
@@ -232,17 +231,6 @@ resource deploymentRegistries 'Microsoft.Storage/storageAccounts/blobServices/co
   name: deploymentRegistryContainerName
   properties: {
     publicAccess: 'None'
-  }
-}
-
-resource approvedValidationRecords 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: approvedRecordContainerName
-  properties: {
-    publicAccess: 'None'
-    immutableStorageWithVersioning: {
-      enabled: true
-    }
   }
 }
 

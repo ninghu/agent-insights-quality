@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -15,7 +15,11 @@ from agent_insights_quality.models import (
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
 )
-from agent_insights_quality.validation_live import FoundryScenarioAttemptRunner
+from agent_insights_quality.validation_live import (
+    FoundryScenarioAttemptRunner,
+    FoundryScenarioVerifier,
+    evidence_maturity_proof,
+)
 from agent_insights_quality.validation_quota import (
     CapacityPlan,
     EndpointCost,
@@ -56,6 +60,99 @@ def _scheduler() -> ValidationScheduler:
         ),
         WeightedTokenBucket(request_capacity=100, token_capacity=10000),
     )
+
+
+def test_evidence_maturity_boundary_is_inclusive_and_receipt_bound() -> None:
+    start = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+    end = start + timedelta(seconds=30)
+    before = evidence_maturity_proof(
+        invocation_receipt_digest=HASH,
+        evidence_window_start=start,
+        evidence_window_end=end,
+        snapshot_observed_at=end + timedelta(seconds=1079),
+        maximum_hydration_seconds=900,
+        stabilization_seconds=180,
+    )
+    boundary = evidence_maturity_proof(
+        invocation_receipt_digest=HASH,
+        evidence_window_start=start,
+        evidence_window_end=end,
+        snapshot_observed_at=end + timedelta(seconds=1080),
+        maximum_hydration_seconds=900,
+        stabilization_seconds=180,
+    )
+
+    assert before["mature"] is False
+    assert before["snapshot_mode"] == "bounded_hydration"
+    assert boundary["mature"] is True
+    assert boundary["snapshot_mode"] == "mature_single_snapshot"
+    assert boundary["invocation_receipt_digest"] == HASH
+    assert boundary["maturity_boundary"] == boundary["snapshot_observed_at"]
+
+
+@pytest.mark.parametrize(
+    ("seconds_after_end", "expected_mature"),
+    [(1079, False), (1080, True)],
+)
+def test_verifier_applies_maturity_mode_to_whole_target_snapshot(
+    seconds_after_end,
+    expected_mature,
+) -> None:
+    start = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+    end = start + timedelta(seconds=30)
+    runtime = Runtime()
+    verifier = FoundryScenarioVerifier(
+        runtime,
+        endpoint_costs={"issue-001": EndpointCost(1, 1, 1)},
+        stabilization_seconds=180,
+        poll_seconds=15,
+        maximum_wait_seconds=900,
+        now=lambda: end + timedelta(seconds=seconds_after_end),
+    )
+    probe = _step("probe-1", probe=True)
+    scenario = {
+        "id": "synthetic-scenario",
+        "validation_mode": "deterministic",
+        "n": 1,
+        "k": 1,
+        "defect_predicate": {
+            "kind": "all_observation_steps_pass",
+            "step_ids": ["probe-1"],
+            "required_surfaces": ["trace"],
+        },
+    }
+    attempt = {
+        "index": 1,
+        "conversation_group": "synthetic-attempt-1",
+        "parameters": {},
+        "setup_steps": [],
+        "probe_steps": [probe],
+    }
+    invocation = {
+        "started_at": start.isoformat(),
+        "completed_at": end.isoformat(),
+        "response_ids": ["response-1"],
+        "usable_results": [True],
+        "session_id": "session-1",
+    }
+
+    collected = verifier.collect_attempts(
+        target=_target(),
+        executing_authority_id="issue-001",
+        conversation_role="issue",
+        scenario=scenario,
+        attempts=[attempt],
+        invocations=[invocation],
+        scheduler=_scheduler(),
+        invocation_receipt_digest=HASH,
+    )
+
+    assert collected["evidence_snapshot"]["mature"] is expected_mature
+    assert runtime.maturity_calls == [
+        ("discovery", expected_mature),
+        ("trace", expected_mature),
+        ("identity", expected_mature),
+    ]
 
 
 def _run_attempt(runner: FoundryScenarioAttemptRunner, **kwargs) -> dict:
@@ -123,6 +220,7 @@ class Runtime:
         self.invocation_fixtures = []
         self.previous_response_ids = []
         self.telemetry_requests = []
+        self.maturity_calls = []
 
     def _invoke_prompt(
         self,
@@ -156,6 +254,7 @@ class Runtime:
 
     def wait_for_telemetry(self, **kwargs):
         self.discovery_batches += 1
+        self.maturity_calls.append(("discovery", kwargs.get("mature", False)))
         values = tuple(
             f"{self.telemetry_counter + index + 1:032x}"
             for index in range(kwargs["invocation"].request_count)
@@ -165,8 +264,39 @@ class Runtime:
 
     def telemetry_identity_passes(self, **kwargs):
         self.identity_batches += 1
+        self.maturity_calls.append(("identity", kwargs.get("mature", False)))
         return tuple(
             self.identity_pass for _ in kwargs["operation_ids"]
+        )
+
+    def stable_correlated_evidence_for_requests(self, **kwargs):
+        self.trace_batches += 1
+        self.maturity_calls.append(("trace", kwargs["mature"]))
+        kwargs["on_hydration_state"]("complete")
+        return (
+            tuple(
+                [
+                    {
+                        "operation_id": operation_id,
+                        "span_id": f"anchor-{index}",
+                        "parent_span_id": "",
+                        "operation_name": "invoke_agent",
+                        "matched_reference": reference,
+                    }
+                ]
+                for index, (operation_id, reference) in enumerate(
+                    zip(
+                        kwargs["operation_ids"],
+                        kwargs["response_references"],
+                        strict=True,
+                    ),
+                    start=1,
+                )
+            ),
+            tuple(
+                f"anchor-{index}"
+                for index in range(1, len(kwargs["operation_ids"]) + 1)
+            ),
         )
 
     def canonical_output_messages_state(self, operation_ids):

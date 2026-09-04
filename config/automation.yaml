@@ -1,11 +1,15 @@
-schema_version: "3.0.0"
+schema_version: "4.0.0"
 weekday_schedule: [Monday, Tuesday, Wednesday, Thursday, Friday]
 daily_profile: daily
 full_run_profile: staging
 generated_branch_prefix: aiq-daily/
 issues_per_agent_daily: 4
 max_parallel_agents: 5
+daily_verification_max_parallel: 8
+daily_inter_version_pacing_seconds: 60
 insight_lookback_hours: 0.1
+insight_lookback_max_hours: 24
+insight_lookback_precision_minutes: 1
 clean_window_poll_seconds: 15
 clean_window_ingestion_margin_seconds: 30
 clean_window_max_wait_seconds: 1200
@@ -20,4 +24,3 @@ storage_account_prefix: aiqsweart
 storage_resource_role: qualification-storage
 quality_artifact_container: quality-artifacts
 deployment_registry_container: deployment-registries
-approved_record_container: test-agent-validation-approved-records-swedencentral-g30

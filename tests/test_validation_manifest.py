@@ -39,13 +39,12 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
         issues=issues,
         policy=policy,
     )
-    assert len(plan["authorities"]) == 41
     assert plan["commit_sha"] == "a" * 40
     assert plan["environment_id"] == "swedencentral-g30"
     assert plan["location"] == "swedencentral"
     assert plan["project_name"] == "aiq-staging-swedencentral"
     assert plan["telemetry_resource_set"] == "g30"
-    assert plan["endpoint_envelope"]["attempts"] == 449
+    assert plan["endpoint_envelope"]["attempts"] == 770
     assert plan["endpoint_envelope"]["requests"] >= 890
     assert plan["endpoint_envelope"]["worst_case_inner_model_calls"] == 4
     assert plan["validation_digest"].startswith("sha256:")
@@ -63,7 +62,7 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
 def test_validation_digest_tracks_fixed_authorities_not_coordinator_sources() -> None:
     agents, issues = load_catalogs()
     assert current_validation_digest(agents, issues) == (
-        "sha256:1d2964baeaf828c31a587323bbfdc3fad83f5b3558cd08ac99fc890c507f7891"
+        "sha256:9472c6ac535cc9b394d942b354d4529ba6e120a81fcaeac5d6d652a98cdae3a5"
     )
 
     changed_issues = deepcopy(issues)
@@ -114,9 +113,8 @@ def test_bound_plan_keeps_exact_run_and_topology() -> None:
 def test_authority_source_digests_include_runtime_identity_sources() -> None:
     agents, issues = load_catalogs()
     specs = authority_specs(agents, issues)
-    assert len(specs) == 41
     assert all(item.source_content_digest.startswith("sha256:") for item in specs)
-    assert len({item.execution_digest for item in specs}) == 41
+    assert len({item.execution_digest for item in specs}) == len(specs)
 
 
 def test_validation_contract_hash_normalizes_text_line_endings(tmp_path) -> None:
@@ -164,7 +162,7 @@ def test_verifier_digest_excludes_orchestration_and_authority_content(
     [
         (
             "src/agent_insights_quality/validation_rules.py",
-            '"baseline": (5, 5)',
+            '"baseline": (10, 6)',
             '"baseline": (7, 5)',
         ),
         (

@@ -10,7 +10,6 @@ from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
 from agent_insights_quality.daily_coordinator import _policy_binding
 from agent_insights_quality.daily_lifecycle import (
-    AGENT_ORDER,
     DailyLifecycle,
     DailyLock,
     daily_runtime_root,
@@ -32,7 +31,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
     selection = select_daily(report_date, agents, issues, hashes["issues"])
     moment = datetime(2026, 8, 31, 15, tzinfo=UTC).isoformat()
     return {
-        "schema_version": "5.0.0",
+        "schema_version": "6.0.0",
         "kind": "daily-qualification-lifecycle",
         "snapshot_type": "event",
         "state": "LOCKED",
@@ -62,7 +61,9 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
             "run_contract_digest": None,
         },
         "artifacts": {
-            "lane_receipts": {agent_name: None for agent_name in AGENT_ORDER},
+            "traffic_manifest": None,
+            "verification_manifest": None,
+            "insight_manifest": None,
             "manifest": None,
             "assessment_index": None,
             "improvement_input": None,
@@ -134,7 +135,7 @@ def test_unreadable_daily_lifecycle_is_archived_once_and_tombstoned(
     assert archives[0].name == (
         f"{active.value['superseded_format_digest'].removeprefix('sha256:')}.json"
     )
-    assert active.value["schema_version"] == "5.0.0"
+    assert active.value["schema_version"] == "6.0.0"
     assert active.value["state"] == "LOCKED"
     assert repeated.digest == active.digest
     assert archives[0].is_file()

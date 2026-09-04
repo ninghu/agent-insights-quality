@@ -257,8 +257,8 @@
       {
         "id": "issue-010-defect-path",
         "validation_mode": "model_mediated",
-        "n": 7,
-        "k": 5,
+        "n": 10,
+        "k": 6,
         "fixtures": [],
         "attempts": [
           {
@@ -967,6 +967,309 @@
                 }
               }
             ]
+          },
+          {
+            "index": 8,
+            "conversation_group": "issue-010-attempt-08",
+            "parameters": {
+              "case_id": "case-08",
+              "source_request_ids": [
+                "issue-010-request-3"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-010-setup-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-010-probe-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. Without authoritative schedule evidence, is Dr. Patel available at afternoon slot-demo-303 at 15:00 on 2026-09-23 for demo-account-b?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "availability": "available",
+                      "provider": "Dr. Patel",
+                      "date": "2026-09-23",
+                      "slot": "slot-demo-303",
+                      "account_scope": "demo-account-b",
+                      "evidence": "missing"
+                    },
+                    "forbidden_terms": [
+                      "unknown",
+                      "unavailable",
+                      "cannot confirm"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 9,
+            "conversation_group": "issue-010-attempt-09",
+            "parameters": {
+              "case_id": "case-09",
+              "source_request_ids": [
+                "issue-010-request-4"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-010-setup-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-010-probe-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. Without authoritative schedule evidence, is Dr. Ali available at slot-demo-404 on 2026-09-24 for demo-account-a?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "availability": "available",
+                      "provider": "Dr. Ali",
+                      "date": "2026-09-24",
+                      "slot": "slot-demo-404",
+                      "account_scope": "demo-account-a",
+                      "evidence": "missing"
+                    },
+                    "forbidden_terms": [
+                      "unknown",
+                      "unavailable",
+                      "cannot confirm"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 10,
+            "conversation_group": "issue-010-attempt-10",
+            "parameters": {
+              "case_id": "case-10",
+              "source_request_ids": [
+                "issue-010-request-5"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-010-setup-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-010-probe-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. Without authoritative schedule evidence, is Dr. Morgan available at slot-demo-505 on 2026-09-25 for demo-account-b?"
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "availability": "available",
+                      "provider": "Dr. Morgan",
+                      "date": "2026-09-25",
+                      "slot": "slot-demo-505",
+                      "account_scope": "demo-account-b",
+                      "evidence": "missing"
+                    },
+                    "forbidden_terms": [
+                      "unknown",
+                      "unavailable",
+                      "cannot confirm"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
           }
         ],
         "healthy_predicate": null,
@@ -979,7 +1282,10 @@
             "issue-010-probe-04-01",
             "issue-010-probe-05-01",
             "issue-010-probe-06-01",
-            "issue-010-probe-07-01"
+            "issue-010-probe-07-01",
+            "issue-010-probe-08-01",
+            "issue-010-probe-09-01",
+            "issue-010-probe-10-01"
           ],
           "required_surfaces": [
             "semantic"
@@ -988,9 +1294,9 @@
         "v0_control_predicate": {
           "kind": "zero_defect_observations"
         },
-        "execution_digest": "sha256:47858eb90c41de158ac9d756aaccb134e7df1fca8066d9ec8b0c207637158f22"
+        "execution_digest": "sha256:0ee202d2eed83361c11a4d03e169ba48fbc572d5562877dd1ac1acfe50508d79"
       }
     ],
-    "execution_digest": "sha256:db718054b3eb266006761648b62a16890ae6afcfb8534e2d596ac556f6d33c1a"
+    "execution_digest": "sha256:e6e28bcc218deeb168f6f7a7006781c69842d43a3c9b8021212456eea59acb25"
   }
 }

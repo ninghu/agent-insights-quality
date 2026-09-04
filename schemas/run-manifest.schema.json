@@ -32,6 +32,16 @@
         "contract_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     },
+    "phase_manifests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traffic", "verification", "insights"],
+      "properties": {
+        "traffic": {"$ref": "#/$defs/artifactReference"},
+        "verification": {"$ref": "#/$defs/artifactReference"},
+        "insights": {"$ref": "#/$defs/artifactReference"}
+      }
+    },
     "agents": {
       "type": "array",
       "minItems": 5,
@@ -49,7 +59,7 @@
             "additionalProperties": false,
             "required": ["request_count", "terminal_response", "semantic_assertions", "function_calling", "trace_operations", "validation_mode"],
             "properties": {
-              "request_count": {"const": 5},
+              "request_count": {"const": 10},
               "terminal_response": {"enum": ["direct_prompt", "standard_assistant_message", "explicit_span_attributes"]},
               "semantic_assertions": {"enum": ["required", "required_per_request"]},
               "function_calling": {"enum": ["forbidden", "not_applicable"]},
@@ -136,6 +146,15 @@
     "manifest_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
   },
   "$defs": {
+    "artifactReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
     "baselineEvidence": {
       "allOf": [
         {"$ref": "#/$defs/versionEvidence"},
@@ -144,8 +163,14 @@
             "logical_version": {"const": "v0"},
             "status": {"enum": ["passed", "not_at_bar", "inconclusive"]},
             "validation_mode": {"const": "baseline"},
-            "n": {"const": 5},
-            "issue_trace_gap_acceptance": {"type": "null"}
+            "n": {"const": 10},
+            "k": {"const": 6},
+            "trace_unknown_acceptance": {
+              "oneOf": [
+                {"type": "null"},
+                {"$ref": "#/$defs/traceUnknownAcceptance"}
+              ]
+            }
           },
           "not": {
             "anyOf": [
@@ -165,28 +190,10 @@
             "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
             "logical_version": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
             "status": {"enum": ["observed", "not_at_bar", "inconclusive", "skipped_baseline"]},
-            "validation_mode": {"enum": ["deterministic", "model_mediated"]}
-          },
-          "allOf": [
-            {
-              "if": {
-                "properties": {
-                  "validation_mode": {"const": "model_mediated"}
-                }
-              },
-              "then": {
-                "properties": {
-                  "n": {"const": 7},
-                  "issue_trace_gap_acceptance": {"type": "null"}
-                }
-              },
-              "else": {
-                "properties": {
-                  "n": {"const": 5}
-                }
-              }
-            }
-          ]
+            "validation_mode": {"enum": ["deterministic", "model_mediated"]},
+            "n": {"const": 10},
+            "k": {"const": 6}
+          }
         }
       ]
     },
@@ -216,7 +223,8 @@
         "trace_assertions_passed",
         "trace_contract_verified",
         "trace_behavior_summary",
-        "issue_trace_gap_acceptance",
+        "trace_maturity_proof",
+        "trace_unknown_acceptance",
         "endpoint_request_summaries",
         "evidence_reference"
       ],
@@ -233,8 +241,8 @@
         "validation_mode": {
           "enum": ["baseline", "deterministic", "model_mediated"]
         },
-        "n": {"enum": [5, 7]},
-        "k": {"const": 5},
+        "n": {"const": 10},
+        "k": {"const": 6},
         "execution_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "required_surfaces": {
           "type": "array",
@@ -275,10 +283,16 @@
         "trace_assertions_passed": {"type": "integer", "minimum": 0},
         "trace_contract_verified": {"type": "boolean"},
         "trace_behavior_summary": {"$ref": "#/$defs/traceBehaviorSummary"},
-        "issue_trace_gap_acceptance": {
+        "trace_maturity_proof": {
           "oneOf": [
             {"type": "null"},
-            {"$ref": "#/$defs/issueTraceGapAcceptance"}
+            {"$ref": "#/$defs/traceMaturityProof"}
+          ]
+        },
+        "trace_unknown_acceptance": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/traceUnknownAcceptance"}
           ]
         },
         "endpoint_request_summaries": {
@@ -355,22 +369,28 @@
         }
       }
     },
-    "issueTraceGapAcceptance": {
+    "traceUnknownAcceptance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["policy", "observation_count", "unknown_attempt_indices"],
+      "required": [
+        "policy",
+        "target_role",
+        "observation_count",
+        "unknown_attempt_indices",
+        "maturity_proof_digest"
+      ],
       "properties": {
-        "policy": {
-          "const": "deterministic_issue_trace_gap_first_mature_batch_v1"
-        },
-        "observation_count": {"type": "integer", "minimum": 3, "maximum": 4},
+        "policy": {"const": "mature_trace_unknown_v1"},
+        "target_role": {"enum": ["baseline", "issue", "paired_v0"]},
+        "observation_count": {"type": "integer", "minimum": 0, "maximum": 10},
         "unknown_attempt_indices": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 4,
           "uniqueItems": true,
-          "items": {"type": "integer", "minimum": 1, "maximum": 5}
-        }
+          "items": {"type": "integer", "minimum": 1, "maximum": 10}
+        },
+        "maturity_proof_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     },
     "traceBehaviorSummary": {
@@ -396,6 +416,32 @@
         "terminal_response_count": {"type": "integer", "minimum": 0},
         "handled_error_count": {"type": "integer", "minimum": 0},
         "unhandled_error_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "traceMaturityProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "evidence_window_start",
+        "evidence_window_end",
+        "maturity_boundary",
+        "snapshot_observed_at",
+        "maximum_hydration_seconds",
+        "stabilization_seconds",
+        "maturity_proof_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "1.0.0"},
+        "kind": {"const": "daily-trace-maturity-proof"},
+        "evidence_window_start": {"type": "string", "format": "date-time"},
+        "evidence_window_end": {"type": "string", "format": "date-time"},
+        "maturity_boundary": {"type": "string", "format": "date-time"},
+        "snapshot_observed_at": {"type": "string", "format": "date-time"},
+        "maximum_hydration_seconds": {"type": "integer", "minimum": 1},
+        "stabilization_seconds": {"type": "integer", "minimum": 1},
+        "maturity_proof_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     }
   }

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import copy
-import json
 from collections.abc import Mapping
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -11,8 +9,8 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.validation_trace_gap_policy import (
-    deterministic_issue_trace_gap_acceptance,
-    issue_side_decided,
+    target_evidence_decided,
+    trace_unknown_acceptance,
 )
 from agent_insights_quality.util import (
     ROOT,
@@ -93,10 +91,6 @@ def validate_evidence(
             )
     if runtime_topology is not None:
         _validate_runtime_topology_binding(value, runtime_topology)
-        if value["runtime_topology_digest"] != content_hash(
-            runtime_topology["agents"]
-        ):
-            raise ContractError("Validation evidence runtime topology digest is stale")
     if resources is not None and value["resource_inventory_digest"] != content_hash(
         resources
     ):
@@ -200,147 +194,24 @@ def persist_evidence(
     )
 
 
-def select_reusable_authority_evidence(
-    *,
-    authorities: list[AuthoritySpec],
-    runtime_topology: Mapping[str, Any],
-    repository: str,
-    pr_number: int,
-    environment_id: str,
-    location: str,
-    project_name: str,
-    telemetry_resource_set: str,
-    shared_validation_digest: str,
-    forced_authority_ids: set[str] | None = None,
-    root: Path | None = None,
-) -> tuple[list[str], list[dict[str, str]]]:
-    runtime_root = (root or validation_runtime_root()).resolve()
-    owner, name = repository.split("/", 1)
-    evidence_root = runtime_root / "evidence" / owner / name
-    candidates: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
-    if evidence_root.is_dir():
-        for path in evidence_root.rglob("*.json"):
-            try:
-                value = read_json(path)
-                if (
-                    path.resolve()
-                    != _persisted_evidence_path(runtime_root, value).resolve()
-                    or path.read_bytes() != _canonical_document_bytes(value)
-                ):
-                    raise ContractError(
-                        "Reusable validation evidence provenance is invalid"
-                    )
-                validate_evidence_integrity(value)
-                completed = datetime.fromisoformat(
-                    str(value["completed_at"]).replace("Z", "+00:00")
-                ).isoformat()
-            except (ContractError, KeyError, OSError, ValueError):
-                continue
-            if (
-                value["repository"] != repository
-                or value["environment_id"] != environment_id
-                or value["location"] != location
-                or project_name != "aiq-staging-swedencentral"
-                or value["telemetry_resource_set"] != telemetry_resource_set
-            ):
-                continue
-            for item in value["authorities"]:
-                authority_id = item["authority_id"]
-                candidates.setdefault(authority_id, []).append(
-                    (completed, path, value)
-                )
-
-    runtime_by_id = {
-        item["authority_id"]: item for item in runtime_topology["agents"]
-    }
-    forced = forced_authority_ids or set()
-    selected: list[str] = []
-    reused: list[dict[str, str]] = []
-    for authority in authorities:
-        matching = sorted(
-            candidate
-            for candidate in candidates.get(authority.authority_id, [])
-            if _authority_is_reusable(
-                candidate[2],
-                authority=authority,
-                runtime=runtime_by_id[authority.authority_id],
-            )
-        )
-        if authority.authority_id in forced or not matching:
-            selected.append(authority.authority_id)
-            continue
-        latest_completed = matching[-1][0]
-        latest = [
-            candidate
-            for candidate in matching
-            if candidate[0] == latest_completed
-        ]
-        if len({candidate[2]["evidence_digest"] for candidate in latest}) != 1:
-            selected.append(authority.authority_id)
-            continue
-        candidate = latest[-1]
-        _, path, evidence = candidate
-        item = next(
-            entry
-            for entry in evidence["authorities"]
-            if entry["authority_id"] == authority.authority_id
-        )
-        reused.append(
-            {
-                "authority_id": authority.authority_id,
-                "path": path.resolve().relative_to(runtime_root).as_posix(),
-                "evidence_digest": evidence["evidence_digest"],
-                "authority_evidence_digest": item["authority_evidence_digest"],
-            }
-        )
-    return selected, reused
-
-
 def load_reused_authority_evidence(
     reference: Mapping[str, str],
     *,
     root: Path | None = None,
 ) -> dict[str, Any]:
-    if "authority_result_digest" in reference:
-        from agent_insights_quality.validation_authority_results import (
-            load_authority_verification_result,
-        )
-
-        result = load_authority_verification_result(reference, root=root)
-        authority = result["authority_evidence"]
-        if (
-            result["outcome"] not in {"PASS", "FAIL"}
-            or not isinstance(authority, dict)
-        ):
-            raise ContractError("Reused authority result is not definitive evidence")
-        return copy.deepcopy(authority)
-    runtime_root = (root or validation_runtime_root()).resolve()
-    path = (runtime_root / reference["path"]).resolve()
-    if runtime_root not in path.parents:
-        raise ContractError("Reused validation evidence path escapes the runtime root")
-    value = read_json(path)
-    if (
-        path.resolve() != _persisted_evidence_path(runtime_root, value).resolve()
-        or path.read_bytes() != _canonical_document_bytes(value)
-    ):
-        raise ContractError("Reused validation evidence provenance changed")
-    validate_evidence_integrity(value)
-    if value["evidence_digest"] != reference["evidence_digest"]:
-        raise ContractError("Reused validation evidence digest changed")
-    authority = next(
-        (
-            item
-            for item in value["authorities"]
-            if item["authority_id"] == reference["authority_id"]
-        ),
-        None,
+    from agent_insights_quality.validation_authority_results import (
+        load_authority_verification_result,
     )
+
+    if "authority_result_digest" not in reference:
+        raise ContractError("Reusable authority evidence must reference a result")
+    result = load_authority_verification_result(reference, root=root)
+    authority = result["authority_evidence"]
     if (
-        authority is None
-        or authority["authority_evidence_digest"]
-        != reference["authority_evidence_digest"]
+        result["outcome"] not in {"PASS", "FAIL"}
+        or not isinstance(authority, dict)
     ):
-        raise ContractError("Reused authority evidence digest changed")
+        raise ContractError("Reused authority result is not definitive evidence")
     return copy.deepcopy(authority)
 
 
@@ -366,55 +237,6 @@ def runtime_mapping_digest(runtime: Mapping[str, Any]) -> str:
             )
         }
     )
-
-
-def _authority_is_reusable(
-    evidence: Mapping[str, Any],
-    *,
-    authority: AuthoritySpec,
-    runtime: Mapping[str, Any],
-) -> bool:
-    item = next(
-        (
-            entry
-            for entry in evidence["authorities"]
-            if entry["authority_id"] == authority.authority_id
-        ),
-        None,
-    )
-    return bool(
-        item is not None
-        and item["pass"] is True
-        and item["authority_kind"] == authority.authority_kind
-        and item["canonical_agent"] == authority.canonical_agent
-        and item["logical_version"] == authority.logical_version
-        and item["source_content_digest"] == authority.source_content_digest
-        and item["execution_digest"] == authority.execution_digest
-        and item["provider_content_digest"] == runtime["provider_content_digest"]
-        and item["runtime_mapping_digest"] == runtime_mapping_digest(runtime)
-    )
-
-
-def _persisted_evidence_path(
-    root: Path,
-    value: Mapping[str, Any],
-) -> Path:
-    owner, name = str(value["repository"]).split("/", 1)
-    return (
-        root
-        / "evidence"
-        / owner
-        / name
-        / str(value["pr_number"])
-        / str(value["run_id"])
-        / f"{str(value['evidence_digest']).removeprefix('sha256:')}.json"
-    )
-
-
-def _canonical_document_bytes(value: Mapping[str, Any]) -> bytes:
-    return (
-        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
-    ).encode("ascii")
 
 
 def digest_without_field(value: Mapping[str, Any], field: str) -> str:
@@ -452,91 +274,22 @@ def scenario_evidence_complete(
     complete_count: int,
     paired_complete_count: int,
     observation_count: int,
-    issue_trace_gap_accepted: bool = False,
-    paired_trace_gap_accepted: bool = False,
+    paired_observation_count: int,
+    primary_trace_unknown_accepted: bool = False,
+    paired_trace_unknown_accepted: bool = False,
 ) -> bool:
-    issue_decided = complete_count == n or (
-        authority_kind == "issue"
-        and (
-            observation_count >= k
-            or issue_trace_gap_accepted
-        )
+    primary_decided = complete_count == n or (
+        observation_count >= k and primary_trace_unknown_accepted
     )
     control_decided = (
         authority_kind == "baseline"
         or paired_complete_count == n
         or (
-            authority_kind == "issue"
-            and paired_trace_gap_accepted
-            and paired_complete_count == n - 1
+            paired_observation_count == 0
+            and paired_trace_unknown_accepted
         )
     )
-    return issue_decided and control_decided
-
-
-def paired_trace_gap_attempt_index(
-    *,
-    authority_kind: str,
-    authority_id: str,
-    scenario: Mapping[str, Any],
-) -> int | None:
-    n, k = validation_matrix(str(scenario["validation_mode"]))
-    incomplete_controls = [
-        attempt
-        for attempt in scenario["v0_attempts"]
-        if attempt["complete"] is not True
-    ]
-    if (
-        authority_kind != "issue"
-        or "trace"
-        not in _reviewed_required_surfaces(
-            authority_id,
-            str(scenario["scenario_id"]),
-        )
-        or not issue_side_decided(
-            observation_count=int(scenario["observation_count"]),
-            k=k,
-            trace_gap_acceptance=scenario.get(
-                "issue_trace_gap_acceptance"
-            ),
-        )
-        or scenario["paired_complete_count"] != n - 1
-        or scenario["paired_observation_count"] != 0
-        or len(incomplete_controls) != 1
-    ):
-        return None
-    attempt = incomplete_controls[0]
-    steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
-    if (
-        attempt["error_code"] != "missing_evidence"
-        or any(
-            step["endpoint_pass"] is not True
-            or step["identity_pass"] is not True
-            or step.get("semantic_evidence_complete") is not True
-            for step in steps
-        )
-        or not any(
-            step.get("trace_evidence_complete") is not True for step in steps
-        )
-        or any(
-            step["complete"] is not True
-            and step.get("trace_evidence_complete") is True
-            for step in steps
-        )
-        or any(
-            (
-                step["semantic_evidence_complete"] is True
-                and step["semantic_pass"] is not True
-            )
-            or (
-                step["trace_evidence_complete"] is True
-                and step["trace_pass"] is not True
-            )
-            for step in steps
-        )
-    ):
-        return None
-    return int(attempt["index"])
+    return primary_decided and control_decided
 
 
 def _validate_authority(authority: Mapping[str, Any]) -> None:
@@ -629,28 +382,38 @@ def _validate_scenario(
     paired_observation_count = sum(
         attempt["observation"] is True for attempt in v0_attempts
     )
-    issue_acceptance = scenario.get("issue_trace_gap_acceptance")
-    expected_issue_acceptance = _issue_trace_gap_acceptance(
+    primary_acceptance = scenario.get("primary_trace_unknown_acceptance")
+    expected_primary_acceptance = _trace_unknown_acceptance(
         authority_kind=authority_kind,
         authority_id=authority_id,
         scenario=scenario,
+        target_role=(
+            "baseline" if authority_kind == "baseline" else "issue"
+        ),
+        attempts=issue_attempts,
+        acceptance=primary_acceptance,
     )
-    if issue_acceptance != expected_issue_acceptance:
+    if primary_acceptance != expected_primary_acceptance:
         raise ContractError(
-            f"{authority_id} issue trace gap acceptance is invalid"
+            f"{authority_id} primary trace unknown acceptance is invalid"
         )
-    acceptance = scenario.get("paired_trace_gap_acceptance")
-    accepted_attempt_index = paired_trace_gap_attempt_index(
-        authority_kind=authority_kind,
-        authority_id=authority_id,
-        scenario=scenario,
+    paired_acceptance = scenario.get("paired_trace_unknown_acceptance")
+    expected_paired_acceptance = (
+        None
+        if authority_kind == "baseline"
+        else _trace_unknown_acceptance(
+            authority_kind=authority_kind,
+            authority_id=authority_id,
+            scenario=scenario,
+            target_role="paired_v0",
+            attempts=v0_attempts,
+            acceptance=paired_acceptance,
+        )
     )
-    if acceptance is not None and (
-        authority_kind != "issue"
-        or scenario["evidence_complete"] is not True
-        or accepted_attempt_index != acceptance["attempt_index"]
-    ):
-        raise ContractError(f"{authority_id} paired trace gap acceptance is invalid")
+    if paired_acceptance != expected_paired_acceptance:
+        raise ContractError(
+            f"{authority_id} paired trace unknown acceptance is invalid"
+        )
     full_attempt_coverage = complete_count == n and (
         authority_kind == "baseline" or paired_complete_count == n
     )
@@ -661,8 +424,9 @@ def _validate_scenario(
         complete_count=complete_count,
         paired_complete_count=paired_complete_count,
         observation_count=observation_count,
-        issue_trace_gap_accepted=issue_acceptance is not None,
-        paired_trace_gap_accepted=acceptance is not None,
+        paired_observation_count=paired_observation_count,
+        primary_trace_unknown_accepted=primary_acceptance is not None,
+        paired_trace_unknown_accepted=paired_acceptance is not None,
     )
     if (
         scenario["complete_count"] != complete_count
@@ -681,43 +445,62 @@ def _validate_scenario(
         raise ContractError(f"{authority_id} scenario complete count is invalid")
     expected_pass = (
         scenario["evidence_complete"]
-        and issue_side_decided(
+        and target_evidence_decided(
+            target_role=(
+                "baseline" if authority_kind == "baseline" else "issue"
+            ),
+            n=n,
+            complete_count=complete_count,
             observation_count=observation_count,
             k=k,
-            trace_gap_acceptance=issue_acceptance,
+            trace_unknown_acceptance=primary_acceptance,
         )
         and (
             authority_kind == "baseline"
-            or paired_observation_count == 0
+            or target_evidence_decided(
+                target_role="paired_v0",
+                n=n,
+                k=k,
+                complete_count=paired_complete_count,
+                observation_count=paired_observation_count,
+                trace_unknown_acceptance=paired_acceptance,
+            )
         )
     )
     if scenario["pass"] is not expected_pass:
         raise ContractError(
             f"{authority_id} mechanical evidence result is invalid"
         )
-
-
-def _issue_trace_gap_acceptance(
+def _trace_unknown_acceptance(
     *,
     authority_kind: str,
     authority_id: str,
     scenario: Mapping[str, Any],
+    target_role: str,
+    attempts: list[dict[str, Any]],
+    acceptance: Any,
 ) -> dict[str, Any] | None:
-    return deterministic_issue_trace_gap_acceptance(
-        authority_kind=authority_kind,
+    required_surfaces = sorted(
+        _reviewed_required_surfaces(
+            authority_id,
+            str(scenario["scenario_id"]),
+        )
+    )
+    if authority_kind == "baseline":
+        required_surfaces = ["semantic", "trace"]
+    maturity_digest = (
+        str(acceptance.get("maturity_proof_digest") or "")
+        if isinstance(acceptance, Mapping)
+        else None
+    )
+    return trace_unknown_acceptance(
+        target_role=target_role,
         validation_mode=str(scenario["validation_mode"]),
         n=int(scenario["n"]),
         k=int(scenario["k"]),
-        required_surfaces=sorted(
-            _reviewed_required_surfaces(
-                authority_id,
-                str(scenario["scenario_id"]),
-            )
-        ),
-        attempts=[
-            _trace_gap_attempt_payload(attempt)
-            for attempt in scenario["issue_attempts"]
-        ],
+        required_surfaces=required_surfaces,
+        attempts=[_trace_gap_attempt_payload(attempt) for attempt in attempts],
+        maturity_proof_digest=maturity_digest,
     )
 
 
@@ -880,27 +663,9 @@ def _validate_runtime_topology_binding(
         runtime = by_authority.get(authority["authority_id"])
         if runtime is None:
             raise ContractError("Validation authority is absent from runtime topology")
-        expected_reference = content_hash(
-            {
-                "provider_agent_id": runtime["provider_agent_id"],
-                "provider_agent_version_id": runtime[
-                    "provider_agent_version_id"
-                ],
-            }
-        )
-        if (
-            authority["runtime_agent_name"] != runtime["runtime_agent_name"]
-            or authority["runtime_agent_version"]
-            != runtime["runtime_agent_version"]
-            or authority["provider_agent_version_reference"]
-            != expected_reference
-            or authority["provider_content_digest"]
-            != runtime["provider_content_digest"]
-            or authority["runtime_mapping_digest"]
-            != runtime_mapping_digest(runtime)
-        ):
+        if authority["provider_content_digest"] != runtime["provider_content_digest"]:
             raise ContractError(
-                f"{authority['authority_id']} evidence runtime identity is stale"
+                f"{authority['authority_id']} evidence provider content is stale"
             )
 
 

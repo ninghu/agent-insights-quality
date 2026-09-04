@@ -27,7 +27,7 @@ def test_unresolved_insight_state_blocks_immutable_manifest() -> None:
 
 def test_daily_agent_parser_keeps_each_lane_whole() -> None:
     args = cli.build_parser().parse_args(
-        ["daily-run-agent", "--agent", "finance-agent"]
+        ["daily-run-traffic-agent", "--agent", "finance-agent"]
     )
     assert args.agent == "finance-agent"
 
@@ -56,54 +56,17 @@ def test_daily_prepare_help_states_staging_is_advisory() -> None:
     assert "staging is advisory" in help_text
 
 
-def test_daily_lane_reopen_requires_explicit_agent_and_confirmation() -> None:
-    args = cli.build_parser().parse_args(
-        [
-            "daily-reopen-incomplete-lane",
-            "--agent",
-            "finance-agent",
-            "--confirm",
-        ]
+def test_daily_phase_commands_are_explicit() -> None:
+    parser = cli.build_parser()
+    assert parser.parse_args(["daily-verify-next"]).command == "daily-verify-next"
+    assert (
+        parser.parse_args(["daily-release-verification"]).command
+        == "daily-release-verification"
     )
-
+    args = parser.parse_args(
+        ["daily-run-insights-agent", "--agent", "finance-agent"]
+    )
     assert args.agent == "finance-agent"
-    assert args.confirm is True
-
-
-def test_daily_version_reopen_and_run_commands_are_explicit() -> None:
-    reopen = cli.build_parser().parse_args(
-        [
-            "daily-reopen-incomplete-version",
-            "--agent",
-            "weather-agent",
-            "--issue",
-            "issue-006",
-            "--confirm",
-        ]
-    )
-    run = cli.build_parser().parse_args(
-        [
-            "daily-run-reopened-version",
-            "--agent",
-            "weather-agent",
-            "--issue",
-            "issue-006",
-        ]
-    )
-
-    assert reopen.confirm is True
-    assert run.issue == "issue-006"
-
-
-def test_daily_card_linkage_reclassification_is_human_confirmed() -> None:
-    args = cli.build_parser().parse_args(
-        [
-            "daily-reclassify-card-linkage",
-            "--confirm",
-        ]
-    )
-
-    assert args.confirm is True
 
 
 @pytest.mark.parametrize("publish_preview", [False, True])
@@ -297,6 +260,22 @@ def test_test_finalization_stays_private_and_skips_adx(
     assert result["delivery_mode"] == "test_email_only"
     assert result["adx_publication"] == "skipped_test"
     assert result["generated_report"] is False
+    assert result["validation_policy"] == {
+        "schema_version": "1.0.0",
+        "policy": "unified_target_evidence_v1",
+        "attempts_per_target": 10,
+        "required_conclusive_attempts": 6,
+        "maximum_trace_unknown_attempts": 4,
+        "policy_digest": content_hash(
+            {
+                "schema_version": "1.0.0",
+                "policy": "unified_target_evidence_v1",
+                "attempts_per_target": 10,
+                "required_conclusive_attempts": 6,
+                "maximum_trace_unknown_attempts": 4,
+            }
+        ),
+    }
     assert result["pull_request"] == "skipped_test"
     assert (state / "final-report" / "report.json").is_file()
     assert len(previews) == 1
@@ -449,6 +428,7 @@ def test_official_daily_defers_report_to_atomic_memory_publication(
     )
     result = json.loads(cli._dispatch(args) or "{}")
     assert result["generated_report"] is True
+    assert result["validation_policy"] is None
     assert len(publications) == 1
     assert publications[0]["report"]["delivery"]["content_digest"] == (
         "sha256:" + "a" * 64

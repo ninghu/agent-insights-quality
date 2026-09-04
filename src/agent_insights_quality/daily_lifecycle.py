@@ -35,7 +35,9 @@ TERMINAL_STATES = {"COMPLETE", "FAILED"}
 _TRANSITIONS = {
     "LOCKED": {"PREPARED", "FAILED"},
     "PREPARED": {"TRAFFIC", "FAILED"},
-    "TRAFFIC": {"COMPOSED", "FAILED"},
+    "TRAFFIC": {"VERIFICATION", "FAILED"},
+    "VERIFICATION": {"INSIGHTS", "FAILED"},
+    "INSIGHTS": {"COMPOSED", "FAILED"},
     "COMPOSED": {"ASSESSMENTS_VALIDATED", "FAILED"},
     "ASSESSMENTS_VALIDATED": {"IMPROVEMENT_INPUT_READY", "FAILED"},
     "IMPROVEMENT_INPUT_READY": {"FINALIZED", "FAILED"},
@@ -373,14 +375,17 @@ def validate_daily_lifecycle(value: Mapping[str, Any]) -> None:
         "RECEIPT_IMPORTED",
         "COMPLETE",
     }
+    after_traffic = {"VERIFICATION", "INSIGHTS", *progressed}
+    after_verification = {"INSIGHTS", *progressed}
+    if state in after_traffic and artifacts["traffic_manifest"] is None:
+        raise ContractError("Daily lifecycle lacks its 25-target traffic manifest")
+    if state in after_verification and artifacts["verification_manifest"] is None:
+        raise ContractError("Daily lifecycle lacks its 25-target verification manifest")
     if state in progressed and (
-        artifacts["manifest"] is None
-        or any(
-            artifacts["lane_receipts"][agent_name] is None
-            for agent_name in AGENT_ORDER
-        )
+        artifacts["insight_manifest"] is None
+        or artifacts["manifest"] is None
     ):
-        raise ContractError("Composed Daily lifecycle lacks exact Agent receipts")
+        raise ContractError("Composed Daily lifecycle lacks exact phase manifests")
     if state in progressed - {"COMPOSED"} and artifacts["assessment_index"] is None:
         raise ContractError("Daily lifecycle lacks validated assessment outputs")
     if state in progressed - {"COMPOSED", "ASSESSMENTS_VALIDATED"} and (

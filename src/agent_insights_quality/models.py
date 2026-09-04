@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 class SemanticAssertionEvidence:
     assertion: str
     passed: bool
+    evidence_sufficient: bool = True
     evidence_sufficient: bool
 
 
@@ -50,6 +51,7 @@ class InvocationEvidence:
     trace_assertion_count: int = 0
     trace_assertions_passed: int = 0
     request_summaries: tuple[RequestCompletionEvidence, ...] = ()
+    session_references: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,7 @@ class InsightRunEvidence:
     window_end: str
     status: str
     insights: tuple[InsightEvidence, ...]
+    invalid_insight_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -115,7 +118,8 @@ class VersionResult:
     trace_assertions_passed: int = 0
     trace_contract_verified: bool = False
     trace_behavior_summary: dict[str, object] = field(default_factory=dict)
-    issue_trace_gap_acceptance: dict[str, object] | None = None
+    trace_maturity_proof: dict[str, object] | None = None
+    trace_unknown_acceptance: dict[str, object] | None = None
     endpoint_request_summaries: list[RequestCompletionEvidence] = field(
         default_factory=list
     )

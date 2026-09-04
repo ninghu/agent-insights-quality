@@ -7,7 +7,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from agent_insights_quality.baseline_policy import baseline_terminal_decision
 from agent_insights_quality.models import (
     AgentResult,
     InsightRunCheckpoint,
@@ -18,7 +17,8 @@ from agent_insights_quality.models import (
     request_completion_payload,
 )
 from agent_insights_quality.validation_trace_gap_policy import (
-    daily_issue_side_decision,
+    daily_target_decision,
+    validate_trace_maturity_proof,
 )
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.runtime_state import VersionCheckpointStore
@@ -30,9 +30,10 @@ from agent_insights_quality.util import (
     content_hash,
 )
 from agent_insights_quality.validation_rules import (
+    daily_issue_side_requests,
     execution_context,
-    execution_requests,
     issue_observation_context,
+    validation_matrix,
 )
 
 
@@ -53,10 +54,6 @@ class _VersionStageError(Exception):
             suffix = "_timeout"
         self.code = code + suffix
         super().__init__(self.code)
-
-
-class _BaselineEvidenceIncomplete(ContractError):
-    """Baseline endpoint execution is complete but trace evidence is partial."""
 
 
 class _RecoveryBudget:
@@ -129,7 +126,7 @@ def _required_trace_operations(
     traffic_path: Path,
     request_count: int,
 ) -> tuple[tuple[str, ...], ...]:
-    requests = execution_requests(traffic_path)
+    requests = daily_issue_side_requests(traffic_path)
     if len(requests) != request_count:
         raise ContractError("Traffic request operation contract is incomplete")
     required: list[tuple[str, ...]] = []
@@ -227,8 +224,8 @@ class RuntimePort(Protocol):
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
         minimum_passing_trace_observations: int,
-        allow_deterministic_trace_gap: bool,
         on_stable: Callable[[dict[str, Any]], None] | None = None,
+        on_maturity_proof: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[tuple[Any, ...], ...]: ...
 
     def start_insights_run(
@@ -365,76 +362,6 @@ def execute_agent(
         checkpoint_store,
         start_delay_seconds,
         accepted_baseline,
-    )
-
-
-def resume_issue_version(
-    *,
-    agent_name: str,
-    issue_id: str,
-    agents: dict[str, Any],
-    issues: dict[str, Any],
-    registry: dict[str, Any],
-    runtime: RuntimePort,
-    seed: int,
-    lookback_hours: float,
-    clean_window_poll_seconds: int,
-    clean_window_ingestion_margin_seconds: int,
-    clean_window_max_wait_seconds: int,
-    trace_assertion_stabilization_seconds: int,
-    insight_start_margin_seconds: int,
-    max_recovery_versions: int,
-    checkpoint_store: VersionCheckpointStore,
-) -> VersionResult:
-    agent = next(
-        (item for item in agents["agents"] if item["name"] == agent_name),
-        None,
-    )
-    issue = next(
-        (item for item in issues["issues"] if item["id"] == issue_id),
-        None,
-    )
-    if (
-        agent is None
-        or issue is None
-        or issue_id not in agent["issue_ids"]
-    ):
-        raise ContractError("Daily issue recovery assignment is invalid")
-    entry = version_entry(registry, agent_name, issue_id)
-    checkpoint_args = (
-        agent_name,
-        issue_id,
-        entry["foundry_version"],
-        entry["content_digest"],
-    )
-    if checkpoint_store.invocation(*checkpoint_args) is None:
-        raise ContractError("Daily issue recovery lacks exact completed invocation")
-    return _execute_version_with_recovery(
-        runtime=runtime,
-        agent=agent,
-        monitor_id=registry["agents"][agent_name]["monitor_id"],
-        logical_version=issue_id,
-        registry_entry=entry,
-        traffic_path=ROOT / issue["implementation"] / "traffic.json",
-        seed=seed,
-        expected=issue,
-        lookback_hours=lookback_hours,
-        clean_window_poll_seconds=clean_window_poll_seconds,
-        clean_window_ingestion_margin_seconds=(
-            clean_window_ingestion_margin_seconds
-        ),
-        clean_window_max_wait_seconds=clean_window_max_wait_seconds,
-        trace_assertion_stabilization_seconds=(
-            trace_assertion_stabilization_seconds
-        ),
-        insight_start_margin_seconds=insight_start_margin_seconds,
-        recovery_budget=_RecoveryBudget(
-            max_recovery_versions,
-            checkpoint_store,
-            agent_name,
-        ),
-        checkpoint_store=checkpoint_store,
-        start_stagger=_StartStagger(0),
     )
 
 
@@ -913,13 +840,7 @@ def _validate_endpoint_contract(
     traffic_path: Path,
 ) -> None:
     context = execution_context(traffic_path)
-    usable_unknown_accepted = issue_usable_response_unknown_accepted(
-        agent=agent,
-        traffic_path=traffic_path,
-        invocation=invocation,
-        baseline=baseline,
-    )
-    expected_requests = len(execution_requests(traffic_path))
+    expected_requests = len(daily_issue_side_requests(traffic_path))
     if invocation.request_count != expected_requests:
         raise _VersionStageError(
             "endpoint_contract_failed",
@@ -929,11 +850,9 @@ def _validate_endpoint_contract(
             ),
         )
     if not (
-        invocation.request_count == invocation.response_count
-        and (
-            invocation.usable_response_count == invocation.request_count
-            or usable_unknown_accepted
-        )
+        invocation.request_count
+        == invocation.response_count
+        == invocation.usable_response_count
     ):
         raise _VersionStageError(
             "endpoint_contract_failed",
@@ -972,24 +891,12 @@ def _validate_endpoint_contract(
                 f"{agent['name']}/{logical_version} assertion results are incomplete"
             ),
         )
-    unusable = [item for item in summaries if not item.usable_response]
-    if agent["type"] == "prompt" and (
-        any(
-            item.response_count != 1
-            or item.function_call_count != 0
-            or (
-                item.usable_response
-                and item.direct_terminal_response_count != 1
-            )
-            for item in summaries
-        )
-        or (
-            bool(unusable)
-            and (
-                not usable_unknown_accepted
-                or len(unusable) != 1
-            )
-        )
+    if agent["type"] == "prompt" and any(
+        item.response_count != 1
+        or not item.usable_response
+        or item.direct_terminal_response_count != 1
+        or item.function_call_count != 0
+        for item in summaries
     ):
         raise _VersionStageError(
             "endpoint_contract_failed",
@@ -1022,67 +929,6 @@ def _validate_endpoint_contract(
                 "is incomplete"
             ),
         )
-    if usable_unknown_accepted:
-        issue_context = issue_observation_context(traffic_path)
-        decided, acceptance = _issue_activation_decision(
-            issue_context,
-            invocation,
-        )
-        if not decided or acceptance is not None:
-            raise _VersionStageError(
-                "endpoint_contract_failed",
-                ContractError(
-                    f"{agent['name']}/{logical_version} usable-response "
-                    "unknown lacks the reviewed observation threshold"
-                ),
-            )
-
-
-def issue_usable_response_unknown_accepted(
-    *,
-    agent: dict[str, Any],
-    traffic_path: Path,
-    invocation: InvocationEvidence,
-    baseline: bool = False,
-) -> bool:
-    if baseline:
-        return False
-    context = issue_observation_context(traffic_path)
-    if (
-        agent["type"] != "prompt"
-        or context["validation_mode"] != "model_mediated"
-        or set(context["required_surfaces"]) != {"semantic"}
-        or invocation.request_count != invocation.response_count
-        or invocation.usable_response_count != invocation.request_count - 1
-        or len(invocation.response_references) != invocation.request_count
-        or len(set(invocation.response_references))
-        != len(invocation.response_references)
-        or invocation.allow_window_correlation is not False
-        or sum(not item.usable_response for item in invocation.request_summaries) != 1
-        or any(
-            item.response_count != 1
-            or item.function_call_count != 0
-            or item.semantic_assertions_passed != item.semantic_assertion_count
-            or any(
-                not assertion.evidence_sufficient or not assertion.passed
-                for assertion in item.assertion_results
-            )
-            for item in invocation.request_summaries
-        )
-        or sum(
-            item.activation_gate
-            and item.usable_response
-            and item.semantic_assertion_count > 0
-            and item.semantic_assertions_passed == item.semantic_assertion_count
-            for item in invocation.request_summaries
-        )
-        < int(context["k"])
-    ):
-        return False
-    decided, acceptance = _issue_activation_decision(context, invocation)
-    return decided and acceptance is None
-
-
 def _with_trace_assertions(
     invocation: InvocationEvidence,
     results: tuple[tuple[Any, ...], ...],
@@ -1136,9 +982,11 @@ def _issue_activation_evidence_complete(
 def _issue_activation_decision(
     context: dict[str, Any],
     invocation: InvocationEvidence,
+    trace_maturity_proof: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any] | None]:
     gates = [item for item in invocation.request_summaries if item.activation_gate]
-    return daily_issue_side_decision(
+    return daily_target_decision(
+        target_role="issue",
         validation_mode=str(context["validation_mode"]),
         n=int(context["n"]),
         k=int(context["k"]),
@@ -1152,7 +1000,39 @@ def _issue_activation_decision(
             == invocation.request_count
             and invocation.allow_window_correlation is False
         ),
+        maturity_proof_digest=_daily_trace_maturity_proof_digest(
+            trace_maturity_proof
+        ),
     )
+
+
+def _baseline_validation_decision(
+    invocation: InvocationEvidence,
+    trace_maturity_proof: dict[str, Any] | None = None,
+) -> tuple[bool, dict[str, Any] | None]:
+    n, k = validation_matrix("baseline")
+    gates = [item for item in invocation.request_summaries if item.activation_gate]
+    return daily_target_decision(
+        target_role="baseline",
+        validation_mode="baseline",
+        n=n,
+        k=k,
+        required_surfaces=["semantic", "trace"],
+        summaries=[request_completion_payload(item) for item in gates],
+        identity_verified=(
+            len(invocation.response_references) == invocation.request_count
+            and invocation.allow_window_correlation is False
+        ),
+        maturity_proof_digest=_daily_trace_maturity_proof_digest(
+            trace_maturity_proof
+        ),
+    )
+
+
+def _daily_trace_maturity_proof_digest(
+    trace_maturity_proof: dict[str, Any] | None,
+) -> str | None:
+    return validate_trace_maturity_proof(trace_maturity_proof)
 
 
 def _issue_execution_context(traffic_path: Path) -> dict[str, Any]:
@@ -1165,23 +1045,16 @@ def _minimum_passing_trace_observations(
 ) -> int:
     if issue_context is not None:
         return (
-            3
-            if issue_context["validation_mode"] == "deterministic"
-            and (
-                int(issue_context["n"]),
-                int(issue_context["k"]),
-            )
-            == (5, 5)
-            and "trace" in issue_context["required_surfaces"]
-            else int(issue_context["k"])
+            int(issue_context["k"])
             if "trace" in issue_context["required_surfaces"]
             else 0
         )
-    return sum(
+    traced_observations = sum(
         request["expected"].get("activation_gate") is True
         and bool(request["expected"].get("trace_assertions"))
         for request in requests
     )
+    return min(validation_matrix("baseline")[1], traced_observations)
 
 
 def _validate_cached_execution(
@@ -1226,43 +1099,33 @@ def _validate_baseline_trace_evidence(
     agent: dict[str, Any],
     invocation: InvocationEvidence,
     trace_evidence: dict[str, Any],
+    accepted_unknown_count: int = 0,
 ) -> None:
     request_count = invocation.request_count
+    required_count = request_count - accepted_unknown_count
     terminal_mode = agent["baseline_contract"]["terminal_response"]
-    strict_evidence = (
-        invocation.response_count
-        == invocation.usable_response_count
-        == request_count
-        and invocation.semantic_assertions_passed
-        == invocation.semantic_assertion_count
-        and invocation.trace_assertions_passed == invocation.trace_assertion_count
-        and all(
-            item.response_count == 1
-            and item.usable_response
-            and item.semantic_assertions_passed == item.semantic_assertion_count
-            and item.trace_assertions_passed == item.trace_assertion_count
-            and all(
-                assertion.passed and assertion.evidence_sufficient
-                for assertion in item.assertion_results
-            )
-            and all(
-                assertion.passed and assertion.evidence_sufficient
-                for assertion in item.trace_assertion_results
-            )
-            for item in invocation.request_summaries
-        )
+    terminal_complete = (
+        int(trace_evidence.get("terminal_response_count") or 0) >= required_count
+        and int(trace_evidence.get("terminal_output_count") or 0) >= required_count
     )
-    decision = baseline_terminal_decision(
-        request_count=request_count,
-        terminal_mode=terminal_mode,
-        trace_evidence=trace_evidence,
-        strict_evidence=strict_evidence,
-    )
-    if decision.status == "incomplete":
-        raise _BaselineEvidenceIncomplete(
-            f"{agent['name']} baseline terminal evidence is incomplete"
+    if terminal_mode == "explicit_span_attributes":
+        terminal_complete = terminal_complete and (
+            int(trace_evidence.get("explicit_terminal_success_count") or 0)
+            >= required_count
+            and int(trace_evidence.get("explicit_terminal_output_count") or 0)
+            >= required_count
         )
-    if decision.status == "failed":
+    else:
+        terminal_complete = terminal_complete and (
+            int(trace_evidence.get("assistant_response_count") or 0)
+            >= required_count
+        )
+    if not terminal_complete:
+        raise ContractError(
+            f"{agent['name']} baseline lacks one successful terminal output "
+            "signal per request"
+        )
+    if int(trace_evidence.get("unhandled_error_count") or 0) != 0:
         raise ContractError(
             f"{agent['name']} baseline contains an unhandled error signal"
         )
@@ -1285,7 +1148,8 @@ def _activation_failure_result(
     trace_evidence: dict[str, Any],
     error_code: str = "issue_activation_failed",
     trace_contract_verified: bool = True,
-    issue_trace_gap_acceptance: dict[str, Any] | None = None,
+    trace_maturity_proof: dict[str, Any] | None = None,
+    trace_unknown_acceptance: dict[str, Any] | None = None,
 ) -> VersionResult:
     return VersionResult(
         logical_version=logical_version,
@@ -1304,7 +1168,8 @@ def _activation_failure_result(
         trace_assertions_passed=invocation.trace_assertions_passed,
         trace_contract_verified=trace_contract_verified,
         trace_behavior_summary=trace_evidence,
-        issue_trace_gap_acceptance=issue_trace_gap_acceptance,
+        trace_maturity_proof=trace_maturity_proof,
+        trace_unknown_acceptance=trace_unknown_acceptance,
         endpoint_request_summaries=list(invocation.request_summaries),
     )
 
@@ -1451,7 +1316,7 @@ def _execute_version(
     start_stagger: _StartStagger,
 ) -> VersionResult:
     foundry_version = registry_entry["foundry_version"]
-    planned_requests = execution_requests(traffic_path)
+    planned_requests = daily_issue_side_requests(traffic_path)
     issue_context = (
         _issue_execution_context(traffic_path) if expected is not None else None
     )
@@ -1664,32 +1529,10 @@ def _execute_version(
             checkpoint_store.save_trace_verified(*checkpoint_args)
     _progress(runtime, f"{agent['name']}/{logical_version}: trace contract verified")
     trace_evidence: dict[str, Any] = {}
+    trace_maturity_proof: dict[str, Any] | None = None
     if agent["type"] == "prompt":
         try:
             trace_evidence = runtime.trace_behavior_evidence(operation_ids)
-            if expected is None:
-                _validate_baseline_trace_evidence(
-                    agent=agent,
-                    invocation=invocation,
-                    trace_evidence=trace_evidence,
-                )
-        except _BaselineEvidenceIncomplete:
-            result = _activation_failure_result(
-                logical_version=logical_version,
-                foundry_version=foundry_version,
-                operation_ids=operation_ids,
-                invocation=invocation,
-                trace_evidence=trace_evidence,
-                error_code="baseline_evidence_incomplete",
-            )
-            if checkpoint_store is not None:
-                checkpoint_store.save_rejected_result(
-                    *checkpoint_args,
-                    result,
-                    drain_pending=False,
-                )
-                checkpoint_store.preserve_version_attempt(*checkpoint_args)
-            return result
         except Exception as error:
             if expected is None:
                 raise _VersionStageError("baseline_evidence_failed", error) from error
@@ -1706,6 +1549,10 @@ def _execute_version(
         def capture_stable_trace_evidence(evidence: dict[str, Any]) -> None:
             nonlocal trace_evidence
             trace_evidence = evidence
+
+        def capture_trace_maturity_proof(proof: dict[str, Any]) -> None:
+            nonlocal trace_maturity_proof
+            trace_maturity_proof = proof
 
         try:
             invocation = _with_trace_assertions(
@@ -1727,18 +1574,8 @@ def _execute_version(
                             issue_context,
                         )
                     ),
-                    allow_deterministic_trace_gap=bool(
-                        issue_context is not None
-                        and issue_context["validation_mode"]
-                        == "deterministic"
-                        and (
-                            int(issue_context["n"]),
-                            int(issue_context["k"]),
-                        )
-                        == (5, 5)
-                        and "trace" in issue_context["required_surfaces"]
-                    ),
                     on_stable=capture_stable_trace_evidence,
+                    on_maturity_proof=capture_trace_maturity_proof,
                 ),
             )
         except _VersionStageError as error:
@@ -1774,90 +1611,13 @@ def _execute_version(
         if checkpoint_store is not None:
             checkpoint_store.save_invocation(*checkpoint_args, invocation)
 
-        if expected is None:
-            try:
-                _validate_baseline_trace_evidence(
-                    agent=agent,
-                    invocation=invocation,
-                    trace_evidence=trace_evidence,
-                )
-            except _BaselineEvidenceIncomplete:
-                result = _activation_failure_result(
-                    logical_version=logical_version,
-                    foundry_version=foundry_version,
-                    operation_ids=operation_ids,
-                    invocation=invocation,
-                    trace_evidence=trace_evidence,
-                    error_code="baseline_evidence_incomplete",
-                )
-                _save_and_drain_rejected_insight_run(
-                    runtime=runtime,
-                    agent_name=agent["name"],
-                    monitor_id=monitor_id,
-                    foundry_version=foundry_version,
-                    operation_ids=operation_ids,
-                    checkpoint=insight_checkpoint,
-                    checkpoint_store=checkpoint_store,
-                    checkpoint_args=checkpoint_args,
-                    result=result,
-                    reason="had incomplete baseline terminal evidence",
-                )
-                if (
-                    checkpoint_store is not None
-                    and not checkpoint_store.insight_drain_pending(
-                        *checkpoint_args
-                    )
-                ):
-                    checkpoint_store.preserve_version_attempt(*checkpoint_args)
-                return result
-            except Exception as error:
-                stage_error = _VersionStageError("baseline_evidence_failed", error)
-                if _recoverable(stage_error):
-                    raise stage_error from error
-                result = _activation_failure_result(
-                    logical_version=logical_version,
-                    foundry_version=foundry_version,
-                    operation_ids=operation_ids,
-                    invocation=invocation,
-                    trace_evidence=trace_evidence,
-                    error_code="baseline_evidence_failed",
-                )
-                _save_and_drain_rejected_insight_run(
-                    runtime=runtime,
-                    agent_name=agent["name"],
-                    monitor_id=monitor_id,
-                    foundry_version=foundry_version,
-                    operation_ids=operation_ids,
-                    checkpoint=insight_checkpoint,
-                    checkpoint_store=checkpoint_store,
-                    checkpoint_args=checkpoint_args,
-                    result=result,
-                    reason="failed Hosted baseline terminal or tool validation",
-                )
-                return result
-
-    if (
-        expected is not None
-        and invocation.usable_response_count == invocation.request_count - 1
-        and int(trace_evidence.get("unhandled_error_count") or 0) != 0
-    ):
-        result = _activation_failure_result(
-            logical_version=logical_version,
-            foundry_version=foundry_version,
-            operation_ids=operation_ids,
-            invocation=invocation,
-            trace_evidence=trace_evidence,
-        )
-        if checkpoint_store is not None:
-            checkpoint_store.save_rejected_result(
-                *checkpoint_args,
-                result,
-                drain_pending=False,
-            )
-        return result
     if expected is not None:
-        activation_complete, issue_trace_gap_acceptance = (
-            _issue_activation_decision(issue_context, invocation)
+        activation_complete, trace_unknown_acceptance = (
+            _issue_activation_decision(
+                issue_context,
+                invocation,
+                trace_maturity_proof,
+            )
         )
         if not activation_complete:
             result = _activation_failure_result(
@@ -1881,7 +1641,52 @@ def _execute_version(
             )
             return result
     else:
-        issue_trace_gap_acceptance = None
+        baseline_complete, trace_unknown_acceptance = (
+            _baseline_validation_decision(
+                invocation,
+                trace_maturity_proof,
+            )
+        )
+        try:
+            _validate_baseline_trace_evidence(
+                agent=agent,
+                invocation=invocation,
+                trace_evidence=trace_evidence,
+                accepted_unknown_count=(
+                    len(trace_unknown_acceptance["unknown_attempt_indices"])
+                    if trace_unknown_acceptance is not None
+                    else 0
+                ),
+            )
+        except Exception as error:
+            baseline_complete = False
+            stage_error = _VersionStageError("baseline_evidence_failed", error)
+            if _recoverable(stage_error):
+                raise stage_error from error
+        if not baseline_complete:
+            result = _activation_failure_result(
+                logical_version=logical_version,
+                foundry_version=foundry_version,
+                operation_ids=operation_ids,
+                invocation=invocation,
+                trace_evidence=trace_evidence,
+                error_code="baseline_evidence_failed",
+                trace_maturity_proof=trace_maturity_proof,
+                trace_unknown_acceptance=trace_unknown_acceptance,
+            )
+            _save_and_drain_rejected_insight_run(
+                runtime=runtime,
+                agent_name=agent["name"],
+                monitor_id=monitor_id,
+                foundry_version=foundry_version,
+                operation_ids=operation_ids,
+                checkpoint=insight_checkpoint,
+                checkpoint_store=checkpoint_store,
+                checkpoint_args=checkpoint_args,
+                result=result,
+                reason="baseline evidence did not meet the reviewed threshold",
+            )
+            return result
     if insight_checkpoint is None:
         start_insight_run_once()
     assert insight_checkpoint is not None
@@ -1927,7 +1732,8 @@ def _execute_version(
         trace_assertions_passed=invocation.trace_assertions_passed,
         trace_contract_verified=True,
         trace_behavior_summary=trace_evidence,
-        issue_trace_gap_acceptance=issue_trace_gap_acceptance,
+        trace_maturity_proof=trace_maturity_proof,
+        trace_unknown_acceptance=trace_unknown_acceptance,
         endpoint_request_summaries=list(invocation.request_summaries),
     )
     if insight_run.status != "succeeded":
@@ -1941,21 +1747,14 @@ def _execute_version(
             checkpoint_store.save_result(*checkpoint_args, result)
         return result
     matching = list(scoped_insights)
-    if len(matching) != 1:
+    if not matching:
         result.status = "not_at_bar"
-        result.error_code = "expected_exactly_one_insight"
-        if checkpoint_store is not None:
-            checkpoint_store.save_result(*checkpoint_args, result)
-        return result
-    insight = matching[0]
-    if insight.trace_count < 1:
-        result.status = "not_at_bar"
-        result.error_code = "insufficient_trace_evidence"
+        result.error_code = "missing_insight"
         if checkpoint_store is not None:
             checkpoint_store.save_result(*checkpoint_args, result)
         return result
     result.status = "observed"
-    result.observed_insight = insight
+    result.observed_insight = matching[0] if len(matching) == 1 else None
     if checkpoint_store is not None:
         checkpoint_store.save_result(*checkpoint_args, result)
     return result
@@ -1985,10 +1784,10 @@ def _quarantine_started_insight(
     operation_ids = checkpoint_store.operation_ids(*checkpoint_args)
     if invocation is None or operation_ids is None:
         return None
-    issue_trace_gap_acceptance = None
+    trace_unknown_acceptance = None
     if logical_version != "v0":
         context = _issue_execution_context(traffic_path)
-        _, issue_trace_gap_acceptance = _issue_activation_decision(
+        _, trace_unknown_acceptance = _issue_activation_decision(
             context,
             invocation,
         )
@@ -2002,7 +1801,7 @@ def _quarantine_started_insight(
             invocation=invocation,
             trace_evidence={},
             trace_contract_verified=checkpoint_store.trace_verified(*checkpoint_args),
-            issue_trace_gap_acceptance=issue_trace_gap_acceptance,
+            trace_unknown_acceptance=trace_unknown_acceptance,
         )
         result.error_code = "insight_run_start_unresolved"
         checkpoint_store.save_result(*checkpoint_args, result)
@@ -2014,7 +1813,7 @@ def _quarantine_started_insight(
         invocation=invocation,
         trace_evidence={},
         trace_contract_verified=checkpoint_store.trace_verified(*checkpoint_args),
-        issue_trace_gap_acceptance=issue_trace_gap_acceptance,
+        trace_unknown_acceptance=trace_unknown_acceptance,
     )
     result.error_code = error.code
     _save_and_drain_rejected_insight_run(

@@ -18,7 +18,7 @@
     "lifecycle_digest"
   ],
   "properties": {
-    "schema_version": {"const": "5.0.0"},
+    "schema_version": {"const": "6.0.0"},
     "kind": {"const": "daily-qualification-lifecycle"},
     "snapshot_type": {"enum": ["event", "active"]},
     "state": {
@@ -26,6 +26,8 @@
         "LOCKED",
         "PREPARED",
         "TRAFFIC",
+        "VERIFICATION",
+        "INSIGHTS",
         "COMPOSED",
         "ASSESSMENTS_VALIDATED",
         "IMPROVEMENT_INPUT_READY",
@@ -131,9 +133,13 @@
           "additionalProperties": false,
           "required": [
             "max_parallel_agents",
+            "daily_verification_max_parallel",
+            "daily_inter_version_pacing_seconds",
             "max_recovery_versions",
             "agent_start_stagger_seconds",
             "insight_lookback_hours",
+            "insight_lookback_max_hours",
+            "insight_lookback_precision_minutes",
             "clean_window_poll_seconds",
             "clean_window_ingestion_margin_seconds",
             "clean_window_max_wait_seconds",
@@ -143,9 +149,13 @@
           ],
           "properties": {
             "max_parallel_agents": {"type": "integer", "minimum": 1, "maximum": 5},
+            "daily_verification_max_parallel": {"const": 8},
+            "daily_inter_version_pacing_seconds": {"const": 60},
             "max_recovery_versions": {"type": "integer", "minimum": 0, "maximum": 3},
             "agent_start_stagger_seconds": {"type": "integer", "minimum": 0, "maximum": 30},
             "insight_lookback_hours": {"type": "number", "minimum": 0.1},
+            "insight_lookback_max_hours": {"type": "number", "minimum": 0.1, "maximum": 24},
+            "insight_lookback_precision_minutes": {"const": 1},
             "clean_window_poll_seconds": {"type": "integer", "minimum": 1},
             "clean_window_ingestion_margin_seconds": {"type": "integer", "minimum": 0},
             "clean_window_max_wait_seconds": {"type": "integer", "minimum": 1},
@@ -187,7 +197,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "lane_receipts",
+        "traffic_manifest",
+        "verification_manifest",
+        "insight_manifest",
         "manifest",
         "assessment_index",
         "improvement_input",
@@ -202,24 +214,9 @@
         "failure"
       ],
       "properties": {
-        "lane_receipts": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "weather-agent",
-            "healthcare-agent",
-            "finance-agent",
-            "travel-agent",
-            "support-ticket-agent"
-          ],
-          "properties": {
-            "weather-agent": {"$ref": "#/$defs/nullableReference"},
-            "healthcare-agent": {"$ref": "#/$defs/nullableReference"},
-            "finance-agent": {"$ref": "#/$defs/nullableReference"},
-            "travel-agent": {"$ref": "#/$defs/nullableReference"},
-            "support-ticket-agent": {"$ref": "#/$defs/nullableReference"}
-          }
-        },
+        "traffic_manifest": {"$ref": "#/$defs/nullableReference"},
+        "verification_manifest": {"$ref": "#/$defs/nullableReference"},
+        "insight_manifest": {"$ref": "#/$defs/nullableReference"},
         "manifest": {"$ref": "#/$defs/nullableReference"},
         "assessment_index": {"$ref": "#/$defs/nullableReference"},
         "improvement_input": {"$ref": "#/$defs/nullableReference"},

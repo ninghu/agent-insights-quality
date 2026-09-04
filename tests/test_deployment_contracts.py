@@ -311,8 +311,7 @@ def test_infrastructure_grants_automation_data_plane_roles() -> None:
     assert "isVersioningEnabled: true" in lab
     assert "name: qualityArtifactContainerName" in lab
     assert "name: deploymentRegistryContainerName" in lab
-    assert "name: approvedRecordContainerName" in lab
-    assert "immutableStorageWithVersioning" in lab
+    assert "approvedRecordContainerName" not in lab
     assert "immutabilityPolicies" not in lab
     assert "approvedValidationRecordPolicy" not in lab
     assert "qualityArtifactLifecycle" in lab

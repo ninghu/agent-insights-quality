@@ -27,7 +27,7 @@ agents:
     model: gpt-5.4-mini
     baseline_path: agents/weather-agent/v0
     baseline_contract:
-      request_count: 5
+      request_count: 10
       terminal_response: direct_prompt
       semantic_assertions: required_per_request
       function_calling: forbidden
@@ -41,7 +41,7 @@ agents:
     model: gpt-5.4-mini
     baseline_path: agents/healthcare-agent/v0
     baseline_contract:
-      request_count: 5
+      request_count: 10
       terminal_response: direct_prompt
       semantic_assertions: required_per_request
       function_calling: forbidden
@@ -55,7 +55,7 @@ agents:
     model: gpt-5.4-mini
     baseline_path: agents/finance-agent/v0
     baseline_contract:
-      request_count: 5
+      request_count: 10
       terminal_response: standard_assistant_message
       semantic_assertions: required
       function_calling: not_applicable
@@ -69,7 +69,7 @@ agents:
     model: gpt-5.4-mini
     baseline_path: agents/travel-agent/v0
     baseline_contract:
-      request_count: 5
+      request_count: 10
       terminal_response: standard_assistant_message
       semantic_assertions: required
       function_calling: not_applicable
@@ -83,7 +83,7 @@ agents:
     model: gpt-5.4-mini
     baseline_path: agents/support-ticket-agent/v0
     baseline_contract:
-      request_count: 5
+      request_count: 10
       terminal_response: explicit_span_attributes
       semantic_assertions: required
       function_calling: not_applicable

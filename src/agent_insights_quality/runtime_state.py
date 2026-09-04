@@ -349,6 +349,9 @@ class VersionCheckpointStore:
                 trace_assertions_passed=int(
                     payload["trace_assertions_passed"]
                 ),
+                session_references=tuple(
+                    payload.get("session_references") or []
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ContractError("Version checkpoint invocation is invalid") from error
@@ -814,8 +817,9 @@ class VersionCheckpointStore:
                 trace_assertions_passed=int(payload["trace_assertions_passed"]),
                 trace_contract_verified=bool(payload["trace_contract_verified"]),
                 trace_behavior_summary=dict(payload["trace_behavior_summary"]),
-                issue_trace_gap_acceptance=payload.get(
-                    "issue_trace_gap_acceptance"
+                trace_maturity_proof=payload.get("trace_maturity_proof"),
+                trace_unknown_acceptance=payload.get(
+                    "trace_unknown_acceptance"
                 ),
                 endpoint_request_summaries=[
                     RequestCompletionEvidence(
@@ -891,7 +895,7 @@ class VersionCheckpointStore:
         result: VersionResult,
         *,
         event_digest: str,
-    ) -> None:
+    ) -> str:
         value = self._load(
             agent_name,
             logical_version,
@@ -924,6 +928,26 @@ class VersionCheckpointStore:
             self._supplemental_result_path(agent_name, logical_version),
             supplemental,
         )
+        return str(supplemental["supplemental_digest"])
+
+    def supplemental_result_digest(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> str | None:
+        path = self._supplemental_result_path(agent_name, logical_version)
+        if not path.is_file():
+            return None
+        self.result(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        value = read_json(path)
+        return str(value["supplemental_digest"])
 
     def save_rejected_result(
         self,

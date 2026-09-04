@@ -31,6 +31,7 @@ from agent_insights_quality.live import (
     _trace_assertion_result,
     _trace_behavior_summary,
     _trace_contract_ready,
+    _trace_request_hydration_state,
     _usable_response,
 )
 from agent_insights_quality.models import InsightRunCheckpoint, InvocationEvidence
@@ -41,6 +42,9 @@ from agent_insights_quality.util import (
     InsightWindowExpiredError,
     TraceAssertionActivationError,
     read_json,
+)
+from agent_insights_quality.validation_trace_gap_policy import (
+    validate_trace_maturity_proof,
 )
 
 
@@ -1572,12 +1576,31 @@ def test_response_anchor_rejects_multiple_custom_container_dependencies() -> Non
     )
 
 
-def test_response_anchor_rejects_duplicate_span_rows() -> None:
+def test_response_anchor_deduplicates_identical_span_rows() -> None:
     operation_id = "c" * 32
     anchor = _anchor_row(operation_id, "root", "response-1")
+    correlation = _correlated_request_rows(
+        [anchor, dict(anchor)],
+        ("response-1",),
+        (operation_id,),
+        agent_name="healthcare-agent-issue-010",
+        foundry_version="7",
+    )
+    assert correlation is not None
+    assert correlation[1] == ("root",)
+
+
+def test_response_anchor_rejects_wrong_identity_duplicate() -> None:
+    operation_id = "c" * 32
+    anchor = _anchor_row(operation_id, "root", "response-1")
+    wrong = {
+        **anchor,
+        "span_id": "wrong-root",
+        "agent_version": "wrong-version",
+    }
     assert (
         _correlated_request_rows(
-            [anchor, dict(anchor)],
+            [wrong],
             ("response-1",),
             (operation_id,),
             agent_name="healthcare-agent-issue-010",
@@ -1585,6 +1608,51 @@ def test_response_anchor_rejects_duplicate_span_rows() -> None:
         )
         is None
     )
+
+
+@pytest.mark.parametrize("issue_id", ["issue-029", "issue-032", "issue-036"])
+def test_support_semantic_paired_control_does_not_require_chat(
+    issue_id: str,
+) -> None:
+    fixture = _normalize_fixture(
+        {
+            "id": f"{issue_id}-control",
+            "request": {"body": {"input": "synthetic control"}},
+            "expected": {
+                "http_status": 200,
+                "activation_gate": True,
+                "semantic_assertions": {"required_terms_all": ["healthy"]},
+                "trace_assertions": [],
+            },
+        }
+    )
+    root = _anchor_row("c" * 32, "root", "response-1")
+
+    assert _trace_request_hydration_state([root], fixture) == "complete"
+
+
+def test_explicit_paired_control_chat_requirement_remains_mandatory() -> None:
+    fixture = _normalize_fixture(
+        {
+            "id": "issue-029-explicit-chat-control",
+            "request": {"body": {"input": "synthetic control"}},
+            "expected": {
+                "http_status": 200,
+                "activation_gate": True,
+                "semantic_assertions": {"required_terms_all": ["healthy"]},
+                "trace_assertions": [
+                    {
+                        "name": "explicit_model_dispatch",
+                        "kind": "operation_sequence",
+                        "operations": ["invoke_agent", "chat"],
+                    }
+                ],
+            },
+        }
+    )
+    root = _anchor_row("c" * 32, "root", "response-1")
+
+    assert _trace_request_hydration_state([root], fixture) == "incomplete"
 
 
 def test_negative_argument_assertions_require_parsed_telemetry() -> None:
@@ -3179,7 +3247,59 @@ def test_trace_assertion_stable_failure_waits_until_deadline(
     assert first_passes == [0]
 
 
-def test_trace_assertion_five_of_seven_stabilizes_at_reviewed_threshold(
+def test_trace_only_unknown_binds_maturity_proof_at_deadline(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    observed_at = datetime(2026, 8, 28, 10, 18, 30, tzinfo=UTC)
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+        utcnow=lambda: observed_at,
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    runtime._trace_rows = lambda *_args: [  # type: ignore[method-assign]
+        _anchor_row(
+            operation_id,
+            "root-span",
+            reference,
+            agent_name="finance-agent",
+            agent_version="issue-013",
+        )
+    ]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0,
+        monotonic[0] + seconds,
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    proofs = []
+
+    evidence = runtime.trace_assertion_evidence(
+        agent_name="finance-agent",
+        foundry_version="issue-013",
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        traffic_path=traffic_path,
+        stabilization_seconds=180,
+        on_first_pass=lambda: None,
+        on_maturity_proof=proofs.append,
+    )
+
+    assert evidence[0][0].evidence_sufficient is False
+    assert monotonic[0] == 15 * 60
+    assert len(proofs) == 1
+    assert validate_trace_maturity_proof(proofs[0]) == proofs[0][
+        "maturity_proof_digest"
+    ]
+    assert proofs[0]["maturity_boundary"] == observed_at.isoformat()
+
+
+def test_trace_assertion_six_of_ten_stabilizes_at_reviewed_threshold(
     tmp_path,
 ) -> None:
     monotonic = [0.0]
@@ -3188,9 +3308,9 @@ def test_trace_assertion_five_of_seven_stabilizes_at_reviewed_threshold(
         token_provider=lambda _: "synthetic-token",
         monotonic=lambda: monotonic[0],
     )
-    operation_ids = tuple(f"{index + 1:032x}" for index in range(7))
+    operation_ids = tuple(f"{index + 1:032x}" for index in range(10))
     references = tuple(
-        f"resp_A1b2C3d4E5f{index}" for index in range(7)
+        f"resp_A1b2C3d4E5f{index}" for index in range(10)
     )
     rows = []
     for index, (operation_id, reference) in enumerate(
@@ -3208,7 +3328,7 @@ def test_trace_assertion_five_of_seven_stabilizes_at_reviewed_threshold(
                 ),
                 {
                     **_tool_trace_row(
-                        "lookup" if index < 5 else "different_lookup"
+                        "lookup" if index < 6 else "different_lookup"
                     ),
                     "operation_id": operation_id,
                     "span_id": f"tool-{index}",
@@ -3217,7 +3337,7 @@ def test_trace_assertion_five_of_seven_stabilizes_at_reviewed_threshold(
             ]
         )
     traffic_path = tmp_path / "traffic.json"
-    _write_trace_assertion_traffic(traffic_path, request_count=7)
+    _write_trace_assertion_traffic(traffic_path, request_count=10)
     requests = read_json(traffic_path)["requests"]
     for request in requests:
         request["expected"]["activation_gate"] = True
@@ -3237,10 +3357,10 @@ def test_trace_assertion_five_of_seven_stabilizes_at_reviewed_threshold(
         requests=requests,
         stabilization_seconds=180,
         on_first_pass=lambda: None,
-        minimum_passing_trace_observations=5,
+        minimum_passing_trace_observations=6,
     )
 
-    assert sum(result[0].passed for result in evidence) == 5
+    assert sum(result[0].passed for result in evidence) == 6
     assert monotonic[0] == 180
 
 
@@ -3290,6 +3410,335 @@ def test_trace_assertion_observes_span_ingested_after_135_seconds(
     assert evidence[0][0].passed is True
     assert monotonic[0] == 135 + 180
     assert first_passes == [0]
+
+
+def test_private_trace_batch_waits_for_late_required_surface(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_ids = ("a" * 32, "b" * 32)
+    references = ("resp_A1b2C3d4E5f6", "resp_F6e5D4c3B2a1")
+    first = _anchored_tool_rows(
+        "lookup",
+        references[0],
+        operation_id=operation_ids[0],
+    )
+    second = _anchored_tool_rows(
+        "lookup",
+        references[1],
+        operation_id=operation_ids[1],
+    )
+    second[0]["span_id"] = "root-span-2"
+    second[1]["span_id"] = "tool-span-2"
+    second[1]["parent_span_id"] = "root-span-2"
+    partial = [*first, second[0]]
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: partial if monotonic[0] < 3 else [*first, *second]
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path, request_count=2)
+    requests = read_json(traffic_path)["requests"]
+
+    rows, anchors = runtime.stable_correlated_evidence_for_requests(
+        agent_name="finance-agent",
+        foundry_version="issue-013",
+        operation_ids=operation_ids,
+        response_references=references,
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        stabilization_seconds=2,
+        poll_seconds=1,
+        maximum_wait_seconds=10,
+        requests=requests,
+        required_trace_attempt_indexes=((0,), (1,)),
+        minimum_complete_trace_attempts=2,
+    )
+
+    assert anchors == ("root-span", "root-span-2")
+    assert any(row["operation_name"] == "execute_tool" for row in rows[1])
+    assert monotonic[0] == 5
+
+
+def test_private_trace_batch_missing_required_surface_reaches_deadline(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_ids = ("a" * 32, "b" * 32)
+    references = ("resp_A1b2C3d4E5f6", "resp_F6e5D4c3B2a1")
+    first = _anchored_tool_rows(
+        "lookup",
+        references[0],
+        operation_id=operation_ids[0],
+    )
+    second = _anchored_tool_rows(
+        "lookup",
+        references[1],
+        operation_id=operation_ids[1],
+    )
+    second[0]["span_id"] = "root-span-2"
+    second[1]["span_id"] = "tool-span-2"
+    second[1]["parent_span_id"] = "root-span-2"
+    runtime._trace_rows = (  # type: ignore[method-assign]
+        lambda *_args: [*first, second[0]]
+    )
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path, request_count=2)
+    requests = read_json(traffic_path)["requests"]
+
+    with pytest.raises(TraceAssertionActivationError) as caught:
+        runtime.stable_correlated_evidence_for_requests(
+            agent_name="finance-agent",
+            foundry_version="issue-013",
+            operation_ids=operation_ids,
+            response_references=references,
+            window_start="2026-08-28T10:00:00+00:00",
+            window_end="2026-08-28T10:00:30+00:00",
+            stabilization_seconds=2,
+            poll_seconds=1,
+            maximum_wait_seconds=5,
+            requests=requests,
+            required_trace_attempt_indexes=((0,), (1,)),
+            minimum_complete_trace_attempts=2,
+        )
+
+    assert caught.value.code == "trace_assertion_required_surface_missing"
+    assert caught.value.matched_reference_count == 2
+    assert caught.value.expected_reference_count == 2
+    assert caught.value.missing_reference_count == 0
+    assert monotonic[0] == 5
+
+
+def test_private_trace_batch_does_not_treat_hydration_as_model_threshold(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_ids = ("a" * 32, "b" * 32, "c" * 32)
+    references = (
+        "resp_A1b2C3d4E5f6",
+        "resp_F6e5D4c3B2a1",
+        "resp_C3d4E5f6A1b2",
+    )
+    batches = [
+        _anchored_tool_rows(
+            "lookup",
+            reference,
+            operation_id=operation_id,
+        )
+        for operation_id, reference in zip(
+            operation_ids,
+            references,
+            strict=True,
+        )
+    ]
+    for index, rows in enumerate(batches):
+        rows[0]["span_id"] = f"root-span-{index}"
+        rows[1]["span_id"] = f"tool-span-{index}"
+        rows[1]["parent_span_id"] = f"root-span-{index}"
+    partial = [*batches[0], *batches[1], batches[2][0]]
+    runtime._trace_rows = lambda *_args: partial  # type: ignore[method-assign]
+    runtime._sleep = lambda seconds: monotonic.__setitem__(
+        0, monotonic[0] + seconds
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path, request_count=3)
+    requests = read_json(traffic_path)["requests"]
+
+    with pytest.raises(
+        TraceAssertionActivationError,
+        match="did not stabilize before the bounded deadline",
+    ):
+        runtime.stable_correlated_evidence_for_requests(
+            agent_name="finance-agent",
+            foundry_version="issue-013",
+            operation_ids=operation_ids,
+            response_references=references,
+            window_start="2026-08-28T10:00:00+00:00",
+            window_end="2026-08-28T10:00:30+00:00",
+            stabilization_seconds=2,
+            poll_seconds=1,
+            maximum_wait_seconds=10,
+            requests=requests,
+            required_trace_attempt_indexes=((0,), (1,), (2,)),
+            minimum_complete_trace_attempts=3,
+        )
+
+    assert monotonic[0] == 10
+
+
+def test_mature_private_trace_snapshot_skips_stabilization_wait(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    rows = _anchored_tool_rows(
+        "lookup",
+        reference,
+        operation_id=operation_id,
+    )
+    runtime._trace_rows = lambda *_args: rows  # type: ignore[method-assign]
+    runtime._sleep = lambda _seconds: pytest.fail(  # type: ignore[method-assign]
+        "Mature evidence must not poll"
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    requests = read_json(traffic_path)["requests"]
+    proof = {
+        "invocation_receipt_digest": "sha256:" + ("a" * 64),
+        "evidence_window_end": "2026-08-28T10:00:30+00:00",
+        "maturity_boundary": "2026-08-28T10:18:30+00:00",
+        "snapshot_observed_at": "2026-08-28T10:18:30+00:00",
+        "maximum_hydration_seconds": 900,
+        "stabilization_seconds": 180,
+    }
+
+    evidence, _ = runtime.stable_correlated_evidence_for_requests(
+        agent_name="finance-agent",
+        foundry_version="issue-013",
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        stabilization_seconds=180,
+        poll_seconds=15,
+        maximum_wait_seconds=900,
+        requests=requests,
+        required_trace_attempt_indexes=((0,),),
+        minimum_complete_trace_attempts=1,
+        mature=True,
+        maturity_proof=proof,
+    )
+
+    assert evidence[0][1]["operation_name"] == "execute_tool"
+    assert monotonic[0] == 0
+
+
+def test_mature_private_trace_gap_returns_one_incomplete_snapshot(
+    tmp_path,
+) -> None:
+    monotonic = [0.0]
+    runtime = LiveRuntime(
+        _runtime()._profile,
+        token_provider=lambda _: "synthetic-token",
+        monotonic=lambda: monotonic[0],
+    )
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    anchor = _anchored_tool_rows(
+        "lookup",
+        reference,
+        operation_id=operation_id,
+    )[0]
+    runtime._trace_rows = lambda *_args: [anchor]  # type: ignore[method-assign]
+    runtime._sleep = lambda _seconds: pytest.fail(  # type: ignore[method-assign]
+        "Mature missing evidence must not poll"
+    )
+    traffic_path = tmp_path / "traffic.json"
+    _write_trace_assertion_traffic(traffic_path)
+    requests = read_json(traffic_path)["requests"]
+    proof = {
+        "invocation_receipt_digest": "sha256:" + ("a" * 64),
+        "evidence_window_end": "2026-08-28T10:00:30+00:00",
+        "maturity_boundary": "2026-08-28T10:18:30+00:00",
+        "snapshot_observed_at": "2026-08-28T10:18:30+00:00",
+        "maximum_hydration_seconds": 900,
+        "stabilization_seconds": 180,
+    }
+
+    hydration = []
+    evidence, _ = runtime.stable_correlated_evidence_for_requests(
+        agent_name="finance-agent",
+        foundry_version="issue-013",
+        operation_ids=(operation_id,),
+        response_references=(reference,),
+        window_start="2026-08-28T10:00:00+00:00",
+        window_end="2026-08-28T10:00:30+00:00",
+        stabilization_seconds=180,
+        poll_seconds=15,
+        maximum_wait_seconds=900,
+        requests=requests,
+        required_trace_attempt_indexes=((0,),),
+        minimum_complete_trace_attempts=1,
+        mature=True,
+        maturity_proof=proof,
+        on_hydration_state=hydration.append,
+    )
+
+    assert len(evidence) == 1
+    assert hydration == ["incomplete"]
+    assert monotonic[0] == 0
+
+
+def test_trace_hydration_requires_terminal_and_input_surfaces() -> None:
+    terminal_fixture = _normalize_fixture(
+        {
+            "id": "terminal",
+            "request": {"body": {"input": []}},
+            "expected": {
+                "trace_assertions": [
+                    {
+                        "name": "terminal",
+                        "kind": "terminal_claim_relation",
+                        "tool_name": "lookup",
+                        "required_terms_all": ["synthetic"],
+                    }
+                ]
+            },
+        }
+    )
+    tool = _tool_trace_row("lookup")
+    assert _trace_request_hydration_state([tool], terminal_fixture) == "incomplete"
+
+    input_fixture = _normalize_fixture(
+        {
+            "id": "input",
+            "request": {"body": {"input": []}},
+            "expected": {
+                "trace_assertions": [
+                    {
+                        "name": "input",
+                        "kind": "payload_multiplicity",
+                        "source": "input_messages",
+                        "minimum": 1,
+                    }
+                ]
+            },
+        }
+    )
+    anchor = _invoke_agent_trace_row(
+        "resp_A1b2C3d4E5f6",
+        present=True,
+        nonempty=True,
+    )
+    assert _trace_request_hydration_state([anchor], input_fixture) == "incomplete"
+    anchor["input_messages"] = '["synthetic"]'
+    assert _trace_request_hydration_state([anchor], input_fixture) == "complete"
 
 
 def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
@@ -4267,7 +4716,7 @@ def test_insight_parser_supports_paged_wire_trace_details() -> None:
     assert insight.proposed_fix == "Apply the bounded correction."
 
 
-def test_finished_insights_exclude_cards_linked_to_foreign_operations() -> None:
+def test_finished_insights_reject_exact_run_card_linked_to_foreign_operations() -> None:
     runtime = _runtime()
     target_operation = "a" * 32
     foreign_operation = "b" * 32
@@ -4287,9 +4736,12 @@ def test_finished_insights_exclude_cards_linked_to_foreign_operations() -> None:
     def insight(
         reference: str,
         linked_operation_ids: tuple[str, ...],
+        *,
+        run_id: str = "private-run-id",
     ) -> dict:
         return {
             "id": reference,
+            "runId": run_id,
             "agentVersion": "issue-013",
             "title": reference,
             "updatedAt": "2026-08-24T10:01:00+00:00",
@@ -4308,15 +4760,94 @@ def test_finished_insights_exclude_cards_linked_to_foreign_operations() -> None:
         insight("unlinked", ()),
     ]
 
+    with pytest.raises(ContractError, match="cross-version or out-of-scope"):
+        runtime.finish_insights_run(
+            agent_name="finance-agent",
+            monitor_id="monitor-finance",
+            foundry_version="issue-013",
+            operation_ids=(target_operation,),
+            checkpoint=InsightRunCheckpoint("private-run-id", {}),
+        )
+
+
+@pytest.mark.parametrize("card_count", [0, 1, 2])
+def test_finished_insights_accepts_zero_one_or_multiple_exact_run_cards(
+    card_count: int,
+) -> None:
+    runtime = _runtime()
+    operation = "a" * 32
+    earliest = datetime(2026, 8, 24, 10, 0, tzinfo=UTC)
+    runtime._wait_insights_run = lambda *_args: {  # type: ignore[method-assign]
+        "status": "succeeded",
+        "window_start": earliest.isoformat(),
+        "window_end": (earliest + timedelta(minutes=1)).isoformat(),
+    }
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (earliest, earliest + timedelta(seconds=30))
+    )
+    runtime._list_insights = lambda _monitor_id: [  # type: ignore[method-assign]
+        {
+            "id": f"card-{index}",
+            "runId": "run-current",
+            "agentVersion": "issue-013",
+            "title": f"card-{index}",
+            "updatedAt": "2026-08-24T10:01:00+00:00",
+            "details": {"linkedTraces": [{"traceId": operation}]},
+        }
+        for index in range(card_count)
+    ]
+
     result = runtime.finish_insights_run(
         agent_name="finance-agent",
         monitor_id="monitor-finance",
         foundry_version="issue-013",
-        operation_ids=(target_operation,),
-        checkpoint=InsightRunCheckpoint("private-run-id", {}),
+        operation_ids=(operation,),
+        checkpoint=InsightRunCheckpoint("run-current", {}),
     )
 
-    assert [item.title for item in result.insights] == ["target-only"]
+    assert len(result.insights) == card_count
+
+
+def test_finished_insights_excludes_prior_run_cards() -> None:
+    runtime = _runtime()
+    operation = "a" * 32
+    earliest = datetime(2026, 8, 24, 10, 0, tzinfo=UTC)
+    runtime._wait_insights_run = lambda *_args: {  # type: ignore[method-assign]
+        "status": "succeeded",
+        "window_start": earliest.isoformat(),
+        "window_end": (earliest + timedelta(minutes=1)).isoformat(),
+    }
+    runtime._operation_time_bounds = (  # type: ignore[method-assign]
+        lambda **_kwargs: (earliest, earliest + timedelta(seconds=30))
+    )
+    runtime._list_insights = lambda _monitor_id: [  # type: ignore[method-assign]
+        {
+            "id": "prior-card",
+            "runId": "run-prior",
+            "agentVersion": "issue-013",
+            "title": "prior",
+            "updatedAt": "2026-08-24T10:01:00+00:00",
+            "details": {"linkedTraces": [{"traceId": operation}]},
+        },
+        {
+            "id": "current-card",
+            "runId": "run-current",
+            "agentVersion": "issue-013",
+            "title": "current",
+            "updatedAt": "2026-08-24T10:01:00+00:00",
+            "details": {"linkedTraces": [{"traceId": operation}]},
+        },
+    ]
+
+    result = runtime.finish_insights_run(
+        agent_name="finance-agent",
+        monitor_id="monitor-finance",
+        foundry_version="issue-013",
+        operation_ids=(operation,),
+        checkpoint=InsightRunCheckpoint("run-current", {}),
+    )
+
+    assert [item.title for item in result.insights] == ["current"]
 
 
 def test_telemetry_requires_every_request_reference() -> None:
@@ -4441,8 +4972,10 @@ def test_wait_for_telemetry_discovers_exact_attempt_operations_for_every_agent(
     assert 'customDimensions["gen_ai.response.id"]' in query_text
     assert 'customDimensions["x-ms-client-request-id"]' in query_text
     assert 'operation_name == "invoke_agent"' in query_text
-    assert agent_name not in query_text
-    assert "cycle-version" not in query_text
+    assert agent_name in query_text
+    assert "cycle-version" in query_text
+    assert "observed_agent ==" in query_text
+    assert "agent_version ==" in query_text
     assert "matched_references=make_set(matched_reference)" in query_text
     assert "timestamp >= datetime(2026-08-28T10:00:00+00:00)" in query_text
     assert "timestamp <= datetime(2026-08-28T10:00:01+00:00)" in query_text
@@ -4898,6 +5431,78 @@ def test_wait_for_telemetry_waits_for_exact_count_before_stabilizing(
     assert monotonic[0] == 60
 
 
+def test_mature_discovery_and_identity_each_query_once(monkeypatch) -> None:
+    query_module = types.ModuleType("azure.monitor.query")
+    query_module.LogsQueryStatus = type("LogsQueryStatus", (), {"SUCCESS": "success"})
+    monitor_module = types.ModuleType("azure.monitor")
+    azure_module = types.ModuleType("azure")
+    monkeypatch.setitem(sys.modules, "azure", azure_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor", monitor_module)
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    operation_id = "a" * 32
+    reference = "resp_A1b2C3d4E5f6"
+    calls = []
+    runtime = _runtime()
+    runtime._logs_client = lambda: object()  # type: ignore[method-assign]
+    runtime._sleep = lambda _seconds: pytest.fail(  # type: ignore[method-assign]
+        "Mature evidence must not poll"
+    )
+
+    def query(_client, query_text, **_kwargs):
+        calls.append(query_text)
+        rows = (
+            [[operation_id, [reference]]]
+            if "matched_references" in query_text
+            else [
+                [
+                    operation_id,
+                    reference,
+                    ["finance-agent"],
+                    ["opaque-version"],
+                ]
+            ]
+        )
+        table = type("Table", (), {"rows": rows})()
+        return type("Result", (), {"status": "success", "tables": [table]})()
+
+    runtime._query_resource = query  # type: ignore[method-assign]
+    invocation = InvocationEvidence(
+        operation_ids=(),
+        response_references=(reference,),
+        started_at="2026-08-28T10:00:00+00:00",
+        completed_at="2026-08-28T10:00:01+00:00",
+        request_count=1,
+        allow_window_correlation=False,
+    )
+    proof = {
+        "invocation_receipt_digest": "sha256:" + ("a" * 64),
+        "evidence_window_end": invocation.completed_at,
+        "maturity_boundary": "2026-08-28T10:18:01+00:00",
+        "snapshot_observed_at": "2026-08-28T10:18:01+00:00",
+        "maximum_hydration_seconds": 900,
+        "stabilization_seconds": 180,
+    }
+
+    operations = runtime.wait_for_telemetry(
+        agent_name="finance-agent",
+        foundry_version="opaque-version",
+        invocation=invocation,
+        mature=True,
+        maturity_proof=proof,
+    )
+    identities = runtime.telemetry_identity_passes(
+        agent_name="finance-agent",
+        foundry_version="opaque-version",
+        operation_ids=operations,
+        invocation=invocation,
+        mature=True,
+    )
+
+    assert operations == (operation_id,)
+    assert identities == (True,)
+    assert len(calls) == 2
+
+
 def test_wait_for_telemetry_timeout_records_safe_reference_counts(
     monkeypatch,
 ) -> None:
@@ -5138,6 +5743,42 @@ def test_telemetry_query_retries_transient_sdk_failures(monkeypatch) -> None:
     )
     assert attempts == 4
     assert sleeps == [1, 2, 4]
+
+
+def test_mature_telemetry_query_does_not_retry_transient_failure(
+    monkeypatch,
+) -> None:
+    class SyntheticHttpError(Exception):
+        status_code = 503
+
+    runtime = _runtime()
+    attempts = 0
+
+    class Client:
+        def query_resource(self, *_args, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            raise SyntheticHttpError()
+
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_HTTP_ERRORS",
+        (SyntheticHttpError,),
+    )
+    monkeypatch.setattr(
+        "agent_insights_quality.live._TELEMETRY_TRANSIENT_ERRORS",
+        (SyntheticHttpError,),
+    )
+    runtime._sleep = lambda _seconds: pytest.fail("Mature query must not retry")
+
+    with pytest.raises(TelemetryQueryError):
+        runtime._query_resource(
+            Client(),
+            "query",
+            timespan=(0, 1),
+            retry_transient=False,
+        )
+
+    assert attempts == 1
 
 
 def test_telemetry_query_does_not_retry_nontransient_http_failures(

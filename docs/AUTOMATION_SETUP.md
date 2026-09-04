@@ -11,8 +11,7 @@
 - Storage Blob Data Reader access to the dedicated Sweden Central `g30` storage account's private
   `deployment-registries` container;
 - an authenticated local Azure CLI user with Foundry Project Manager on the validation account,
-  Monitoring Reader on Sweden staging `g30`, ACR push, and Blob contributor access for the immutable
-  `test-agent-validation-approved-records-swedencentral-g30` container;
+  Monitoring Reader on Sweden staging `g30`, and ACR push;
 - ADX Database Viewer and Ingestor access to the fixed quality analytics database;
 - one email capability with explicit HTML support.
 
@@ -45,12 +44,6 @@ evidence stay local. Worker operations use authority and shard locks rather than
 coordinator lock. Interrupted work resumes from exact fenced receipts. A new validation archives
 legacy state byte-for-byte when needed, writes `SUPERSEDED`, and swaps the active pointer without
 deleting any provider object or private evidence.
-
-Only the final approved validation record uses Blob. The storage account must have versioning and the
-`test-agent-validation-approved-records-swedencentral-g30` container must have immutable storage with
-versioning.
-The local approval command verifies the Azure CLI token remains bound to the resolved user on every
-SDK token acquisition. No client secret, service principal, or ambient credential chain is accepted.
 
 ## Readiness
 

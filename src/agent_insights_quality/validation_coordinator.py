@@ -40,21 +40,19 @@ from agent_insights_quality.validation_copilot import (
     incomplete_authority_evidence_from_invocation,
     incomplete_result_requires_fresh_invocation,
     load_active_pointer,
+    load_claim_pointer,
     load_bound_private_package,
     load_copilot_evaluation,
     pointer_paths,
+    release_active_pointer,
     write_active_pointer,
     write_private_package,
 )
 from agent_insights_quality.validation_assignments import verification_assignment
 from agent_insights_quality.validation_authority_results import (
     current_authority_verification_results,
-    has_prior_nonpass_result_for_invocation,
-    latest_prior_nonpass_result,
     load_authority_verification_result,
     load_bound_authority_verification_result,
-    paired_trace_gap_history_digest,
-    reusable_authority_verification_results,
     sanitize_verification_error,
     verification_query_diagnostics,
     write_authority_verification_result,
@@ -65,9 +63,7 @@ from agent_insights_quality.validation_cycle import (
 )
 from agent_insights_quality.validation_evidence import (
     load_reused_authority_evidence,
-    paired_trace_gap_attempt_index,
     persist_evidence,
-    select_reusable_authority_evidence,
     stamp_evidence_digests,
     validate_evidence,
 )
@@ -80,6 +76,7 @@ from agent_insights_quality.validation_execution import (
 from agent_insights_quality.validation_lifecycle import (
     LifecycleJournal,
     LocalValidationLock,
+    ValidationLockBusy,
     validation_runtime_root,
 )
 from agent_insights_quality.validation_leases import CrossProcessTelemetryLease
@@ -89,12 +86,12 @@ from agent_insights_quality.validation_invocations import (
     load_bound_invocation_receipt,
     load_invocation_receipt,
     recover_supplemental_legacy_invocations,
-    select_reusable_invocation_receipts,
     write_invocation_receipt,
 )
 from agent_insights_quality.validation_live import (
     FoundryScenarioAttemptRunner,
     FoundryScenarioVerifier,
+    PostResponseTelemetryError,
 )
 from agent_insights_quality.validation_local import (
     _capacity_from_lifecycle,
@@ -148,6 +145,16 @@ INVOKE_SHARD_CONCURRENCY = 8
 
 
 def prepare_test_agent_validation() -> dict[str, Any]:
+    return _prepare_test_agent_validation()
+
+
+def _prepare_test_agent_validation(
+    *,
+    recovery_source_digest: str | None = None,
+    recovery_intent: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if recovery_source_digest is not None and recovery_intent is not None:
+        raise ContractError("Validation recovery input is ambiguous")
     git = discover_local_git_context()
     policy = load_validation_policy()
     agents, issues = load_catalogs()
@@ -162,6 +169,15 @@ def prepare_test_agent_validation() -> dict[str, Any]:
     lock = LocalValidationLock(validation_runtime_root() / "coordinator.lock")
     with lock:
         journal = LifecycleJournal(lock=lock)
+        recovery_requirements: tuple[list[str], list[str]] | None = None
+        if recovery_source_digest is not None:
+            recovery_source = journal.read_active().value
+            if recovery_source["journal_digest"] != recovery_source_digest:
+                raise ContractError(
+                    "Validation recovery source changed before successor preparation"
+                )
+            candidate = _validation_recovery_candidate(recovery_source, git=git)
+            _assert_recovery_deployment_reuse(recovery_source)
         plan = prepare_validation_plan(
             agents=agents,
             issues=issues,
@@ -177,6 +193,29 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             issues=issues,
             policy=policy,
         )
+        if recovery_source_digest is not None:
+            recovery_requirements = _current_invocation_requirements(
+                journal=journal,
+                plan=plan,
+                authorities=authorities,
+            )
+            recovery_intent = _recovery_intent(
+                source=recovery_source,
+                incomplete_authority_ids=candidate[
+                    "incomplete_authority_ids"
+                ],
+                fresh_invocation_authority_ids=recovery_requirements[1],
+            )
+        elif recovery_intent is not None:
+            _validate_resumable_recovery_intent(
+                journal.read_active().value,
+                recovery_intent=recovery_intent,
+                git=git,
+            )
+            recovery_requirements = (
+                list(recovery_intent["incomplete_authority_ids"]),
+                list(recovery_intent["fresh_invocation_authority_ids"]),
+            )
         profile = validation_runtime_profile(
             plan["project_name"],
             run_id=plan["run_id"],
@@ -200,6 +239,7 @@ def prepare_test_agent_validation() -> dict[str, Any]:
             holder_operator_reference=operator.operator_reference,
             holder_run_reference=content_hash({"run": uuid.uuid4().hex}),
             substrate=_substrate(operator, base_profile),
+            recovery_intent=recovery_intent,
         )
         support_reuse_candidates = _support_image_reuse_candidates(
             journal=journal,
@@ -217,14 +257,20 @@ def prepare_test_agent_validation() -> dict[str, Any]:
                 plan=plan,
                 authorities=authorities,
             ) as migration:
-                (
-                    incomplete_current_invocations,
-                    fresh_current_invocations,
-                ) = _current_invocation_requirements(
-                    journal=journal,
-                    plan=plan,
-                    authorities=authorities,
-                )
+                if recovery_requirements is None:
+                    (
+                        incomplete_current_invocations,
+                        fresh_current_invocations,
+                    ) = _current_invocation_requirements(
+                        journal=journal,
+                        plan=plan,
+                        authorities=authorities,
+                    )
+                else:
+                    (
+                        incomplete_current_invocations,
+                        fresh_current_invocations,
+                    ) = recovery_requirements
                 active, superseded_authority_ids = journal.begin_run(
                     initial,
                     all_authority_ids=[
@@ -315,6 +361,12 @@ def prepare_test_agent_validation() -> dict[str, Any]:
                 "quota_plan_digest"
             ],
         )
+        if recovery_intent is not None and desired[
+            "deployment_assignments"
+        ]:
+            raise ContractError(
+                "Validation recovery cannot expand into deployment work"
+            )
         desired_path = (
             validation_runtime_root()
             / "desired-state"
@@ -347,6 +399,14 @@ def run_test_agent_validation() -> dict[str, Any]:
                 "python -m agent_insights_quality prepare-test-agent-validation"
             ],
         }
+    history = _public_authority_history(active)
+    history_fields = {
+        "agent_count": len(
+            {item["canonical_agent"] for item in history}
+        ),
+        "authority_count": len(history),
+        "authority_history": history,
+    }
     if active is not None and active["state"] in {"READY", "FAILED"}:
         evidence = read_json(
             validation_runtime_root() / active["evidence_reference"]["path"]
@@ -360,9 +420,9 @@ def run_test_agent_validation() -> dict[str, Any]:
             None,
         )
         return {
+            **history_fields,
             "status": active["state"].casefold(),
             "result": evidence["result"],
-            "authority_count": 41,
             "validated_authority_count": len(
                 active["validation_authority_ids"]
             ),
@@ -374,6 +434,7 @@ def run_test_agent_validation() -> dict[str, Any]:
         }
     if active["state"] == "CREATING":
         return {
+            **history_fields,
             "status": "deployment_pending",
             "maximum_active_subsessions": 8,
             "shards": active["deployment_assignments"],
@@ -391,6 +452,7 @@ def run_test_agent_validation() -> dict[str, Any]:
         incomplete_invoke_shards = _incomplete_invocation_shards(active)
         if incomplete_invoke_shards:
             return {
+                **history_fields,
                 "status": "invocation_pending",
                 "maximum_active_subsessions": 8,
                 "invoke_shards": incomplete_invoke_shards,
@@ -428,6 +490,7 @@ def run_test_agent_validation() -> dict[str, Any]:
                 len(pending) - len(claims),
             )
             return {
+                **history_fields,
                 "status": "verification_pending",
                 "maximum_active_subsessions": MAX_ACTIVE_COPILOT_CLAIMS,
                 "completed_authority_count": len(completed),
@@ -452,6 +515,7 @@ def run_test_agent_validation() -> dict[str, Any]:
         if incomplete:
             first = incomplete[0]
             return {
+                **history_fields,
                 "status": "verification_incomplete",
                 "maximum_active_subsessions": 8,
                 "completed_authority_count": len(completed),
@@ -462,7 +526,7 @@ def run_test_agent_validation() -> dict[str, Any]:
                 "error_code": first["error_code"],
                 "query_diagnostics": first["query_diagnostics"],
                 "next_commands": [
-                    "python -m agent_insights_quality prepare-test-agent-validation"
+                    "python -m agent_insights_quality recover-test-agent-validation"
                 ],
             }
         failed = [
@@ -471,6 +535,7 @@ def run_test_agent_validation() -> dict[str, Any]:
             if completed[authority_id]["outcome"] == "FAIL"
         ]
         return {
+            **history_fields,
             "status": "composition_pending",
             "maximum_active_subsessions": 8,
             "completed_authority_count": len(completed),
@@ -485,9 +550,86 @@ def run_test_agent_validation() -> dict[str, Any]:
             ],
         }
     return {
+        **history_fields,
         "status": active["state"].casefold(),
         "next_commands": [],
     }
+
+
+def recover_test_agent_validation() -> dict[str, Any]:
+    git = discover_local_git_context()
+    source = _matching_active(git)
+    if source is None:
+        raise ContractError(
+            "Test Agent Validation recovery requires the current prepared head"
+        )
+    resumed_intent = source.get("recovery_intent")
+    if source["state"] == "CREATING" and isinstance(
+        resumed_intent,
+        Mapping,
+    ):
+        _validate_resumable_recovery_intent(
+            source,
+            recovery_intent=resumed_intent,
+            git=git,
+        )
+        candidate = {
+            "incomplete_authority_ids": list(
+                resumed_intent["incomplete_authority_ids"]
+            )
+        }
+        prepared = _prepare_test_agent_validation(
+            recovery_intent=resumed_intent,
+        )
+    else:
+        candidate = _validation_recovery_candidate(source, git=git)
+        prepared = _prepare_test_agent_validation(
+            recovery_source_digest=source["journal_digest"],
+        )
+    if prepared["deployment_shards"]:
+        raise ContractError("Validation recovery unexpectedly selected deployment work")
+    reconcile_test_agent_validation_deployment()
+    successor = _active_for_state("VALIDATING")
+    journal = LifecycleJournal(
+        lock=LocalValidationLock(validation_runtime_root() / "coordinator.lock")
+    )
+    _validate_recovery_successor(
+        source=source,
+        successor=successor,
+        incomplete_authority_ids=candidate["incomplete_authority_ids"],
+        ancestor_run_ids=journal.superseded_run_ids(successor),
+        source_authority_ids=[
+            item.authority_id for item in authority_specs(*load_catalogs())
+        ],
+    )
+    result = _prepared_result(successor)
+    invoke_shards = result["invoke_shards"]
+    result.update(
+        {
+            "status": (
+                "recovery_invocation_pending"
+                if invoke_shards
+                else "recovery_verification_pending"
+            ),
+            "recovery_authority_count": len(
+                candidate["incomplete_authority_ids"]
+            ),
+            "next_commands": (
+                [
+                    "python -m agent_insights_quality "
+                    f"invoke-test-agent-validation-shard --shard-id "
+                    f"{item['shard_id']}"
+                    for item in invoke_shards
+                ]
+                if invoke_shards
+                else [
+                    "python -m agent_insights_quality "
+                    "prepare-test-agent-validation-assessment"
+                ]
+            ),
+        }
+    )
+    return result
 
 
 def deploy_test_agent_validation_shard(
@@ -647,44 +789,37 @@ def reconcile_test_agent_validation_deployment() -> dict[str, Any]:
             profile=contexts["profile"],
         )
         controller.complete_prepare(runtime_agents, now=datetime.now(UTC))
-        selected, reused = select_reusable_authority_evidence(
-            authorities=authorities,
-            runtime_topology=controller.active.value["runtime_topology"],
-            repository=controller.active.value["repository"],
-            pr_number=controller.active.value["pr_number"],
-            environment_id=contexts["policy"].environment_id,
-            location=contexts["policy"].location,
-            project_name=controller.active.value["project"]["name"],
-            telemetry_resource_set=contexts["policy"].telemetry_resource_set,
-            shared_validation_digest=desired["shared_validation_digest"],
-            forced_authority_ids=set(
-                desired["forced_validation_authority_ids"]
-            ),
-        )
-        authority_results = reusable_authority_verification_results(
-            authorities=authorities,
-            runtime_topology=controller.active.value["runtime_topology"],
-            prepared=controller.active.value,
-            plan=contexts["plan"],
+        recovery_intent = controller.active.value["recovery_intent"]
+        authority_results = (
+            _recovery_authority_result_selection(
+                prepared=controller.active.value,
+                plan=contexts["plan"],
+                authorities=authorities,
+                recovery_intent=recovery_intent,
+            )
+            if recovery_intent is not None
+            else {authority.authority_id: None for authority in authorities}
         )
         selected, reused = _merge_authority_result_selection(
             authorities=authorities,
-            selected=selected,
-            reused=reused,
+            selected=[],
+            reused=[],
             authority_results=authority_results,
             forced=set(desired["forced_validation_authority_ids"]),
         )
         invocation_selected, reused_invocations = (
-            select_reusable_invocation_receipts(
-                authorities=authorities,
-                authority_ids=selected,
-                runtime_topology=controller.active.value["runtime_topology"],
+            _recovery_invocation_selection(
                 prepared=controller.active.value,
                 plan=contexts["plan"],
+                authorities=authorities,
+                selected_authority_ids=selected,
                 forced_authority_ids=set(
                     desired["forced_invocation_authority_ids"]
                 ),
+                recovery_intent=recovery_intent,
             )
+            if recovery_intent is not None
+            else (selected, [])
         )
         controller.set_authority_selection(
             selected_authority_ids=selected,
@@ -787,70 +922,19 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
     context = _load_prepared()
     prepared = context["prepared"]
     claimant = copilot_claimant_reference()
-    with evaluation_lock():
-        _assert_active_generation(prepared)
-        existing = current_authority_verification_results(
-            prepared=prepared,
-            authority_ids=prepared["validation_authority_ids"],
-        )
-        pending = [
-            assignment["authority_id"]
-            for assignment in prepared["verification_authority_assignments"]
-            if assignment["authority_id"] not in existing
-        ]
-        if not pending:
-            return {
-                "status": "verification_complete",
-                "pending_authority_count": 0,
-            }
-        claims = [
-            item
-            for item in active_copilot_claims(prepared=prepared)
-            if item["authority_id"] in pending
-        ]
-        pointer = next(
-            (
-                item
-                for item in claims
-                if item["claimant_reference"] == claimant
-            ),
-            None,
-        )
-        if pointer is None:
-            claimed_authority_ids = {
-                str(item["authority_id"]) for item in claims
-            }
-            available = [
-                authority_id
-                for authority_id in pending
-                if authority_id not in claimed_authority_ids
-            ]
-            if (
-                len(claims) >= MAX_ACTIVE_COPILOT_CLAIMS
-                or not available
-            ):
-                return {
-                    "status": "assessment_capacity_full",
-                    "pending_authority_count": len(pending),
-                    "active_authority_evaluator_count": len(claims),
-                    "available_authority_evaluator_slots": 0,
-                }
-            authority_id = available[0]
-            pointer = write_active_pointer(
+    try:
+        with evaluation_lock():
+            claimed = _claim_test_agent_validation_assessment(
                 prepared=prepared,
-                authority_id=authority_id,
-                claimant_reference=claimant,
+                claimant=claimant,
             )
-            active_count = len(claims) + 1
-        else:
-            authority_id = str(pointer["authority_id"])
-            active_count = len(claims)
-        _assert_assessment_claim_binding(
-            pointer,
-            prepared=prepared,
-            claimant_reference=claimant,
-            authority_id=authority_id,
+    except ValidationLockBusy:
+        return _assessment_busy_result(
+            command="prepare-test-agent-validation-assessment"
         )
+    if isinstance(claimed, dict):
+        return claimed
+    pointer, authority_id, pending_count, active_count = claimed
     authority_by_id = {
         item.authority_id: item for item in context["authorities"]
     }
@@ -883,7 +967,7 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
         return _assessment_ready_result(
             package_path=package_path,
             draft_path=draft_path,
-            pending_count=len(pending),
+            pending_count=pending_count,
             active_count=active_count,
         )
     started_at = datetime.fromisoformat(str(pointer["claimed_at"]))
@@ -906,9 +990,7 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
                 pointer,
             ),
         )
-    except CopilotClaimError:
-        raise
-    except (ContractError, OSError, RuntimeError) as error:
+    except PostResponseTelemetryError as error:
         query_stage, error_code = sanitize_verification_error(error)
         query_diagnostics = verification_query_diagnostics(error)
         evidence = incomplete_authority_evidence_from_invocation(
@@ -932,11 +1014,17 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
                 claimant_reference=claimant,
                 authority_id=authority_id,
             )
+            _assert_no_completed_authority_result(
+                prepared=prepared,
+                authority_id=authority_id,
+            )
             reference = write_authority_verification_result(
                 prepared=prepared,
                 plan=context["plan"],
                 authority=authority,
                 runtime=runtime_by_id[authority_id],
+                paired_v0_authority=authority_by_id[paired_id],
+                paired_v0_runtime=runtime_by_id[paired_id],
                 invocation_reference=references[0],
                 authority_evidence=evidence,
                 outcome="INCOMPLETE",
@@ -954,6 +1042,12 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
         return _copilot_authority_verification_result(
             load_authority_verification_result(reference)
         )
+    except (CopilotClaimError, ContractError, OSError, RuntimeError):
+        _release_assessment_claim_after_failure(
+            prepared=prepared,
+            pointer=pointer,
+        )
+        raise
     with evaluation_lock():
         _assert_active_generation(prepared)
         current_pointer = load_active_pointer(
@@ -966,6 +1060,10 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
             claimant_reference=claimant,
             authority_id=authority_id,
         )
+        _assert_no_completed_authority_result(
+            prepared=prepared,
+            authority_id=authority_id,
+        )
         pointer = attach_private_package_to_active_pointer(
             current_pointer,
             package_record,
@@ -974,9 +1072,61 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
     return _assessment_ready_result(
         package_path=package_path,
         draft_path=draft_path,
-        pending_count=len(pending),
+        pending_count=pending_count,
         active_count=active_count,
     )
+
+
+def release_test_agent_validation_assessment() -> dict[str, Any]:
+    active = _active_for_state("VALIDATING")
+    if _incomplete_invocation_shards(active):
+        raise ContractError("Validation invocation barrier is incomplete")
+    context = _load_prepared()
+    prepared = context["prepared"]
+    claimant = copilot_claimant_reference()
+    try:
+        with evaluation_lock():
+            _assert_active_generation(prepared)
+            try:
+                pointer = load_claim_pointer(claimant_reference=claimant)
+            except FileNotFoundError as error:
+                raise ContractError(
+                    "This worktree has no Copilot assessment claim to release"
+                ) from error
+            authority_id = str(pointer["authority_id"])
+            _assert_assessment_claim_binding(
+                pointer,
+                prepared=prepared,
+                claimant_reference=claimant,
+                authority_id=authority_id,
+            )
+            current = current_authority_verification_results(
+                prepared=prepared,
+                authority_ids=[authority_id],
+            ).get(authority_id)
+            if current is not None or pointer["claim_state"] == "completed":
+                raise ContractError(
+                    "Completed Copilot assessment result cannot be released"
+                )
+            release_active_pointer(pointer)
+            remaining = len(prepared["verification_authority_assignments"]) - len(
+                current_authority_verification_results(
+                    prepared=prepared,
+                    authority_ids=prepared["validation_authority_ids"],
+                )
+            )
+    except ValidationLockBusy:
+        return _assessment_busy_result(
+            command="release-test-agent-validation-assessment"
+        )
+    return {
+        "status": "assessment_released",
+        "pending_authority_count": remaining,
+        "next_command": (
+            "python -m agent_insights_quality "
+            "prepare-test-agent-validation-assessment"
+        ),
+    }
 
 
 def import_test_agent_validation_assessment() -> dict[str, Any]:
@@ -986,7 +1136,7 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
     context = _load_prepared()
     prepared = context["prepared"]
     claimant = copilot_claimant_reference()
-    with evaluation_lock() as lock:
+    with evaluation_lock():
         _assert_active_generation(prepared)
         try:
             pointer = load_active_pointer(claimant_reference=claimant)
@@ -1058,19 +1208,12 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
             draft_path,
             package=package,
         )
-        trace_gap_history_digest = _paired_trace_gap_history_for_import(
-            prepared=prepared,
-            authority_id=authority_id,
-            invocation_receipt_digest=references[0]["receipt_digest"],
-            lock=lock,
-        )
         evidence = authority_evidence_from_evaluation(
             package=package,
             evaluation=evaluation,
             authority=authority,
             runtime=runtime_by_id[authority_id],
             validated_commit_sha=prepared["commit_sha"],
-            paired_trace_gap_history_digest=trace_gap_history_digest,
         )
         outcome, query_stage, error_code = authority_verification_outcome(
             evidence
@@ -1080,6 +1223,8 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
             plan=context["plan"],
             authority=authority,
             runtime=runtime_by_id[authority_id],
+            paired_v0_authority=authority_by_id[paired_id],
+            paired_v0_runtime=runtime_by_id[paired_id],
             invocation_reference=references[0],
             authority_evidence=evidence,
             outcome=outcome,
@@ -1096,26 +1241,6 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
         )
         complete_active_pointer(pointer)
         return result
-
-
-def _paired_trace_gap_history_for_import(
-    *,
-    prepared: Mapping[str, Any],
-    authority_id: str,
-    invocation_receipt_digest: str,
-    lock: LocalValidationLock,
-) -> str | None:
-    try:
-        prior_run_ids = LifecycleJournal(lock=lock).superseded_run_ids(prepared)
-    except (ContractError, OSError):
-        return None
-    return paired_trace_gap_history_digest(
-        repository=str(prepared["repository"]),
-        pr_number=int(prepared["pr_number"]),
-        authority_id=authority_id,
-        invocation_receipt_digest=invocation_receipt_digest,
-        prior_run_ids=prior_run_ids,
-    )
 
 
 def compose_test_agent_validation() -> dict[str, Any]:
@@ -1942,6 +2067,233 @@ def _assignment_authority_ids(
     return list(matches[0]["authority_ids"])
 
 
+def _validation_recovery_candidate(
+    active: Mapping[str, Any],
+    *,
+    git: Any,
+) -> dict[str, Any]:
+    if (
+        active.get("state") != "VALIDATING"
+        or active.get("repository") != git.repository
+        or active.get("pr_number") != git.pr_number
+        or active.get("commit_sha") != git.commit_sha
+    ):
+        raise ContractError(
+            "Test Agent Validation recovery requires the current validating head"
+        )
+    if _incomplete_invocation_shards(active):
+        raise ContractError(
+            "Test Agent Validation recovery requires a complete invocation barrier"
+        )
+    authority_ids = list(active["validation_authority_ids"])
+    references = current_authority_verification_results(
+        prepared=active,
+        authority_ids=authority_ids,
+    )
+    if set(references) != set(authority_ids):
+        raise ContractError(
+            "Test Agent Validation recovery requires all selected evaluations"
+        )
+    incomplete = [
+        authority_id
+        for authority_id in authority_ids
+        if load_authority_verification_result(references[authority_id])["outcome"]
+        == "INCOMPLETE"
+    ]
+    if not incomplete:
+        raise ContractError(
+            "Test Agent Validation recovery requires an INCOMPLETE authority"
+        )
+    return {"incomplete_authority_ids": incomplete}
+
+
+def _recovery_intent(
+    *,
+    source: Mapping[str, Any],
+    incomplete_authority_ids: list[str],
+    fresh_invocation_authority_ids: list[str],
+) -> dict[str, Any]:
+    value = {
+        "source_run_id": source["run_id"],
+        "source_journal_digest": source["journal_digest"],
+        "source_authority_results": _source_authority_result_references(source),
+        "source_invocation_receipts": _source_invocation_receipt_references(source),
+        "incomplete_authority_ids": list(incomplete_authority_ids),
+        "fresh_invocation_authority_ids": list(
+            fresh_invocation_authority_ids
+        ),
+        "intent_digest": "",
+    }
+    value["intent_digest"] = content_hash(
+        {key: item for key, item in value.items() if key != "intent_digest"}
+    )
+    return value
+
+
+def _source_authority_result_references(
+    source: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    by_id = {
+        item["authority_id"]: dict(item)
+        for item in source["reused_authorities"]
+        if "authority_result_digest" in item
+    }
+    by_id.update(
+        current_authority_verification_results(
+            prepared=source,
+            authority_ids=source["validation_authority_ids"],
+        )
+    )
+    expected = {
+        item["authority_id"] for item in source["runtime_topology"]["agents"]
+    }
+    if set(by_id) != expected:
+        raise ContractError(
+            "Validation recovery source result coverage is incomplete"
+        )
+    return [by_id[authority_id] for authority_id in sorted(by_id)]
+
+
+def _source_invocation_receipt_references(
+    source: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    by_id = {
+        item["authority_id"]: dict(item)
+        for item in source["reused_invocations"]
+    }
+    for assignment in source["invocation_shard_assignments"]:
+        artifact = ValidationShardStore(
+            prepared=source,
+            shard_id=assignment["shard_id"],
+            authority_ids=assignment["authority_ids"],
+        ).read_invocations()
+        if artifact["status"] != "invoked":
+            raise ContractError(
+                "Validation recovery source invocation coverage is incomplete"
+            )
+        for reference in artifact["invocation_receipts"]:
+            if reference["authority_id"] in by_id:
+                raise ContractError(
+                    "Validation recovery source invocation coverage collides"
+                )
+            by_id[reference["authority_id"]] = dict(reference)
+    expected = set(source["validation_authority_ids"])
+    if set(by_id) != expected:
+        raise ContractError(
+            "Validation recovery source invocation coverage is incomplete"
+        )
+    return [by_id[authority_id] for authority_id in sorted(by_id)]
+
+
+def _validate_resumable_recovery_intent(
+    active: Mapping[str, Any],
+    *,
+    recovery_intent: Mapping[str, Any],
+    git: Any,
+) -> None:
+    if (
+        active.get("state") != "CREATING"
+        or active.get("repository") != git.repository
+        or active.get("pr_number") != git.pr_number
+        or active.get("commit_sha") != git.commit_sha
+        or active.get("supersedes")
+        != recovery_intent.get("source_journal_digest")
+        or active.get("recovery_intent") != recovery_intent
+        or recovery_intent.get("intent_digest")
+        != content_hash(
+            {
+                key: item
+                for key, item in recovery_intent.items()
+                if key != "intent_digest"
+            }
+        )
+        or not set(
+            recovery_intent.get("fresh_invocation_authority_ids") or []
+        ).issubset(
+            set(recovery_intent.get("incomplete_authority_ids") or [])
+        )
+    ):
+        raise ContractError("Validation recovery intent is stale")
+
+
+def _assert_recovery_deployment_reuse(active: Mapping[str, Any]) -> None:
+    desired = _load_desired_state(dict(active))
+    registry = _read_deployment_registry()
+    if registry is None:
+        raise ContractError(
+            "Validation recovery requires the exact deployment registry"
+        )
+    desired_by_id = {
+        item["authority_id"]: item for item in desired["authorities"]
+    }
+    registry_by_id = {
+        item["authority_id"]: item for item in registry["authorities"]
+    }
+    runtime_by_id = {
+        item["authority_id"]: item for item in active["runtime_topology"]["agents"]
+    }
+    fields = (
+        "authority_id",
+        "runtime_kind",
+        "framework",
+        "runtime_agent_name",
+        "source_content_digest",
+        "provider_content_digest",
+        "version_intent",
+    )
+    if (
+        registry["environment_id"] != desired["environment_id"]
+        or registry["project_name"] != active["project"]["name"]
+        or set(desired_by_id) != set(runtime_by_id)
+        or set(registry_by_id) != set(runtime_by_id)
+        or any(
+            any(
+                registry_by_id[authority_id].get(field)
+                != desired_by_id[authority_id].get(field)
+                for field in fields
+            )
+            or registry_by_id[authority_id].get("runtime")
+            != runtime_by_id[authority_id]
+            for authority_id in runtime_by_id
+        )
+    ):
+        raise ContractError(
+            "Validation recovery deployment registry binding is not exact"
+        )
+
+
+def _validate_recovery_successor(
+    *,
+    source: Mapping[str, Any],
+    successor: Mapping[str, Any],
+    incomplete_authority_ids: list[str],
+    ancestor_run_ids: list[str],
+    source_authority_ids: list[str] | None = None,
+) -> None:
+    selected = list(successor["validation_authority_ids"])
+    reused = [item["authority_id"] for item in successor["reused_authorities"]]
+    invoked = list(successor["invocation_authority_ids"])
+    source_authorities = source_authority_ids or [
+        item["authority_id"] for item in source["runtime_topology"]["agents"]
+    ]
+    if (
+        ancestor_run_ids[:1] != [source["run_id"]]
+        or successor["repository"] != source["repository"]
+        or successor["pr_number"] != source["pr_number"]
+        or successor["commit_sha"] != source["commit_sha"]
+        or successor["deployment_assignments"]
+        or selected != incomplete_authority_ids
+        or set(reused).intersection(selected)
+        or set(reused).union(selected) != set(source_authorities)
+        or not set(invoked).issubset(set(selected))
+        or len(successor["invocation_shard_assignments"]) > 8
+        or len(successor["verification_authority_assignments"]) != len(selected)
+    ):
+        raise ContractError(
+            "Automatic validation recovery successor selection is invalid"
+        )
+
+
 def _forced_invocation_authority_ids(
     *,
     migration: Mapping[str, Any],
@@ -2012,9 +2364,65 @@ def _assert_active_assessment_claim(
                 claimant_reference=claimant,
                 authority_id=authority_id,
             )
+            _assert_no_completed_authority_result(
+                prepared=prepared,
+                authority_id=authority_id,
+            )
     except (ContractError, OSError) as error:
         raise CopilotClaimError(
             "Copilot assessment claim is no longer active"
+        ) from error
+
+
+def _assert_no_completed_authority_result(
+    *,
+    prepared: Mapping[str, Any],
+    authority_id: str,
+) -> None:
+    if current_authority_verification_results(
+        prepared=prepared,
+        authority_ids=[authority_id],
+    ).get(authority_id) is not None:
+        raise ContractError("Copilot assessment authority already has a result")
+
+
+def _release_assessment_claim_after_failure(
+    *,
+    prepared: Mapping[str, Any],
+    pointer: Mapping[str, Any],
+) -> None:
+    claimant = str(pointer["claimant_reference"])
+    try:
+        with evaluation_lock():
+            active = _active_for_state("VALIDATING")
+            if (
+                active["state"] != "VALIDATING"
+                or active["run_id"] != prepared["run_id"]
+                or active["commit_sha"] != prepared["commit_sha"]
+            ):
+                return
+            try:
+                current = load_claim_pointer(claimant_reference=claimant)
+            except FileNotFoundError:
+                return
+            if current["pointer_digest"] != pointer["pointer_digest"]:
+                return
+            _assert_assessment_claim_binding(
+                current,
+                prepared=prepared,
+                claimant_reference=claimant,
+                authority_id=str(pointer["authority_id"]),
+            )
+            if current["claim_state"] in {"completed", "released"}:
+                return
+            _assert_no_completed_authority_result(
+                prepared=prepared,
+                authority_id=str(pointer["authority_id"]),
+            )
+            release_active_pointer(current)
+    except ValidationLockBusy as error:
+        raise CopilotClaimError(
+            "Copilot assessment claim release is temporarily busy"
         ) from error
 
 
@@ -2128,42 +2536,21 @@ def _current_invocation_requirements(
         or active["pr_number"] != plan["pr_number"]
     ):
         return [], []
-    prior_run_ids = journal.superseded_run_ids(active)
     authority_ids = list(active["invocation_authority_ids"])
-    completed: set[str] = set()
-    if authority_ids:
-        try:
-            _, references = select_reusable_invocation_receipts(
-                authorities=authorities,
-                authority_ids=authority_ids,
-                runtime_topology=active["runtime_topology"],
-                prepared=active,
-                plan=plan,
-            )
-            completed = {
-                reference["authority_id"]
-                for reference in references
-            }
-        except (ContractError, OSError, ValueError):
-            return authority_ids, []
+    try:
+        completed = {
+            reference["authority_id"]
+            for reference in _source_invocation_receipt_references(active)
+            if reference["authority_id"] in authority_ids
+        }
+    except (ContractError, OSError, ValueError):
+        completed = set()
     forced = {
         authority_id
         for authority_id in authority_ids
         if authority_id not in completed
     }
     fresh_required: set[str] = set()
-    for authority_id in list(forced):
-        prior_result = latest_prior_nonpass_result(
-            repository=str(active["repository"]),
-            pr_number=int(active["pr_number"]),
-            authority_id=authority_id,
-            prior_run_ids=prior_run_ids,
-        )
-        if prior_result is not None and _approved_paired_trace_gap(
-            prior_result,
-            prior_run_ids=prior_run_ids,
-        ):
-            forced.remove(authority_id)
     result_references = current_authority_verification_results(
         prepared=active,
         authority_ids=active["validation_authority_ids"],
@@ -2176,10 +2563,6 @@ def _current_invocation_requirements(
             and result.get("authority_evidence") is None
             else None
         )
-        approved_trace_gap = _approved_paired_trace_gap(
-            result,
-            prior_run_ids=prior_run_ids,
-        )
         if incomplete_result_requires_fresh_invocation(
             result,
             invocation=(
@@ -2187,11 +2570,7 @@ def _current_invocation_requirements(
             ),
         ) or (
             result["outcome"] == "INCOMPLETE"
-            and not approved_trace_gap
-            and has_prior_nonpass_result_for_invocation(
-                result,
-                prior_run_ids=prior_run_ids,
-            )
+            and _recovery_source_has_same_nonpass(active, result)
         ):
             forced.add(authority_id)
             fresh_required.add(authority_id)
@@ -2207,34 +2586,29 @@ def _current_invocation_requirements(
     ]
 
 
-def _approved_paired_trace_gap(
+def _recovery_source_has_same_nonpass(
+    active: Mapping[str, Any],
     result: Mapping[str, Any],
-    *,
-    prior_run_ids: list[str],
 ) -> bool:
-    evidence = result.get("authority_evidence")
-    if result.get("outcome") != "INCOMPLETE" or not isinstance(
-        evidence,
-        Mapping,
-    ):
+    recovery_intent = active.get("recovery_intent")
+    if not isinstance(recovery_intent, Mapping):
         return False
-    history = paired_trace_gap_history_digest(
-        repository=str(result["repository"]),
-        pr_number=int(result["pr_number"]),
-        authority_id=str(result["authority_id"]),
-        invocation_receipt_digest=result["binding"][
-            "invocation_receipt_digest"
-        ],
-        prior_run_ids=prior_run_ids,
+    reference = next(
+        (
+            item
+            for item in recovery_intent["source_authority_results"]
+            if item["authority_id"] == result["authority_id"]
+        ),
+        None,
     )
-    return history is not None and all(
-        paired_trace_gap_attempt_index(
-            authority_kind=evidence["authority_kind"],
-            authority_id=str(result["authority_id"]),
-            scenario=scenario,
-        )
-        is not None
-        for scenario in evidence["scenarios"]
+    if reference is None:
+        return False
+    prior = load_authority_verification_result(reference)
+    return (
+        prior["outcome"] in {"FAIL", "INCOMPLETE"}
+        and prior["artifact_digest"] != result["artifact_digest"]
+        and prior["binding"]["invocation_receipt_digest"]
+        == result["binding"]["invocation_receipt_digest"]
     )
 
 
@@ -2314,6 +2688,44 @@ def _prepared_result(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _public_authority_history(
+    active: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    agents, issues = load_catalogs()
+    authorities = authority_specs(agents, issues)
+    references = {
+        item["authority_id"]: dict(item)
+        for item in active["reused_authorities"]
+        if "authority_result_digest" in item
+    }
+    references.update(
+        current_authority_verification_results(
+            prepared=active,
+            authority_ids=active["validation_authority_ids"],
+        )
+    )
+    result = []
+    for authority in authorities:
+        reference = references.get(authority.authority_id)
+        if reference is None:
+            status = "missing"
+            reason = "current_generation_pending"
+        else:
+            value = load_authority_verification_result(reference)
+            status = str(value["outcome"])
+            reason = None if status == "PASS" else "current_non_pass"
+        result.append(
+            {
+                "authority_id": authority.authority_id,
+                "canonical_agent": authority.canonical_agent,
+                "status": status,
+                "changed": [],
+                "verification_required_reason": reason,
+            }
+        )
+    return result
+
+
 def _incomplete_invocation_shards(
     prepared: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
@@ -2372,6 +2784,100 @@ def _merge_authority_result_selection(
     )
 
 
+def _recovery_authority_result_selection(
+    *,
+    prepared: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    authorities: list[Any],
+    recovery_intent: Mapping[str, Any],
+) -> dict[str, dict[str, str] | None]:
+    references = {
+        item["authority_id"]: dict(item)
+        for item in recovery_intent["source_authority_results"]
+    }
+    by_id = {item.authority_id: item for item in authorities}
+    runtime_by_id = {
+        item["authority_id"]: item
+        for item in prepared["runtime_topology"]["agents"]
+    }
+    baseline_by_agent = {
+        item.canonical_agent: item
+        for item in authorities
+        if item.authority_kind == "baseline"
+    }
+    if set(references) != set(by_id):
+        raise ContractError("Validation recovery result manifest is incomplete")
+    selected: dict[str, dict[str, str] | None] = {}
+    for authority_id, reference in references.items():
+        authority = by_id[authority_id]
+        baseline = baseline_by_agent[authority.canonical_agent]
+        result = load_bound_authority_verification_result(
+            reference,
+            authority=authority,
+            paired_v0_authority=baseline,
+            runtime=runtime_by_id[authority_id],
+            paired_v0_runtime=runtime_by_id[baseline.authority_id],
+            prepared=prepared,
+            plan=plan,
+            require_current_generation=False,
+        )
+        selected[authority_id] = (
+            None if result["outcome"] == "INCOMPLETE" else reference
+        )
+    return selected
+
+
+def _recovery_invocation_selection(
+    *,
+    prepared: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    authorities: list[Any],
+    selected_authority_ids: list[str],
+    forced_authority_ids: set[str],
+    recovery_intent: Mapping[str, Any],
+) -> tuple[list[str], list[dict[str, str]]]:
+    references = {
+        item["authority_id"]: dict(item)
+        for item in recovery_intent["source_invocation_receipts"]
+    }
+    by_id = {item.authority_id: item for item in authorities}
+    runtime_by_id = {
+        item["authority_id"]: item
+        for item in prepared["runtime_topology"]["agents"]
+    }
+    baseline_by_agent = {
+        item.canonical_agent: item
+        for item in authorities
+        if item.authority_kind == "baseline"
+    }
+    if not set(selected_authority_ids).issubset(references):
+        raise ContractError("Validation recovery invocation manifest is incomplete")
+    invoke = []
+    reused = []
+    reused_values = []
+    for authority_id in selected_authority_ids:
+        if authority_id in forced_authority_ids:
+            invoke.append(authority_id)
+            continue
+        authority = by_id[authority_id]
+        baseline = baseline_by_agent[authority.canonical_agent]
+        reference = references[authority_id]
+        reused_values.append(
+            load_bound_invocation_receipt(
+                reference,
+                authority=authority,
+                paired_v0_authority=baseline,
+                runtime=runtime_by_id[authority_id],
+                paired_v0_runtime=runtime_by_id[baseline.authority_id],
+                prepared=prepared,
+                plan=plan,
+            )
+        )
+        reused.append(reference)
+    assert_invocation_receipt_set_isolated(reused_values)
+    return invoke, reused
+
+
 def _copilot_authority_verification_result(
     value: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -2410,6 +2916,80 @@ def _assessment_ready_result(
             "python -m agent_insights_quality "
             "import-test-agent-validation-assessment"
         ),
+    }
+
+
+def _claim_test_agent_validation_assessment(
+    *,
+    prepared: Mapping[str, Any],
+    claimant: str,
+) -> tuple[dict[str, Any], str, int, int] | dict[str, Any]:
+    _assert_active_generation(prepared)
+    existing = current_authority_verification_results(
+        prepared=prepared,
+        authority_ids=prepared["validation_authority_ids"],
+    )
+    pending = [
+        assignment["authority_id"]
+        for assignment in prepared["verification_authority_assignments"]
+        if assignment["authority_id"] not in existing
+    ]
+    if not pending:
+        return {
+            "status": "verification_complete",
+            "pending_authority_count": 0,
+        }
+    claims = [
+        item
+        for item in active_copilot_claims(prepared=prepared)
+        if item["authority_id"] in pending
+    ]
+    pointer = next(
+        (
+            item
+            for item in claims
+            if item["claimant_reference"] == claimant
+        ),
+        None,
+    )
+    if pointer is None:
+        claimed_authority_ids = {str(item["authority_id"]) for item in claims}
+        available = [
+            authority_id
+            for authority_id in pending
+            if authority_id not in claimed_authority_ids
+        ]
+        if len(claims) >= MAX_ACTIVE_COPILOT_CLAIMS or not available:
+            return {
+                "status": "assessment_capacity_full",
+                "pending_authority_count": len(pending),
+                "active_authority_evaluator_count": len(claims),
+                "available_authority_evaluator_slots": 0,
+            }
+        authority_id = available[0]
+        pointer = write_active_pointer(
+            prepared=prepared,
+            authority_id=authority_id,
+            claimant_reference=claimant,
+        )
+        active_count = len(claims) + 1
+    else:
+        authority_id = str(pointer["authority_id"])
+        active_count = len(claims)
+    _assert_assessment_claim_binding(
+        pointer,
+        prepared=prepared,
+        claimant_reference=claimant,
+        authority_id=authority_id,
+    )
+    return pointer, authority_id, len(pending), active_count
+
+
+def _assessment_busy_result(*, command: str) -> dict[str, Any]:
+    return {
+        "status": "assessment_busy",
+        "retryable": True,
+        "next_command": f"python -m agent_insights_quality {command}",
     }
 
 

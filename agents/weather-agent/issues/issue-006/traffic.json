@@ -247,8 +247,8 @@
       {
         "id": "issue-006-defect-path",
         "validation_mode": "model_mediated",
-        "n": 7,
-        "k": 5,
+        "n": 10,
+        "k": 6,
         "fixtures": [],
         "attempts": [
           {
@@ -943,6 +943,303 @@
                 }
               }
             ]
+          },
+          {
+            "index": 8,
+            "conversation_group": "issue-006-attempt-08",
+            "parameters": {
+              "case_id": "case-08",
+              "source_request_ids": [
+                "issue-006-request-3"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-006-setup-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-006-probe-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "minimum_term_occurrences": {
+                      "clear": 3,
+                      "22": 3,
+                      "celsius": 3
+                    },
+                    "min_words": 40,
+                    "forbidden_terms": [
+                      "not correct",
+                      "incorrect",
+                      "unavailable",
+                      "unknown"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 9,
+            "conversation_group": "issue-006-attempt-09",
+            "parameters": {
+              "case_id": "case-09",
+              "source_request_ids": [
+                "issue-006-request-4"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-006-setup-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-006-probe-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "minimum_term_occurrences": {
+                      "clear": 3,
+                      "22": 3,
+                      "celsius": 3
+                    },
+                    "min_words": 40,
+                    "forbidden_terms": [
+                      "not correct",
+                      "incorrect",
+                      "unavailable",
+                      "unknown"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 10,
+            "conversation_group": "issue-006-attempt-10",
+            "parameters": {
+              "case_id": "case-10",
+              "source_request_ids": [
+                "issue-006-request-5"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-006-setup-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-006-probe-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "minimum_term_occurrences": {
+                      "clear": 3,
+                      "22": 3,
+                      "celsius": 3
+                    },
+                    "min_words": 40,
+                    "forbidden_terms": [
+                      "not correct",
+                      "incorrect",
+                      "unavailable",
+                      "unknown"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
           }
         ],
         "healthy_predicate": null,
@@ -955,7 +1252,10 @@
             "issue-006-probe-04-01",
             "issue-006-probe-05-01",
             "issue-006-probe-06-01",
-            "issue-006-probe-07-01"
+            "issue-006-probe-07-01",
+            "issue-006-probe-08-01",
+            "issue-006-probe-09-01",
+            "issue-006-probe-10-01"
           ],
           "required_surfaces": [
             "semantic"
@@ -964,9 +1264,9 @@
         "v0_control_predicate": {
           "kind": "zero_defect_observations"
         },
-        "execution_digest": "sha256:2dde789b573e83102858dadafc66ef90ea6efba03456593723c67438f1703573"
+        "execution_digest": "sha256:4e5787bed0381937bb0e5af367e57f0ae83322f124e5a9bc751ac3de8e1fb2e5"
       }
     ],
-    "execution_digest": "sha256:a08c191d4a115844f7efbd8154d4e778bd6b2a861d37c02958334c91e791a5ee"
+    "execution_digest": "sha256:2401e18138af4e77c66a8cd41202743c9c397030e19a60ca9b4bcc8d8c2ca7ba"
   }
 }

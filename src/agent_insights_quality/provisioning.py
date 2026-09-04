@@ -56,7 +56,7 @@ from agent_insights_quality.util import (
     runtime_root,
 )
 from agent_insights_quality.validation_rules import (
-    execution_requests,
+    staging_authority_requests,
     issue_observation_context,
 )
 from jsonschema import Draft202012Validator
@@ -452,7 +452,7 @@ def _validate_manifest_traffic_evidence(
             traffic_path = (
                 ROOT / contract["implementation"] / "traffic.json"
             )
-            requests = execution_requests(traffic_path)
+            requests = staging_authority_requests(traffic_path)
             summaries = issue["endpoint_request_summaries"]
             if len(requests) != len(summaries):
                 raise ContractError(

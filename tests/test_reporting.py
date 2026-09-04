@@ -102,7 +102,8 @@ def _manifest(*, full: bool = False) -> dict:
                 item["trace_assertions_passed"] for item in summaries
             ),
             "trace_contract_verified": True,
-            "issue_trace_gap_acceptance": None,
+            "trace_maturity_proof": None,
+            "trace_unknown_acceptance": None,
             "trace_behavior_summary": (
                 {
                     "operation_count": request_count,
@@ -289,12 +290,12 @@ def test_reporting_uses_reviewed_model_mediated_threshold() -> None:
         for summary in issue["endpoint_request_summaries"]
         if summary["activation_gate"]
     ]
-    for summary in observations[-2:]:
+    for summary in observations[-4:]:
         summary["semantic_assertions_passed"] = 0
         for result in summary["assertion_results"]:
             result["passed"] = False
     issue["semantic_assertions_passed"] -= sum(
-        summary["semantic_assertion_count"] for summary in observations[-2:]
+        summary["semantic_assertion_count"] for summary in observations[-4:]
     )
     traffic_path = (
         ROOT
@@ -306,7 +307,7 @@ def test_reporting_uses_reviewed_model_mediated_threshold() -> None:
     )
 
     assert _runtime_evidence_complete(issue, traffic_path=traffic_path) is True
-    failing = observations[-3]
+    failing = observations[-5]
     failing["semantic_assertions_passed"] = 0
     for result in failing["assertion_results"]:
         result["passed"] = False

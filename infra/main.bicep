@@ -25,7 +25,6 @@ param storageResourceRole string = 'qualification-storage'
 param qualityArtifactContainerName string = 'quality-artifacts'
 @allowed(['deployment-registries'])
 param deploymentRegistryContainerName string = 'deployment-registries'
-param approvedRecordContainerName string
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' existing = {
   name: resourceGroupName
@@ -47,6 +46,5 @@ module lab 'modules/lab.bicep' = {
     storageResourceRole: storageResourceRole
     qualityArtifactContainerName: qualityArtifactContainerName
     deploymentRegistryContainerName: deploymentRegistryContainerName
-    approvedRecordContainerName: approvedRecordContainerName
   }
 }

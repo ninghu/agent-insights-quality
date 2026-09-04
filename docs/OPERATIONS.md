@@ -27,13 +27,13 @@ generation, ADX publication, email, or Daily.
 The executable authority is each `traffic.json` `validation_rules` contract. Its automatic digest
 includes complete setup/probe request bodies, ordered conversation grouping, parameters, fixtures,
 semantic/trace/identity assertions, reviewed mode, `n`, `k`, runtime kind, framework, and model
-contract. Baselines require five mechanically complete attempts; deterministic issue packages
-require five issue and five paired-v0 attempts; model-mediated packages require seven of each.
-On the deterministic issue side only, the first mature whole-target batch may establish a conclusive
-issue with three or four complete observations plus at most two trace-only unknown attempts. Unknowns
-remain incomplete and non-observations; an audited acceptance records their indices. Endpoint,
-identity, semantic sufficiency, and contradiction checks remain exact. Baselines stay `5/5`,
-model-mediated issues stay `>=5/7`, and paired-v0 retains its separate maximum-one-gap policy.
+contract. Baselines, issues, and paired controls each use ten attempts. The first mature target batch
+uses one shared policy: baselines require six proven healthy attempts plus at most four trace-only
+unknowns and no observed failure; every issue mode requires at least six observations and may retain
+at most four trace-only unknowns; paired `v0` requires six proven zero-observation controls plus at
+most four trace-only unknowns. Unknowns remain incomplete and never count as healthy or observed.
+Complete issue non-observations count as behavioral misses. Endpoint, identity, semantic sufficiency,
+and contradiction checks remain exact.
 Expected issue observations remain private-review context rather than a local verdict.
 `minimum_traces` is the independent full-request natural trace proof threshold and is never used as
 a validation attempt threshold or card-link coverage threshold. After independent Agent activation
@@ -76,10 +76,10 @@ stale sub-sessions fail closed.
 After every required deployment receipt exists, the coordinator centrally re-reads all 41 exact
 Agent versions, verifies the durable Project, read-only telemetry binding, and zero-monitor
 invariant, merges changed and reused readiness proofs, then atomically publishes the single
-topology and deployment registry. Validation selection is separate: an authority runs only when
-its binding changed, its latest result is `INCOMPLETE`, or its exact result is missing. A definitive
-`FAIL` is a completed result and is not selected again unless its binding changes. Every issue
-selected for new traffic still carries a fresh paired-`v0` control.
+topology and deployment registry. Every fresh advisory run selects all 41 authorities. Every issue
+selected for new traffic carries a paired-`v0` control.
+Only an automatic successor recovery generation reuses the immediately preceding generation's
+flattened definitive result and exact receipt references.
 
 Deployment and invocation each receive an independent deterministic assignment set with one to eight
 cost-balanced logical shards. Each active shard maps 1:1 to one visible Copilot sub-session.
@@ -95,11 +95,16 @@ provenance, source-artifact schema and version, origin run/commit/generation/sha
 immutable artifact digest.
 
 Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST outcomes never produce reusable
-completion. Cross-generation reuse performs one atomic, generation-fenced extraction from the
-immutable source receipt; stale sub-sessions cannot extract or publish it. The next generation
-therefore selects only changed, `INCOMPLETE`, or missing authorities. Within that set, it
-invokes only authorities without a current exact-bound completed receipt; all others receive
-verification-only assignments and send no new endpoint traffic.
+completion. Once every selected evaluation
+finishes and any result is `INCOMPLETE`, the coordinator uses one explicit recovery command to
+atomically advance and reconcile the same-head successor. The first exact-receipt recollection has no
+deployment or invocation assignment. A repeated exact-receipt `INCOMPLETE` selects fresh issue plus
+paired-`v0` traffic in the following generation. A mature trace-only unknown that satisfies the
+shared acceptance policy is already definitive and does not enter recovery. All other selected
+authorities receive verification-only assignments. Recovery receipt selection checks only the
+flattened references in the immediately preceding generation's `recovery_source`; every candidate is
+fully validated against exact source/provider/traffic identity. Immutable receipt files
+remain the authority.
 
 Receipt reuse proves only that the traffic-generation and execution binding is unchanged. Every new
 verification package must separately bind the reused receipt's immutable digest and the current
@@ -112,17 +117,28 @@ Each visible GPT-5.6 Sol evaluator session claims one generation-fenced authorit
 immutable assignment. The no-ID package and import primitives use a hidden deterministic worktree
 reference: prepare resumes the caller's unexpired claim or atomically assigns a distinct authority,
 while import resolves only that claim and releases its slot after persisting the immutable result.
-At most eight claims are active; abandoned claims become reclaimable after a bounded lease. Status
-reports only aggregate active/available slots and the next prepare command. The primitives start no
-subprocess, thread, task pool, or other internal concurrency and never deploy, invoke, or send endpoint
-traffic.
+If a visible evaluator must stop before import, it explicitly releases only its own current claim;
+the atomic release is generation- and claimant-fenced, invalidates the stale package, and makes the
+authority immediately claimable. Lease expiry remains the crash fallback. Shared-lock contention
+before assignment returns a structured retryable busy result and never claims work. At most eight
+claims are active, and status reports only aggregate active/available slots and the next prepare
+command. The primitives start no subprocess, thread, task pool, or other internal concurrency and
+never deploy, invoke, or send endpoint traffic.
 
 For one claimed baseline authority, the verifier issues one batched telemetry query and waits for one
 stability snapshot containing all five response-bound attempt trees. For one claimed issue authority,
 it performs exactly two independent target batches: one batched stability snapshot containing all
 issue attempts and one containing all paired-`v0` attempts. It never queries or stabilizes individual
-attempts as separate verification units. The snapshots remain bound to the exact receipt,
+attempts as separate verification units. An unchanged fresh partial batch does not start or satisfy
+the normal stability interval until every required trace surface is present. If required traces remain missing at the bounded
+deadline, the authority stays `INCOMPLETE` for verify-only recovery. The snapshots remain bound to the exact receipt,
 response/session references, invoke/evidence windows, runtime, Project, and telemetry resource set.
+For an exact reused receipt observed at or beyond its evidence-window end plus the configured maximum
+hydration horizon and stability interval, discovery, trace collection, and identity checks each use
+one whole-target query with no polling sleep. The private package binds the receipt digest, evidence
+window, maturity boundary, as-of time, and timing policy. Complete mature evidence proceeds
+immediately; a remaining required trace gap is recorded as an explicit unknown for the shared
+reviewed acceptance policy.
 
 Deterministic code enforces exact repository, PR, source, provider, runtime, environment, Project,
 telemetry, invocation-receipt, response/session, endpoint-output, trace-subtree, privacy, and package
@@ -135,20 +151,24 @@ strict validation evaluation schema. Code then assigns exactly one authority res
 | `FAIL` | Complete stable evidence does not meet the reviewed threshold. |
 | `INCOMPLETE` | Required evidence is missing, ambiguous, partial, or not stable by the deadline. |
 
-The reviewed thresholds are baseline `5/5`, deterministic issue `5/5` (or an audited first-mature-batch
-acceptance with at least three observations and at most two trace-only unknowns) with paired `v0`
-`0/5`, and model-mediated issue `>=5/7` with paired `v0` `0/7`. The deterministic issue-side
-acceptance may compose with the separate single-gap paired-v0 exception when both independently meet
-their strict requirements. `INCOMPLETE` is never collapsed into `FAIL`.
+The reviewed thresholds are baseline `6/10` proven healthy with at most four trace-only unknowns and
+no observed failure; every issue mode `>=6/10`, with complete non-observations counted as misses and
+at most four trace-only unknowns; and paired `v0` `0/10` with six proven controls plus at most four
+trace-only unknowns. The mature trace-unknown policy is shared by staging and Daily. `INCOMPLETE` is
+never collapsed into `FAIL`.
 Immediately after deciding an authority, the sub-session atomically persists an immutable,
 generation-fenced result before claiming another authority. A later authority failure, sub-session
 failure, or composition interruption does not discard completed authority results.
 
-A retry assignment contains only authorities whose result is missing or `INCOMPLETE`, plus
-authorities whose exact source/content/execution/runtime/verifier binding changed. Definitive
-unchanged `PASS` and `FAIL` results are reused. Composition requires exactly one current result for
-all 41 authorities: all `PASS` produces `READY`, any definitive `FAIL` produces `FAILED`, and any
-missing or `INCOMPLETE` authority keeps the generation incomplete and retryable.
+The current generation is the only authority for a fresh advisory run. Recovery reads one
+integrity-bound `recovery_source` reference containing flattened deterministic per-authority result
+and receipt paths. It does not scan or rebuild global history. A retry assignment contains only
+incomplete authorities. Strict policy relaxation may migrate a
+still-valid PASS; tightening or semantic changes reuse an exact receipt for verification and never
+send Agent traffic. Composition requires exactly one current result for all 41 authorities: all
+`PASS` produces `READY`, any definitive `FAIL` produces `FAILED`, and any missing or `INCOMPLETE`
+authority keeps the generation incomplete and retryable. Status lists all 41 authorities with
+public-safe state and identity-change reasons.
 
 Support images use content-addressed ACR identities and exact digest pins. Agents, versions,
 sessions, responses, images, telemetry, registries, and evidence are retained. Old objects cannot
@@ -205,10 +225,26 @@ the reported assessment path, then validate, import, and persist the schema-1.0 
 python -m agent_insights_quality import-test-agent-validation-assessment
 ```
 
+If the evaluator definitively stops before import, release its own claim:
+
+```powershell
+python -m agent_insights_quality release-test-agent-validation-assessment
+```
+
 Repeat the two commands one authority at a time per session. The package, raw output, tool data, and
 traces never leave the durable private runtime root and must not appear in CLI output or cross-session
 messages.
-After all authority evaluations finish, the coordinator composes the exact 41-authority result:
+After all selected authority evaluations finish, run the explicit recovery primitive whenever status
+reports `verification_incomplete`:
+
+```powershell
+python -m agent_insights_quality recover-test-agent-validation
+```
+
+The command writes one immutable `recovery_source`, reconciles the successor, reuses every exact
+definitive result and eligible receipt, and publishes only the necessary visible evaluator or fresh
+invocation assignments. Repeat this normal recovery loop until all authorities are definitive. Then
+the coordinator composes the exact 41-authority result:
 
 ```powershell
 python -m agent_insights_quality compose-test-agent-validation
@@ -226,25 +262,15 @@ Use the status entry point only for status and next-action guidance:
 python -m agent_insights_quality run-test-agent-validation
 ```
 
-It never creates sub-sessions or launches hidden workers.
-After the user explicitly approves that exact result, run:
-
-```powershell
-python -m agent_insights_quality approve-test-agent-validation
-```
-
-The approval command re-reads the exact PR head and 41-authority READY evidence, then create-once
-writes one minimal immutable approved record bound to the evidence and generation digests. It has
-no cleanup, workflow, App, check, tree, topology, quota, or local-path fields. GitHub runs ordinary
-mechanical CI only and merge remains manual.
+It never creates sub-sessions or launches hidden workers. GitHub runs ordinary mechanical CI only
+and merge remains manual.
 
 ### Advisory staging review and Daily admission
 
-Test Agent Validation and its optional immutable approved record are advisory inputs to human
-judgment. They are not Daily admission artifacts. Daily never reads staging lifecycle state, the
-approved-record Blob container, or a validation digest. A human decides whether to proceed and
+Test Agent Validation is advisory input to human judgment, not a Daily admission artifact. Daily
+never reads staging lifecycle state or a validation digest. A human decides whether to proceed and
 represents that decision solely by manually invoking `daily-prepare`; there is no approval flag,
-switch, or replacement record.
+switch, or record.
 
 `daily-prepare` still fails closed unless the checkout is clean and binds that exact commit together
 with the catalog hashes, deterministic selection, reviewed policy, immutable work-item snapshot, and
@@ -284,10 +310,9 @@ python -m agent_insights_quality deploy-analytics
 The infrastructure command creates only the two Sweden accounts, identically named Projects,
 Project-scoped `g30` telemetry pairs, exact reviewed model deployments, and the dedicated
 `aiqsweart${uniqueSuffix}` Sweden StorageV2 account in the existing resource group. The new account
-uses Blob versioning and private `quality-artifacts`, `deployment-registries`, and
-`test-agent-validation-approved-records-swedencentral-g30` containers. Its 90-day lifecycle rule is
-scoped only to `quality-artifacts`; the approved-record WORM policy is ensured and locked
-idempotently after deployment. The command references the shared ACR but does not create, update, or
+uses Blob versioning and private `quality-artifacts` and `deployment-registries` containers. Its
+90-day lifecycle rule is scoped only to `quality-artifacts`. The command references the shared ACR
+but does not create, update, or
 delete ADX, the retained legacy storage account or its data, or any other West US 2 resource.
 `deploy-analytics` is a separately reviewed ADX-only operation that
 cannot change Foundry models, Projects, telemetry, storage, or registries. Neither command creates a
@@ -347,8 +372,7 @@ python -m agent_insights_quality daily-guide
 `daily-prepare` opens one private lifecycle/quiescence claim and binds the Pacific business date,
 immutable work-item snapshot digest and closed-business date, exact clean checkout commit,
 deterministic selections, catalog hashes, reviewed limits, and a hidden system-generated execution
-identity. It does not fetch or bind Test Agent Validation state, approval records, or validation
-digests.
+identity. It does not fetch or bind Test Agent Validation state or a validation digest.
 `daily-provision` performs new-only reconciliation, then freezes the exact Daily registry, Project
 topology, promoted content/version mappings, and live region proof. No other Daily run may provision,
 send traffic, compose, finalize, publish, or claim delivery until that lifecycle completes.
@@ -360,104 +384,40 @@ canonical display is `SwedenCentral`. Report/email generation fails if the live 
 or registry match is missing. This contract is intentionally one scalar region: no experiments,
 region arrays, comparison runs, or region-scoped report directories.
 
-The coordinator returns five deterministic whole-Agent assignments through `daily-guide`. Start one
-visible Copilot sub session for each pending Weather, Healthcare, Finance, Travel, and Support lane,
-up to the parsed `max_parallel_agents` limit. Each session runs only
-`daily-run-agent --agent <name>`. It validates catalog hashes against the frozen Daily registry,
-resets that Agent's monitor once, runs `v0`, then runs four deterministic issues sequentially without
-an unconditional pre-traffic sleep. Agent lane starts are staggered by five seconds to avoid a
-simultaneous endpoint burst. Endpoint requests inside a version are also sequential, so visible lane
-parallelism cannot multiply reviewed request limits. Before each
-Hosted version, the runner patches the Agent endpoint to one `FixedRatio` rule with 100% traffic on
-that exact version, confirms the selector, and then creates an exact-version session. This keeps
-compute behavior and outer telemetry version identity aligned.
+Daily has three global phases. In traffic, `daily-guide` returns five deterministic whole-Agent
+assignments. Start one visible session per pending Agent with
+`daily-run-traffic-agent --agent <name>`. The reviewed initial offsets prevent a simultaneous burst.
+Each lane invokes `v0` and four issue versions sequentially, persists each immutable exact
+response-bound receipt immediately, and waits 60 seconds before the next version. It performs no
+telemetry query, trace verification, Agent Insights operation, or package classification. Daily
+never adds per-issue paired-`v0` traffic. The verification phase remains closed until all 25
+receipts exist.
+
+After that barrier, start up to eight visible `daily-verify-next` sessions. Each dynamically claims
+one version and queries the complete target as one exact receipt-bound telemetry snapshot. Claims
+are worktree-bound and explicitly releasable only by their owner; expiry remains the crash fallback.
+No endpoint traffic is available in this phase. An issue with fewer than six proven defect
+observations, or a baseline with fewer than six proven healthy observations or a contradiction,
+fails the Daily run without Agent Insights or a score. Slow or incomplete versions release capacity
+so other claims can proceed, but all 25 must be eligible before the Insight phase opens.
+
+In the Insight phase, start one visible `daily-run-insights-agent --agent <name>` session per Agent.
+Each lane persists exactly one run-bound monitor-reset epoch and never resets between versions. It
+then autonomously processes its five verified versions sequentially. Every version persists a
+timestamp-derived, minute-ceiling bounded lookback and exact operation set before starting exactly
+one crash-safe provider run. Newly generated cards must bind that run and link only unique operations
+inside the version set. Prior-run cards are excluded; exact-run cross-version cards fail closed.
+Zero, one, or multiple cards are terminal package outcomes. Composition opens only after all 25
+immutable Insight receipts exist and creates five baseline plus twenty issue packages.
 
 Daily and staging Projects prohibit ad-hoc debug traffic. Monitor reset does not delete telemetry.
 Debug locally or in a separately owned sandbox. Qualification evidence is accepted only when exact
 run, Agent, provider-version, operation, and invocation-time-window correlation hydrates and remains
 stable within the bounded post-invoke deadline.
 
-Each lane prints flushed progress lines for its Agent/version and for endpoint,
-telemetry, trace, and Agent Insights stages. Long telemetry waits, Insight runs, and remote retries
-emit periodic heartbeats without exposing URLs, payloads, or private identifiers.
-
-Incomplete baseline evidence never creates a lane completion receipt. When endpoint delivery is
-proven complete and the gap is limited to missing or ambiguous trace evidence, `daily-guide` keeps
-the whole Agent lane pending and exposes the same `daily-run-agent --agent <name>` command. A resume
-claims one of at most three per-Agent recoveries, archives the incomplete checkpoint immutably,
-waits for a clean window, sends one fresh baseline set, and continues the four issues only after the
-baseline is healthy. Ambiguous endpoint delivery and exhausted recovery are fail-closed and require
-`daily-fail`; definitive unhealthy baseline evidence remains non-recoverable.
-
-A baseline with exactly one terminal-success/output unknown may proceed without recovery only when
-request, response, usable-response, and exact identity evidence are complete, every reviewed semantic
-and trace assertion passes, the trace contract is verified, and no contradiction or unhandled error
-exists. The raw terminal counts remain unchanged so the missing attempt stays unknown rather than
-being reclassified as successful. Two or more terminal unknowns remain incomplete.
-
-For a legacy active lane that already wrote a completion receipt with only an incomplete baseline
-and four untouched `skipped_baseline` issues, a human may reopen it centrally:
-
-```powershell
-python -m agent_insights_quality daily-reopen-incomplete-lane `
-  --agent <name> --confirm
-python -m agent_insights_quality daily-run-agent --agent <name>
-```
-
-Reopen accepts only the reviewed single-terminal-unknown policy. It preserves the original receipt,
-writes an immutable run-fenced supplemental event, verifies unchanged Agent/traffic catalog and exact
-Daily registry bindings, and binds both the original execution commit and current framework verifier
-commit. The first resume caller atomically claims one immutable worker epoch under the coordinator
-lock before stale-worker checks; other worktrees cannot steal that active claim. The resume reuses
-the accepted baseline evidence, sends zero baseline requests, and runs only the four previously
-untouched issues. Composition follows the one valid superseding receipt and rejects missing,
-conflicting, or orphaned ancestry.
-
-For a completed lane with one model-mediated Prompt issue stopped only by one unusable non-observation
-response, a human may reopen exactly that issue after the lane process exits:
-
-```powershell
-python -m agent_insights_quality daily-reopen-incomplete-version `
-  --agent <name> --issue <issue-NNN> --confirm
-python -m agent_insights_quality daily-run-reopened-version `
-  --agent <name> --issue <issue-NNN>
-```
-
-The policy supports either the reviewed one-usable-unknown Prompt issue or a failure confined to
-telemetry correlation, trace hydration, or trace stability after an exact complete invocation.
-It requires exact response and identity coverage, all available semantic evidence, no definitive
-assertion contradiction, no Prompt function calls, and no unhandled error. The unusable request
-remains unknown. Reopen validates unchanged Agent, traffic, provider, and registry bindings; its
-fenced worker is prohibited from invoking the endpoint and continues from the earliest missing
-telemetry or trace stage through Agent Insights and the supplemental receipt.
-
-When an issue completed every independent evidence stage and was marked `not_at_bar` only because a
-card linked fewer traces than catalog `minimum_traces`, reclassify it without endpoint or Agent
-Insights execution:
-
-```powershell
-python -m agent_insights_quality daily-reclassify-card-linkage --confirm
-```
-
-The idempotent command deterministically reviews all 20 selected issues and requires at least one
-unique exact-version linked operation while rejecting any duplicate or out-of-scope link. It
-preserves original checkpoints and receipts, writes immutable supplemental result and receipt
-ancestry only where the outcome changes, and leaves semantic card correctness for normal assessment.
-Composition rejects a missing or partial 20-issue batch receipt.
-
-Agent Insights starts persist an exact-bound intent before POST and classify the outcome as started,
-explicit no-run, or unknown. A resume with an unknown legacy/current intent first performs read-only
-run discovery against the exact Agent version, operation set, and evidence window. One match attaches
-the provider reference; multiple matches remain fenced. Only two stable absence reads separated by
-the reviewed clean-window wait prove explicit no-run, after which one Insight-start retry may reuse
-the existing endpoint evidence. Endpoint traffic is never repeated for this reconciliation.
-
-Each lane holds an Agent-specific OS lock, resumes only its exact digest-bound checkpoints, and may
-claim at most three transient incomplete recoveries across all resumes. Exact fresh session, response,
-and operation identities are enforced. Completion writes one immutable receipt; stale workers are
-fenced by the active lifecycle and cannot overwrite it. `daily-status` and `daily-guide` never fan out
-or send traffic, so the coordinator remains responsive. `daily-compose` accepts only all five exact
-receipts and then creates the 25 assessment packages.
+All potentially long operations emit public-safe progress and heartbeats. Phase artifacts bind the
+active lifecycle and cannot be overwritten. `daily-status` and `daily-guide` are read-only and never
+fan out, send traffic, or start Agent Insights.
 
 If a run cannot be resumed safely, close it centrally with:
 

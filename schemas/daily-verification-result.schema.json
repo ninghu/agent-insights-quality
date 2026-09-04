@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "execution_id",
+    "run_contract_digest",
+    "agent_name",
+    "logical_version",
+    "traffic_receipt_digest",
+    "claim_digest",
+    "conclusive",
+    "result",
+    "result_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "kind": {"const": "daily-version-verification-result"},
+    "execution_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "run_contract_digest": {"$ref": "#/$defs/hash"},
+    "agent_name": {"type": "string", "minLength": 1},
+    "logical_version": {"type": "string", "minLength": 2},
+    "traffic_receipt_digest": {"$ref": "#/$defs/hash"},
+    "claim_digest": {"$ref": "#/$defs/hash"},
+    "conclusive": {"const": true},
+    "result": {"type": "object"},
+    "result_digest": {"$ref": "#/$defs/hash"}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

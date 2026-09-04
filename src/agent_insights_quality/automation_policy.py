@@ -24,7 +24,11 @@ TRACE_ASSERTION_POLL_SECONDS = 15
 class AutomationPolicy:
     issues_per_agent_daily: int
     max_parallel_agents: int
+    daily_verification_max_parallel: int
+    daily_inter_version_pacing_seconds: int
     insight_lookback_hours: float
+    insight_lookback_max_hours: float
+    insight_lookback_precision_minutes: int
     clean_window_poll_seconds: int
     clean_window_ingestion_margin_seconds: int
     clean_window_max_wait_seconds: int
@@ -37,14 +41,13 @@ class AutomationPolicy:
     storage_resource_role: str
     quality_artifact_container: str
     deployment_registry_container: str
-    approved_record_container: str
 
 
 def load_automation_policy(
     path: Path = ROOT / "config" / "automation.yaml",
 ) -> AutomationPolicy:
     value = read_yaml(path)
-    if value.get("schema_version") != "3.0.0":
+    if value.get("schema_version") != "4.0.0":
         raise ContractError("Automation policy schema version is invalid")
     daily_issues = _positive_int(
         value.get("issues_per_agent_daily"),
@@ -58,9 +61,33 @@ def load_automation_policy(
     )
     if max_parallel_agents > 5:
         raise ContractError("Automation parallel Agent limit exceeds the fixed inventory")
+    verification_parallel = _positive_int(
+        value.get("daily_verification_max_parallel"),
+        "Daily verification parallel limit",
+    )
+    if verification_parallel != 8:
+        raise ContractError("Daily verification parallel limit must be eight")
+    pacing_seconds = _positive_int(
+        value.get("daily_inter_version_pacing_seconds"),
+        "Daily inter-version pacing",
+    )
+    if pacing_seconds != 60:
+        raise ContractError("Daily inter-version pacing must be 60 seconds")
     lookback = _finite_number(value.get("insight_lookback_hours"), "lookback")
     if lookback < MINIMUM_LOOKBACK_HOURS:
         raise ContractError("Automation lookback is below the reviewed minimum")
+    maximum_lookback = _finite_number(
+        value.get("insight_lookback_max_hours"),
+        "maximum lookback",
+    )
+    if maximum_lookback < lookback or maximum_lookback > 24:
+        raise ContractError("Automation maximum lookback is outside the reviewed bounds")
+    lookback_precision = _positive_int(
+        value.get("insight_lookback_precision_minutes"),
+        "lookback precision",
+    )
+    if lookback_precision != 1:
+        raise ContractError("Automation lookback precision must be one minute")
     poll = _positive_int(value.get("clean_window_poll_seconds"), "poll interval")
     margin = _nonnegative_int(
         value.get("clean_window_ingestion_margin_seconds"),
@@ -127,17 +154,14 @@ def load_automation_policy(
     )
     if deployment_registry_container != FIXED_DEPLOYMENT_REGISTRY_CONTAINER:
         raise ContractError("Automation deployment-registry container is not reviewed")
-    approved_record_container = str(value.get("approved_record_container") or "")
-    if approved_record_container != (
-        f"test-agent-validation-approved-records-swedencentral-{resource_set}"
-    ):
-        raise ContractError(
-            "Automation approved-record container is not the reviewed environment namespace"
-        )
     return AutomationPolicy(
         issues_per_agent_daily=daily_issues,
         max_parallel_agents=max_parallel_agents,
+        daily_verification_max_parallel=verification_parallel,
+        daily_inter_version_pacing_seconds=pacing_seconds,
         insight_lookback_hours=lookback,
+        insight_lookback_max_hours=maximum_lookback,
+        insight_lookback_precision_minutes=lookback_precision,
         clean_window_poll_seconds=poll,
         clean_window_ingestion_margin_seconds=margin,
         clean_window_max_wait_seconds=maximum_wait,
@@ -150,7 +174,6 @@ def load_automation_policy(
         storage_resource_role=storage_resource_role,
         quality_artifact_container=quality_artifact_container,
         deployment_registry_container=deployment_registry_container,
-        approved_record_container=approved_record_container,
     )
 
 

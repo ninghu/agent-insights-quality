@@ -19,8 +19,8 @@ from agent_insights_quality.util import (
 )
 from agent_insights_quality.validation_assignments import verification_assignment
 from agent_insights_quality.validation_trace_gap_policy import (
-    deterministic_issue_trace_gap_acceptance,
-    issue_side_decided,
+    target_evidence_decided,
+    trace_unknown_acceptance,
 )
 from agent_insights_quality.validation_evidence import (
     attempt_observation,
@@ -106,6 +106,7 @@ def write_private_package(
         deployed=deployed,
         paired_v0_deployed=paired_v0_deployed,
         invocation=invocation_receipt["invocation"],
+        invocation_receipt_digest=invocation_reference["receipt_digest"],
         collector=collector,
         scheduler=scheduler,
     )
@@ -208,6 +209,17 @@ def validate_private_package(
         or not isinstance(receipt.get("invocation"), Mapping)
     ):
         raise ContractError("Validation private package coverage is invalid")
+    for target in targets:
+        if not isinstance(target, Mapping):
+            raise ContractError("Validation private package target is invalid")
+        if "evidence_snapshot" in target:
+            _validate_evidence_snapshot(
+                target["evidence_snapshot"],
+                invocation_receipt_digest=str(
+                    receipt["reference"].get("receipt_digest") or ""
+                ),
+                attempts=target.get("attempts"),
+            )
 
 
 def load_bound_private_package(
@@ -393,6 +405,15 @@ def load_active_pointer(
     return pointer
 
 
+def load_claim_pointer(
+    *,
+    claimant_reference: str | None = None,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    claimant = claimant_reference or copilot_claimant_reference()
+    return _read_claim_pointer(claimant, root=root)
+
+
 def active_copilot_claims(
     *,
     prepared: Mapping[str, Any],
@@ -418,7 +439,7 @@ def active_copilot_claims(
         if (
             pointer["origin_run_id"] != prepared["run_id"]
             or pointer["origin_commit_sha"] != prepared["commit_sha"]
-            or pointer["claim_state"] == "completed"
+            or pointer["claim_state"] in {"completed", "released"}
             or _pointer_time(pointer["lease_expires_at"]) <= current_time
         ):
             continue
@@ -452,9 +473,36 @@ def complete_active_pointer(
         raise ContractError("Copilot assessment claim changed before completion")
     if current["claim_state"] == "completed":
         raise ContractError("Copilot assessment claim is already completed")
+    if current["claim_state"] == "released":
+        raise ContractError("Copilot assessment claim was released")
     updated = copy.deepcopy(current)
     updated["claim_state"] = "completed"
     updated["completed_at"] = finished.isoformat()
+    updated["pointer_digest"] = digest_without_field(updated, "pointer_digest")
+    atomic_json(_claim_path(claimant, root=root), updated)
+    return updated
+
+
+def release_active_pointer(
+    pointer: Mapping[str, Any],
+    *,
+    released_at: datetime | None = None,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    claimant = _validated_claimant_reference(
+        str(pointer.get("claimant_reference") or "")
+    )
+    released = (released_at or datetime.now(UTC)).astimezone(UTC)
+    current = _read_claim_pointer(claimant, root=root)
+    if current["pointer_digest"] != pointer.get("pointer_digest"):
+        raise ContractError("Copilot assessment claim changed before release")
+    if current["claim_state"] == "completed":
+        raise ContractError("Completed Copilot assessment claim cannot be released")
+    if current["claim_state"] == "released":
+        return current
+    updated = copy.deepcopy(current)
+    updated["claim_state"] = "released"
+    updated["completed_at"] = released.isoformat()
     updated["pointer_digest"] = digest_without_field(updated, "pointer_digest")
     atomic_json(_claim_path(claimant, root=root), updated)
     return updated
@@ -495,7 +543,8 @@ def _validate_pointer(pointer: Mapping[str, Any]) -> None:
         set(pointer) != required
         or pointer["schema_version"] != "1.1.0"
         or pointer["kind"] != "test-agent-validation-active-copilot-package"
-        or pointer["claim_state"] not in {"preparing", "ready", "completed"}
+        or pointer["claim_state"]
+        not in {"preparing", "ready", "completed", "released"}
         or _validated_claimant_reference(
             str(pointer["claimant_reference"])
         )
@@ -541,7 +590,7 @@ def _validate_pointer(pointer: Mapping[str, Any]) -> None:
             and (not has_package or completed_at is not None)
         )
         or (
-            pointer["claim_state"] == "completed"
+            pointer["claim_state"] in {"completed", "released"}
             and (
                 completed_at is None
                 or completed_at < claimed_at
@@ -571,6 +620,8 @@ def _assert_pointer_active(
     current_time = (now or datetime.now(UTC)).astimezone(UTC)
     if pointer["claim_state"] == "completed":
         raise ContractError("Copilot assessment claim is already completed")
+    if pointer["claim_state"] == "released":
+        raise ContractError("Copilot assessment claim was released")
     if _pointer_time(pointer["lease_expires_at"]) <= current_time:
         raise ContractError("Copilot assessment claim lease expired")
     if require_ready and pointer["claim_state"] != "ready":
@@ -702,7 +753,6 @@ def authority_evidence_from_evaluation(
     authority: AuthoritySpec,
     runtime: Mapping[str, Any],
     validated_commit_sha: str,
-    paired_trace_gap_history_digest: str | None = None,
 ) -> dict[str, Any]:
     evaluations = {
         item["scenario_id"]: item for item in evaluation["scenarios"]
@@ -748,24 +798,43 @@ def authority_evidence_from_evaluation(
         paired_observation_count = sum(
             item["observation"] is True for item in v0_attempts
         )
-        issue_trace_gap_acceptance = _issue_trace_gap_acceptance(
+        primary_trace_unknown_acceptance = _trace_unknown_acceptance(
             authority=authority,
             rule=rule,
-            issue_attempts=issue_attempts,
+            target=targets[(scenario_id, issue_role)],
+            attempts=issue_attempts,
+            target_role=issue_role,
         )
-        issue_decided = issue_side_decided(
-            observation_count=observation_count,
+        primary_decided = target_evidence_decided(
+            target_role=issue_role,
+            n=n,
             k=k,
-            trace_gap_acceptance=issue_trace_gap_acceptance,
+            complete_count=complete_count,
+            observation_count=observation_count,
+            trace_unknown_acceptance=primary_trace_unknown_acceptance,
         )
-        trace_gap_acceptance = _paired_trace_gap_acceptance(
-            authority=authority,
-            rule=rule,
-            assessed=assessed,
-            issue_attempts=issue_attempts,
-            v0_attempts=v0_attempts,
-            history_digest=paired_trace_gap_history_digest,
-            issue_side_decided=issue_decided,
+        paired_trace_unknown_acceptance = (
+            None
+            if authority.authority_kind == "baseline"
+            else _trace_unknown_acceptance(
+                authority=authority,
+                rule=rule,
+                target=targets[(scenario_id, "paired_v0")],
+                attempts=v0_attempts,
+                target_role="paired_v0",
+            )
+        )
+        control_decided = (
+            True
+            if authority.authority_kind == "baseline"
+            else target_evidence_decided(
+                target_role="paired_v0",
+                n=n,
+                k=k,
+                complete_count=paired_complete_count,
+                observation_count=paired_observation_count,
+                trace_unknown_acceptance=paired_trace_unknown_acceptance,
+            )
         )
         evidence_complete = scenario_evidence_complete(
             authority_kind=authority.authority_kind,
@@ -774,8 +843,13 @@ def authority_evidence_from_evaluation(
             complete_count=complete_count,
             paired_complete_count=paired_complete_count,
             observation_count=observation_count,
-            issue_trace_gap_accepted=issue_trace_gap_acceptance is not None,
-            paired_trace_gap_accepted=trace_gap_acceptance is not None,
+            paired_observation_count=paired_observation_count,
+            primary_trace_unknown_accepted=(
+                primary_trace_unknown_acceptance is not None
+            ),
+            paired_trace_unknown_accepted=(
+                paired_trace_unknown_acceptance is not None
+            ),
         )
         scenario = {
                 "scenario_id": scenario_id,
@@ -789,18 +863,19 @@ def authority_evidence_from_evaluation(
                 "paired_observation_count": paired_observation_count,
                 "evidence_complete": evidence_complete,
                 "pass": evidence_complete
-                and issue_decided
-                and (
-                    authority.authority_kind == "baseline"
-                    or paired_observation_count == 0
-                ),
+                and primary_decided
+                and control_decided,
                 "issue_attempts": issue_attempts,
                 "v0_attempts": v0_attempts,
             }
-        if issue_trace_gap_acceptance is not None:
-            scenario["issue_trace_gap_acceptance"] = issue_trace_gap_acceptance
-        if trace_gap_acceptance is not None:
-            scenario["paired_trace_gap_acceptance"] = trace_gap_acceptance
+        if primary_trace_unknown_acceptance is not None:
+            scenario["primary_trace_unknown_acceptance"] = (
+                primary_trace_unknown_acceptance
+            )
+        if paired_trace_unknown_acceptance is not None:
+            scenario["paired_trace_unknown_acceptance"] = (
+                paired_trace_unknown_acceptance
+            )
         scenarios.append(scenario)
     result = {
         "authority_id": authority.authority_id,
@@ -1015,6 +1090,7 @@ def _collect_targets(
     deployed: DeployedRuntime,
     paired_v0_deployed: DeployedRuntime,
     invocation: Mapping[str, Any],
+    invocation_receipt_digest: str,
     collector: Any,
     scheduler: Any,
 ) -> list[dict[str, Any]]:
@@ -1053,40 +1129,147 @@ def _collect_targets(
             )
         ):
             raise ContractError("Validation invocation attempt coverage is invalid")
+        issue_collection = collector.collect_attempts(
+            target=deployed,
+            executing_authority_id=authority.authority_id,
+            conversation_role=issue_role,
+            scenario=scenario,
+            attempts=list(attempts),
+            invocations=list(issue_invocations),
+            scheduler=scheduler,
+            invocation_receipt_digest=invocation_receipt_digest,
+        )
         targets.append(
             {
                 "scenario_id": scenario["id"],
                 "role": issue_role,
                 "runtime": _runtime_payload(vars(deployed)),
-                "attempts": collector.collect_attempts(
-                    target=deployed,
-                    executing_authority_id=authority.authority_id,
-                    conversation_role=issue_role,
-                    scenario=scenario,
-                    attempts=list(attempts),
-                    invocations=list(issue_invocations),
-                    scheduler=scheduler,
-                ),
+                **issue_collection,
             }
         )
         if authority.authority_kind == "issue":
+            paired_collection = collector.collect_attempts(
+                target=paired_v0_deployed,
+                executing_authority_id=authority.authority_id,
+                conversation_role="paired_v0",
+                scenario=scenario,
+                attempts=list(attempts),
+                invocations=list(v0_invocations),
+                scheduler=scheduler,
+                invocation_receipt_digest=invocation_receipt_digest,
+            )
             targets.append(
                 {
                     "scenario_id": scenario["id"],
                     "role": "paired_v0",
                     "runtime": _runtime_payload(vars(paired_v0_deployed)),
-                    "attempts": collector.collect_attempts(
-                        target=paired_v0_deployed,
-                        executing_authority_id=authority.authority_id,
-                        conversation_role="paired_v0",
-                        scenario=scenario,
-                        attempts=list(attempts),
-                        invocations=list(v0_invocations),
-                        scheduler=scheduler,
-                    ),
+                    **paired_collection,
                 }
             )
     return targets
+
+
+def _validate_evidence_snapshot(
+    value: Any,
+    *,
+    invocation_receipt_digest: str,
+    attempts: Any,
+) -> None:
+    required = {
+        "schema_version",
+        "invocation_receipt_digest",
+        "evidence_window_start",
+        "evidence_window_end",
+        "maturity_boundary",
+        "snapshot_observed_at",
+        "maximum_hydration_seconds",
+        "stabilization_seconds",
+        "mature",
+        "snapshot_mode",
+        "required_trace_hydration",
+        "maturity_proof_digest",
+    }
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != required
+        or value["schema_version"] != "1.0.0"
+        or not _valid_digest(invocation_receipt_digest)
+        or value["invocation_receipt_digest"] != invocation_receipt_digest
+        or value["maturity_proof_digest"]
+        != digest_without_field(value, "maturity_proof_digest")
+        or not isinstance(value["maximum_hydration_seconds"], int)
+        or isinstance(value["maximum_hydration_seconds"], bool)
+        or value["maximum_hydration_seconds"] < 1
+        or not isinstance(value["stabilization_seconds"], int)
+        or isinstance(value["stabilization_seconds"], bool)
+        or value["stabilization_seconds"] < 1
+        or not isinstance(value["mature"], bool)
+        or value["required_trace_hydration"]
+        not in {"complete", "absence_pending", "incomplete"}
+    ):
+        raise ContractError("Validation evidence maturity proof is invalid")
+    try:
+        start = datetime.fromisoformat(
+            str(value["evidence_window_start"]).replace("Z", "+00:00")
+        ).astimezone(UTC)
+        end = datetime.fromisoformat(
+            str(value["evidence_window_end"]).replace("Z", "+00:00")
+        ).astimezone(UTC)
+        boundary = datetime.fromisoformat(
+            str(value["maturity_boundary"]).replace("Z", "+00:00")
+        ).astimezone(UTC)
+        observed = datetime.fromisoformat(
+            str(value["snapshot_observed_at"]).replace("Z", "+00:00")
+        ).astimezone(UTC)
+    except (TypeError, ValueError) as error:
+        raise ContractError(
+            "Validation evidence maturity time is invalid"
+        ) from error
+    if (
+        not isinstance(attempts, list)
+        or not attempts
+        or any(
+            not isinstance(item, Mapping)
+            or not isinstance(item.get("started_at"), str)
+            or not isinstance(item.get("completed_at"), str)
+            for item in attempts
+        )
+    ):
+        raise ContractError("Validation evidence maturity attempts are invalid")
+    try:
+        attempt_starts = [
+            datetime.fromisoformat(item["started_at"].replace("Z", "+00:00")).astimezone(
+                UTC
+            )
+            for item in attempts
+        ]
+        attempt_ends = [
+            datetime.fromisoformat(item["completed_at"].replace("Z", "+00:00")).astimezone(
+                UTC
+            )
+            for item in attempts
+        ]
+    except ValueError as error:
+        raise ContractError(
+            "Validation evidence maturity attempt time is invalid"
+        ) from error
+    expected_boundary = end + timedelta(
+        seconds=(
+            value["maximum_hydration_seconds"]
+            + value["stabilization_seconds"]
+        )
+    )
+    mature = observed >= boundary
+    if (
+        end < start
+        or start != min(attempt_starts)
+        or end != max(attempt_ends)
+        or boundary != expected_boundary
+        or value["mature"] is not mature
+        or value["snapshot_mode"]
+        != ("mature_single_snapshot" if mature else "bounded_hydration")
+    ):
+        raise ContractError("Validation evidence maturity binding is invalid")
 
 
 def _incomplete_attempt_evidence(
@@ -1333,108 +1516,37 @@ def _validate_attempt_coverage(
                 )
 
 
-def _paired_trace_gap_acceptance(
+def _trace_unknown_acceptance(
     *,
     authority: AuthoritySpec,
     rule: Mapping[str, Any],
-    assessed: Mapping[str, Any],
-    issue_attempts: Sequence[Mapping[str, Any]],
-    v0_attempts: Sequence[Mapping[str, Any]],
-    history_digest: str | None,
-    issue_side_decided: bool | None = None,
+    target: Mapping[str, Any],
+    attempts: Sequence[Mapping[str, Any]],
+    target_role: str,
 ) -> dict[str, Any] | None:
-    predicate = rule["defect_predicate"]
-    incomplete = [
-        (attempt, evaluation)
-        for attempt, evaluation in zip(
-            v0_attempts,
-            assessed["v0_attempts"],
-            strict=True,
-        )
-        if attempt["complete"] is not True
-    ]
+    snapshot = target.get("evidence_snapshot")
     if (
-        history_digest is None
-        or authority.authority_kind != "issue"
-        or "trace" not in set(predicate.get("required_surfaces", []))
-        or (
-            issue_side_decided
-            if issue_side_decided is not None
-            else sum(
-                item["observation"] is True for item in issue_attempts
-            )
-            >= int(rule["k"])
-        )
-        is not True
-        or sum(item["complete"] is True for item in v0_attempts)
-        != int(rule["n"]) - 1
-        or any(item["observation"] is True for item in v0_attempts)
-        or len(incomplete) != 1
+        not isinstance(snapshot, Mapping)
+        or snapshot.get("mature") is not True
+        or snapshot.get("required_trace_hydration")
+        not in {"absence_pending", "incomplete"}
     ):
         return None
-    attempt, evaluation = incomplete[0]
-    steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
-    if (
-        any(
-            step["endpoint_pass"] is not True
-            or step["identity_pass"] is not True
-            for step in steps
-        )
-        or evaluation["evidence_sufficient"] is not False
-        or evaluation["error_code"] != "missing_evidence"
-    ):
-        return None
-    trace_gap = False
-    for step in evaluation["steps"]:
-        if any(
-            assertion["evidence_sufficient"] is not True
-            for assertion in step["semantic_assertions"]
-        ) or any(
-            assertion["evidence_sufficient"] is True
-            and assertion["passed"] is not True
-            for assertion in [
-                *step["semantic_assertions"],
-                *step["trace_assertions"],
-            ]
-        ):
-            return None
-        missing_trace = any(
-            assertion["evidence_sufficient"] is not True
-            for assertion in step["trace_assertions"]
-        )
-        if step["evidence_sufficient"] is not True and not missing_trace:
-            return None
-        trace_gap = trace_gap or missing_trace
-    if not trace_gap:
-        return None
-    return {
-        "policy": "single_paired_trace_gap_after_fresh_verify_v1",
-        "attempt_index": attempt["index"],
-        "history_digest": history_digest,
-    }
-
-
-def _issue_trace_gap_acceptance(
-    *,
-    authority: AuthoritySpec,
-    rule: Mapping[str, Any],
-    issue_attempts: Sequence[Mapping[str, Any]],
-) -> dict[str, Any] | None:
-    required_surfaces = rule["defect_predicate"].get(
-        "required_surfaces",
-        [],
+    required_surfaces = (
+        ["semantic", "trace"]
+        if target_role in {"baseline", "paired_v0"}
+        else rule["defect_predicate"].get("required_surfaces", [])
     )
-    attempts = [
-        _trace_gap_attempt_payload(attempt)
-        for attempt in issue_attempts
-    ]
-    return deterministic_issue_trace_gap_acceptance(
-        authority_kind=authority.authority_kind,
+    return trace_unknown_acceptance(
+        target_role=target_role,
         validation_mode=str(rule["validation_mode"]),
         n=int(rule["n"]),
         k=int(rule["k"]),
         required_surfaces=required_surfaces,
-        attempts=attempts,
+        attempts=[_trace_gap_attempt_payload(attempt) for attempt in attempts],
+        maturity_proof_digest=str(
+            snapshot.get("maturity_proof_digest") or ""
+        ),
     )
 
 

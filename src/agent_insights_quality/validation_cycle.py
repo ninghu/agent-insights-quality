@@ -32,6 +32,7 @@ def initial_lifecycle(
     holder_operator_reference: str,
     holder_run_reference: str,
     substrate: Mapping[str, str],
+    recovery_intent: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     moment = (now or datetime.now(UTC)).astimezone(UTC)
@@ -119,6 +120,11 @@ def initial_lifecycle(
         "resources": [],
         "event_reference": None,
         "evidence_reference": None,
+        "recovery_intent": (
+            copy.deepcopy(dict(recovery_intent))
+            if recovery_intent is not None
+            else None
+        ),
         "supersedes": None,
         "started_at": moment.isoformat(),
         "last_activity_at": moment.isoformat(),

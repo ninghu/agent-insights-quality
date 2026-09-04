@@ -42,15 +42,16 @@ from agent_insights_quality.daily_coordinator import (
     fail_daily,
     prepare_daily,
     provision_daily,
-    reopen_incomplete_daily_lane,
-    reopen_incomplete_daily_version,
-    reclassify_daily_card_linkage,
     record_daily_email_receipt,
     record_daily_finalization,
     record_daily_improvement_input,
     run_daily_agent,
-    run_reopened_daily_version,
     validate_daily_assessment_outputs,
+)
+from agent_insights_quality.daily_phases import (
+    release_daily_verification_claim,
+    run_daily_insights_agent,
+    verify_next_daily_target,
 )
 from agent_insights_quality.email import (
     build_runtime_links,
@@ -123,7 +124,6 @@ from agent_insights_quality.util import (
     runtime_root,
 )
 from agent_insights_quality.validation import validate_repository
-from agent_insights_quality.validation_approved import approve_test_agent_validation
 from agent_insights_quality.validation_coordinator import (
     compose_test_agent_validation,
     deploy_test_agent_validation_shard,
@@ -132,8 +132,11 @@ from agent_insights_quality.validation_coordinator import (
     prepare_test_agent_validation,
     prepare_test_agent_validation_assessment,
     reconcile_test_agent_validation_deployment,
+    recover_test_agent_validation,
+    release_test_agent_validation_assessment,
     run_test_agent_validation,
 )
+from agent_insights_quality.validation_rules import validation_matrix
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
     load_quality_work_items,
@@ -178,8 +181,22 @@ def build_parser() -> argparse.ArgumentParser:
     daily_prepare.add_argument("--test-run", action="store_true")
     daily_prepare.add_argument("--publish-preview", action="store_true")
     commands.add_parser("daily-provision")
-    daily_agent = commands.add_parser("daily-run-agent")
+    daily_agent = commands.add_parser("daily-run-traffic-agent")
     daily_agent.add_argument(
+        "--agent",
+        choices=(
+            "weather-agent",
+            "healthcare-agent",
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent",
+        ),
+        required=True,
+    )
+    commands.add_parser("daily-verify-next")
+    commands.add_parser("daily-release-verification")
+    daily_insights = commands.add_parser("daily-run-insights-agent")
+    daily_insights.add_argument(
         "--agent",
         choices=(
             "weather-agent",
@@ -222,28 +239,6 @@ def build_parser() -> argparse.ArgumentParser:
     daily_fail = commands.add_parser("daily-fail")
     daily_fail.add_argument("--reason-code", required=True)
     daily_fail.add_argument("--confirm", action="store_true")
-    daily_reopen = commands.add_parser("daily-reopen-incomplete-lane")
-    daily_reopen.add_argument(
-        "--agent",
-        choices=(
-            "weather-agent",
-            "healthcare-agent",
-            "finance-agent",
-            "travel-agent",
-            "support-ticket-agent",
-        ),
-        required=True,
-    )
-    daily_reopen.add_argument("--confirm", action="store_true")
-    daily_version_reopen = commands.add_parser("daily-reopen-incomplete-version")
-    daily_version_reopen.add_argument("--agent", required=True)
-    daily_version_reopen.add_argument("--issue", required=True)
-    daily_version_reopen.add_argument("--confirm", action="store_true")
-    daily_version_run = commands.add_parser("daily-run-reopened-version")
-    daily_version_run.add_argument("--agent", required=True)
-    daily_version_run.add_argument("--issue", required=True)
-    daily_reclassify = commands.add_parser("daily-reclassify-card-linkage")
-    daily_reclassify.add_argument("--confirm", action="store_true")
     daily_publication = commands.add_parser("daily-complete-publication")
     daily_publication.add_argument("--pr-number", type=int, required=True)
     daily_publication.add_argument("--path", action="append", required=True)
@@ -323,6 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--human-reviewed", action="store_true")
     commands.add_parser("run-test-agent-validation")
     commands.add_parser("prepare-test-agent-validation")
+    commands.add_parser("recover-test-agent-validation")
     deploy_validation = commands.add_parser(
         "deploy-test-agent-validation-shard"
     )
@@ -333,9 +329,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     invoke_validation.add_argument("--shard-id", type=int, required=True)
     commands.add_parser("prepare-test-agent-validation-assessment")
+    commands.add_parser("release-test-agent-validation-assessment")
     commands.add_parser("import-test-agent-validation-assessment")
     commands.add_parser("compose-test-agent-validation")
-    commands.add_parser("approve-test-agent-validation")
     return parser
 
 
@@ -355,6 +351,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         return json.dumps(run_test_agent_validation(), sort_keys=True)
     if args.command == "prepare-test-agent-validation":
         return json.dumps(prepare_test_agent_validation(), sort_keys=True)
+    if args.command == "recover-test-agent-validation":
+        return json.dumps(recover_test_agent_validation(), sort_keys=True)
     if args.command == "deploy-test-agent-validation-shard":
         return json.dumps(
             deploy_test_agent_validation_shard(shard_id=args.shard_id),
@@ -375,6 +373,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             prepare_test_agent_validation_assessment(),
             sort_keys=True,
         )
+    if args.command == "release-test-agent-validation-assessment":
+        return json.dumps(
+            release_test_agent_validation_assessment(),
+            sort_keys=True,
+        )
     if args.command == "import-test-agent-validation-assessment":
         return json.dumps(
             import_test_agent_validation_assessment(),
@@ -382,8 +385,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         )
     if args.command == "compose-test-agent-validation":
         return json.dumps(compose_test_agent_validation(), sort_keys=True)
-    if args.command == "approve-test-agent-validation":
-        return json.dumps(approve_test_agent_validation(), sort_keys=True)
     if args.command == "daily-prepare":
         return json.dumps(
             prepare_daily(
@@ -397,8 +398,20 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         )
     if args.command == "daily-provision":
         return json.dumps(provision_daily(), sort_keys=True)
-    if args.command == "daily-run-agent":
+    if args.command == "daily-run-traffic-agent":
         return json.dumps(run_daily_agent(args.agent), sort_keys=True)
+    if args.command == "daily-verify-next":
+        return json.dumps(verify_next_daily_target(), sort_keys=True)
+    if args.command == "daily-release-verification":
+        return json.dumps(
+            release_daily_verification_claim(),
+            sort_keys=True,
+        )
+    if args.command == "daily-run-insights-agent":
+        return json.dumps(
+            run_daily_insights_agent(args.agent),
+            sort_keys=True,
+        )
     if args.command == "daily-compose":
         return json.dumps(compose_daily(), sort_keys=True)
     if args.command == "daily-status":
@@ -423,33 +436,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 reason_code=args.reason_code,
                 confirmed=args.confirm,
             ),
-            sort_keys=True,
-        )
-    if args.command == "daily-reopen-incomplete-lane":
-        return json.dumps(
-            reopen_incomplete_daily_lane(
-                args.agent,
-                confirmed=args.confirm,
-            ),
-            sort_keys=True,
-        )
-    if args.command == "daily-reopen-incomplete-version":
-        return json.dumps(
-            reopen_incomplete_daily_version(
-                args.agent,
-                args.issue,
-                confirmed=args.confirm,
-            ),
-            sort_keys=True,
-        )
-    if args.command == "daily-run-reopened-version":
-        return json.dumps(
-            run_reopened_daily_version(args.agent, args.issue),
-            sort_keys=True,
-        )
-    if args.command == "daily-reclassify-card-linkage":
-        return json.dumps(
-            reclassify_daily_card_linkage(confirmed=args.confirm),
             sort_keys=True,
         )
     if args.command == "daily-complete-publication":
@@ -927,6 +913,19 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 ),
                 preview_publication_path=preview_publication_path,
             )
+        validation_policy = None
+        if test_run:
+            n, k = validation_matrix("baseline")
+            validation_policy = {
+                "schema_version": "1.0.0",
+                "policy": "unified_target_evidence_v1",
+                "attempts_per_target": n,
+                "required_conclusive_attempts": k,
+                "maximum_trace_unknown_attempts": n - k,
+            }
+            validation_policy["policy_digest"] = content_hash(
+                validation_policy
+            )
         return json.dumps(
             {
                 "quality_score": report["summary"]["quality_score"],
@@ -945,6 +944,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 ),
                 "delivery_mode": manifest["delivery_mode"],
                 "generated_report": not test_run,
+                "validation_policy": validation_policy,
                 "github_preview": (
                     str(preview_publication_path)
                     if preview_publication_path is not None

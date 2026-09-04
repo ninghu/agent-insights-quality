@@ -198,7 +198,7 @@ def test_issue_verification_batches_once_per_target_and_applies_k_of_n() -> None
         model_contract=agents["models"]["test_agents"],
         paired_baselines={issue.canonical_agent: baseline.authority_id},
     )
-    runner = _BatchVerifyOnlyRunner(issue_observation_count=5)
+    runner = _BatchVerifyOnlyRunner(issue_observation_count=10)
 
     result = verify_validation_shard(
         [issue],
@@ -218,8 +218,8 @@ def test_issue_verification_batches_once_per_target_and_applies_k_of_n() -> None
         "issue",
         "paired_v0",
     ]
-    assert result["n"] == 7
-    assert result["k"] == 5
-    assert result["observation_count"] == 5
+    assert result["n"] == 10
+    assert result["k"] == 6
+    assert result["observation_count"] == 10
     assert result["paired_observation_count"] == 0
     assert result["pass"] is True

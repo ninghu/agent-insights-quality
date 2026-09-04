@@ -21,7 +21,6 @@ from agent_insights_quality.util import (
     immutable_json,
     read_json,
 )
-from agent_insights_quality.validation_evidence import runtime_mapping_digest
 from agent_insights_quality.validation_lifecycle import validation_runtime_root
 from agent_insights_quality.validation_lifecycle import LocalValidationLock
 from agent_insights_quality.validation_runtime import AuthoritySpec, DeployedRuntime
@@ -33,6 +32,7 @@ _MIGRATION_NAME = "shard-invocations-v2-to-authority-receipts-v1"
 _SUPPLEMENTAL_MIGRATION_NAME = (
     "shard-invocations-v2-to-authority-receipts-v1-supplemental"
 )
+_PUBLICATION_LOCK_WAIT_SECONDS = 35.0
 
 
 def write_invocation_receipt(
@@ -65,16 +65,24 @@ def write_invocation_receipt(
     )
     runtime_root = (root or validation_runtime_root()).resolve()
     path = _receipt_path(runtime_root, value)
-    immutable_json(path, value)
-    persisted = read_json(path)
-    validate_invocation_receipt(
-        persisted,
-        authority=authority,
-        paired_v0_authority=paired_v0_authority,
-    )
-    if persisted != value:
-        raise ContractError("Immutable invocation receipt changed after persistence")
-    return _receipt_reference(value, path=path, root=runtime_root)
+    reference = _receipt_reference(value, path=path, root=runtime_root)
+    with LocalValidationLock(
+        runtime_root / "coordinator.lock",
+        wait_seconds=_PUBLICATION_LOCK_WAIT_SECONDS,
+    ):
+        fence()
+        immutable_json(path, value)
+        persisted = read_json(path)
+        validate_invocation_receipt(
+            persisted,
+            authority=authority,
+            paired_v0_authority=paired_v0_authority,
+        )
+        if persisted != value:
+            raise ContractError(
+                "Immutable invocation receipt changed after persistence"
+            )
+    return reference
 
 
 def load_invocation_receipt(
@@ -201,23 +209,27 @@ def validate_invocation_receipt(
         if (
             value["authority_id"] != authority.authority_id
             or value["source_content_digest"] != authority.source_content_digest
-            or value["execution_digest"] != authority.execution_digest
+            or value["traffic_execution_digest"]
+            != authority_traffic_execution_digest(authority)
         ):
             raise ContractError("Invocation receipt authority binding is stale")
-        expected_paired_contract = (
-            None
-            if authority.authority_kind == "baseline"
-            else {
-                "authority_id": paired_v0_authority.authority_id,
-                "source_content_digest": (
-                    paired_v0_authority.source_content_digest
-                ),
-                "execution_digest": paired_v0_authority.execution_digest,
-            }
-            if paired_v0_authority is not None
-            else None
-        )
-        if value["paired_v0_contract"] != expected_paired_contract:
+        paired_contract = value["paired_v0_contract"]
+        if authority.authority_kind == "baseline":
+            paired_matches = paired_contract is None
+        else:
+            paired_matches = bool(
+                paired_v0_authority is not None
+                and isinstance(paired_contract, Mapping)
+                and paired_contract["authority_id"]
+                == paired_v0_authority.authority_id
+                and paired_contract["source_content_digest"]
+                == paired_v0_authority.source_content_digest
+                and paired_contract["traffic_execution_digest"]
+                == authority_traffic_execution_digest(
+                    paired_v0_authority
+                )
+            )
+        if not paired_matches:
             raise ContractError("Invocation receipt paired-v0 contract is stale")
         _validate_invocation(authority, value["invocation"])
         _validate_resource_provenance(
@@ -234,42 +246,16 @@ def select_reusable_invocation_receipts(
     prepared: Mapping[str, Any],
     plan: Mapping[str, Any],
     forced_authority_ids: set[str] | None = None,
+    prior_generations: Sequence[Mapping[str, Any]] = (),
     root: Path | None = None,
 ) -> tuple[list[str], list[dict[str, str]]]:
     runtime_root = (root or validation_runtime_root()).resolve()
-    candidates: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
-    receipt_root = (
-        runtime_root
-        / "invocation-receipts"
-        / str(prepared["repository"]).replace("/", "--")
+    candidates = _receipt_candidates(
+        runtime_root,
+        prepared=prepared,
+        prior_generations=prior_generations,
+        authority_ids=authority_ids,
     )
-    if receipt_root.is_dir():
-        for path in receipt_root.rglob("*.json"):
-            try:
-                raw = read_json(path)
-                value = load_invocation_receipt(
-                    _receipt_reference(
-                        raw,
-                        path=path,
-                        root=runtime_root,
-                    ),
-                    root=runtime_root,
-                )
-                if path.resolve() != _receipt_path(
-                    runtime_root,
-                    value,
-                ).resolve():
-                    raise ContractError(
-                        "Invocation receipt path provenance is invalid"
-                    )
-                completed = datetime.fromisoformat(
-                    str(value["completed_at"]).replace("Z", "+00:00")
-                ).astimezone(UTC)
-            except (ContractError, KeyError, OSError, ValueError):
-                continue
-            candidates.setdefault(value["authority_id"], []).append(
-                (completed.isoformat(), path, value)
-            )
 
     by_id = {item.authority_id: item for item in authorities}
     runtime_by_id = {
@@ -305,8 +291,9 @@ def select_reusable_invocation_receipts(
         latest_completed = matching[-1][0]
         latest = [item for item in matching if item[0] == latest_completed]
         if len({item[2]["receipt_digest"] for item in latest}) != 1:
-            selected.append(authority_id)
-            continue
+            raise ContractError(
+                "Newest reusable invocation receipts conflict"
+            )
         _, path, value = latest[-1]
         reused.append(_receipt_reference(value, path=path, root=runtime_root))
         reused_values.append(value)
@@ -1074,6 +1061,9 @@ def _invocation_receipt(
         "authority_id": authority.authority_id,
         "source_content_digest": authority.source_content_digest,
         "execution_digest": authority.execution_digest,
+        "traffic_execution_digest": authority_traffic_execution_digest(
+            authority
+        ),
         "invocation_contract_digest": plan["invocation_contract_digest"],
         "paired_v0_contract": (
             {
@@ -1082,6 +1072,11 @@ def _invocation_receipt(
                     paired_v0_authority.source_content_digest
                 ),
                 "execution_digest": paired_v0_authority.execution_digest,
+                "traffic_execution_digest": (
+                    authority_traffic_execution_digest(
+                        paired_v0_authority
+                    )
+                ),
             }
             if paired_v0_authority is not None
             else None
@@ -1158,6 +1153,7 @@ def _receipt_is_reusable(
     prepared: Mapping[str, Any],
     plan: Mapping[str, Any],
 ) -> bool:
+    del plan
     try:
         validate_invocation_receipt(
             value,
@@ -1168,95 +1164,132 @@ def _receipt_is_reusable(
                 else paired_v0_authority
             ),
         )
-        expected_environment = _environment_binding(prepared, plan)
+        expected_identity = authority_execution_identity(
+            authority=authority,
+            paired_v0_authority=paired_v0_authority,
+            runtime=runtime,
+            paired_v0_runtime=paired_v0_runtime,
+        )
     except (ContractError, ValueError):
         return False
     return bool(
         value["repository"] == prepared["repository"]
-        and _stored_authority_invocation_contract_digest(value)
-        == authority_invocation_contract_digest(
-            authority,
-            paired_v0_authority,
-        )
-        and value["environment"] == expected_environment
-        and value["runtime"]["provider_content_digest"]
-        == runtime["provider_content_digest"]
-        and value["runtime"]["provider_agent_id"]
-        == runtime["provider_agent_id"]
-        and value["runtime"]["provider_agent_version_id"]
-        == runtime["provider_agent_version_id"]
-        and value["runtime"]["runtime_agent_version"]
-        == runtime["runtime_agent_version"]
-        and runtime_mapping_digest(value["runtime"])
-        == runtime_mapping_digest(runtime)
-        and (
-            value["paired_v0_runtime"] is None
-            if authority.authority_kind == "baseline"
-            else (
-                value["paired_v0_runtime"]["provider_content_digest"]
-                == paired_v0_runtime["provider_content_digest"]
-                and value["paired_v0_runtime"]["provider_agent_id"]
-                == paired_v0_runtime["provider_agent_id"]
-                and value["paired_v0_runtime"][
-                    "provider_agent_version_id"
-                ]
-                == paired_v0_runtime["provider_agent_version_id"]
-                and value["paired_v0_runtime"]["runtime_agent_version"]
-                == paired_v0_runtime["runtime_agent_version"]
-                and runtime_mapping_digest(value["paired_v0_runtime"])
-                == runtime_mapping_digest(paired_v0_runtime)
-            )
-        )
+        and invocation_receipt_execution_identity(value) == expected_identity
     )
 
 
-def authority_invocation_contract_digest(
+def authority_execution_identity(
+    *,
     authority: AuthoritySpec,
     paired_v0_authority: AuthoritySpec,
-) -> str:
-    return content_hash(
-        {
-            "contract_version": "1.0.0",
+    runtime: Mapping[str, Any],
+    paired_v0_runtime: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0.0",
+        "authority": {
             "authority_id": authority.authority_id,
-            "authority_kind": authority.authority_kind,
-            "canonical_agent": authority.canonical_agent,
             "runtime_kind": authority.runtime_kind,
             "source_content_digest": authority.source_content_digest,
-            "execution_digest": authority.execution_digest,
-            "paired_v0_contract": (
-                None
-                if authority.authority_kind == "baseline"
-                else {
-                    "authority_id": paired_v0_authority.authority_id,
-                    "source_content_digest": (
-                        paired_v0_authority.source_content_digest
-                    ),
-                    "execution_digest": paired_v0_authority.execution_digest,
-                }
+            "traffic_execution_digest": authority_traffic_execution_digest(
+                authority
             ),
-        }
-    )
+            "provider_content_digest": runtime["provider_content_digest"],
+        },
+        "paired_v0": (
+            None
+            if authority.authority_kind == "baseline"
+            else {
+                "authority_id": paired_v0_authority.authority_id,
+                "runtime_kind": paired_v0_authority.runtime_kind,
+                "source_content_digest": paired_v0_authority.source_content_digest,
+                "traffic_execution_digest": (
+                    authority_traffic_execution_digest(
+                        paired_v0_authority
+                    )
+                ),
+                "provider_content_digest": paired_v0_runtime[
+                    "provider_content_digest"
+                ],
+            }
+        ),
+    }
 
 
-def _stored_authority_invocation_contract_digest(
+def invocation_receipt_execution_identity(
     value: Mapping[str, Any],
-) -> str:
-    paired = value["paired_v0_contract"]
-    canonical_agent = (
-        str(value["authority_id"]).removesuffix("/v0")
-        if paired is None
-        else str(paired["authority_id"]).removesuffix("/v0")
-    )
-    return content_hash(
-        {
-            "contract_version": "1.0.0",
+) -> dict[str, Any]:
+    paired_contract = value["paired_v0_contract"]
+    paired_runtime = value["paired_v0_runtime"]
+    return {
+        "schema_version": "1.0.0",
+        "authority": {
             "authority_id": value["authority_id"],
-            "authority_kind": "baseline" if paired is None else "issue",
-            "canonical_agent": canonical_agent,
             "runtime_kind": value["runtime"]["runtime_kind"],
             "source_content_digest": value["source_content_digest"],
-            "execution_digest": value["execution_digest"],
-            "paired_v0_contract": paired,
+            "traffic_execution_digest": value["traffic_execution_digest"],
+            "provider_content_digest": value["runtime"][
+                "provider_content_digest"
+            ],
+        },
+        "paired_v0": (
+            None
+            if paired_contract is None
+            else {
+                "authority_id": paired_contract["authority_id"],
+                "runtime_kind": paired_runtime["runtime_kind"],
+                "source_content_digest": paired_contract[
+                    "source_content_digest"
+                ],
+                "traffic_execution_digest": paired_contract[
+                    "traffic_execution_digest"
+                ],
+                "provider_content_digest": paired_runtime[
+                    "provider_content_digest"
+                ],
+            }
+        ),
+    }
+
+
+def authority_traffic_execution_digest(authority: AuthoritySpec) -> str:
+    return content_hash(
+        {
+            "schema_version": "1.0.0",
+            "authority_id": authority.authority_id,
+            "runtime_kind": authority.runtime_kind,
+            "scenarios": [
+                {
+                    "scenario_id": scenario["id"],
+                    "attempts": [
+                        {
+                            "conversation_group": attempt[
+                                "conversation_group"
+                            ],
+                            "setup_steps": [
+                                {
+                                    "step_id": step["id"],
+                                    "request_digest": content_hash(
+                                        step["request"]
+                                    ),
+                                }
+                                for step in attempt["setup_steps"]
+                            ],
+                            "probe_steps": [
+                                {
+                                    "step_id": step["id"],
+                                    "request_digest": content_hash(
+                                        step["request"]
+                                    ),
+                                }
+                                for step in attempt["probe_steps"]
+                            ],
+                        }
+                        for attempt in scenario["attempts"]
+                    ],
+                }
+                for scenario in authority.validation_rules["scenarios"]
+            ],
         }
     )
 
@@ -1395,6 +1428,98 @@ def _response_bindings(invocation: Mapping[str, Any]) -> list[dict[str, Any]]:
                     }
                 )
     return result
+
+
+def _receipt_candidates(
+    root: Path,
+    *,
+    prepared: Mapping[str, Any],
+    prior_generations: Sequence[Mapping[str, Any]],
+    authority_ids: Sequence[str],
+) -> dict[str, list[tuple[str, Path, dict[str, Any]]]]:
+    repository = str(prepared["repository"])
+    generations = _known_generations(prepared, prior_generations)
+    candidates: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
+    for authority_id in authority_ids:
+        completed_digests: dict[str, set[str]] = {}
+        for generation in generations:
+            directory = (
+                root
+                / "invocation-receipts"
+                / repository.replace("/", "--")
+                / str(generation["pr_number"])
+                / str(generation["run_id"])
+                / authority_id.replace("/", "--")
+            )
+            for path in sorted(directory.glob("*.json")):
+                try:
+                    raw = read_json(path)
+                    reference = _receipt_reference(raw, path=path, root=root)
+                    value = load_invocation_receipt(reference, root=root)
+                except (ContractError, KeyError, OSError, ValueError):
+                    continue
+                if (
+                    value["repository"] != repository
+                    or value["pr_number"] != generation["pr_number"]
+                    or value["origin_run_id"] != generation["run_id"]
+                    or value["authority_id"] != authority_id
+                    or path.resolve() != _receipt_path(root, value).resolve()
+                ):
+                    raise ContractError(
+                        "Invocation receipt generation provenance changed"
+                    )
+                completed = str(value["completed_at"])
+                completed_digests.setdefault(completed, set()).add(
+                    str(value["receipt_digest"])
+                )
+                candidates.setdefault(authority_id, []).append(
+                    (completed, path.resolve(), value)
+                )
+        if any(len(digests) > 1 for digests in completed_digests.values()):
+            raise ContractError(
+                "Invocation receipts conflict within known generations"
+            )
+    return candidates
+
+
+def _known_generations(
+    prepared: Mapping[str, Any],
+    prior_generations: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    repository = str(prepared["repository"])
+    values = [
+        {
+            "repository": repository,
+            "pr_number": int(prepared["pr_number"]),
+            "run_id": str(prepared["run_id"]),
+        },
+        *[dict(item) for item in prior_generations],
+    ]
+    generations: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    for value in values:
+        try:
+            pr_number = int(value["pr_number"])
+            run_id = str(value["run_id"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ContractError("Validation generation reference is invalid") from error
+        if (
+            value.get("repository", repository) != repository
+            or pr_number < 1
+            or re.fullmatch(r"validation-[0-9a-f]{12}", run_id) is None
+        ):
+            raise ContractError("Validation generation reference is invalid")
+        key = (pr_number, run_id)
+        if key not in seen:
+            generations.append(
+                {
+                    "repository": repository,
+                    "pr_number": pr_number,
+                    "run_id": run_id,
+                }
+            )
+            seen.add(key)
+    return generations
 
 
 def _receipt_path(root: Path, value: Mapping[str, Any]) -> Path:

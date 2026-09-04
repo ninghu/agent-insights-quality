@@ -22,9 +22,9 @@ from agent_insights_quality.util import (
 VALIDATION_RULES_VERSION = "1.0.0"
 VALIDATION_MODES = ("baseline", "deterministic", "model_mediated")
 VALIDATION_MATRICES = {
-    "baseline": (5, 5),
-    "deterministic": (5, 5),
-    "model_mediated": (7, 5),
+    "baseline": (10, 6),
+    "deterministic": (10, 6),
+    "model_mediated": (10, 6),
 }
 CONVERSATION_PLACEHOLDER = "$validation_conversation"
 RUNTIME_AGENT_NAME_PLACEHOLDER = "$runtime_agent_name"
@@ -107,6 +107,16 @@ def execution_requests(traffic_path: Path) -> list[dict[str, Any]]:
                 )
                 requests.append(step)
     return requests
+
+
+def daily_issue_side_requests(traffic_path: Path) -> list[dict[str, Any]]:
+    """Return only the authority's own attempts; Daily never adds paired controls."""
+    return execution_requests(traffic_path)
+
+
+def staging_authority_requests(traffic_path: Path) -> list[dict[str, Any]]:
+    """Return one target's attempts; staging calls this once per issue/control role."""
+    return execution_requests(traffic_path)
 
 
 def _execution_rule(

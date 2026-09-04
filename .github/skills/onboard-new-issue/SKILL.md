@@ -39,8 +39,7 @@ Add one independently fixable issue only after human review.
     exact-bound completed authority invocations may be reused for verify-only recovery without new
     traffic. Verification persists independent `PASS`, `FAIL`, or `INCOMPLETE` authority results and
     retries only missing, `INCOMPLETE`, or binding-changed authorities.
-15. Require exact issue/v0 discrimination, exact response-bound evidence, explicit human approval, and the single
-    create-once approved validation record. Never use the preserved old West US 2 environment as a
-    fallback.
+15. Require exact issue/v0 discrimination and exact response-bound advisory evidence. Never use the
+    preserved old West US 2 environment as a fallback.
 
 Never add a multi-root issue, compatibility alias, telemetry injection, or private data.

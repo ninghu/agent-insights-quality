@@ -342,8 +342,8 @@
       {
         "id": "issue-008-defect-path",
         "validation_mode": "model_mediated",
-        "n": 7,
-        "k": 5,
+        "n": 10,
+        "k": 6,
         "fixtures": [],
         "attempts": [
           {
@@ -1171,6 +1171,360 @@
                 }
               }
             ]
+          },
+          {
+            "index": 8,
+            "conversation_group": "issue-008-attempt-08",
+            "parameters": {
+              "case_id": "case-08",
+              "source_request_ids": [
+                "issue-008-request-3"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-008-setup-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-008-probe-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-103 open. Book slot-demo-103 with Dr. Rivera."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "action",
+                        "provider",
+                        "slot",
+                        "message"
+                      ],
+                      "properties": {
+                        "action": {
+                          "type": "string"
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "slot": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "action": "create_appointment",
+                      "provider": "Dr. Rivera",
+                      "slot": "slot-demo-103",
+                      "message": "Please confirm"
+                    }
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 9,
+            "conversation_group": "issue-008-attempt-09",
+            "parameters": {
+              "case_id": "case-09",
+              "source_request_ids": [
+                "issue-008-request-4"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-008-setup-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-008-probe-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-104 open. Book slot-demo-104 with Dr. Rivera."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "action",
+                        "provider",
+                        "slot",
+                        "message"
+                      ],
+                      "properties": {
+                        "action": {
+                          "type": "string"
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "slot": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "action": "create_appointment",
+                      "provider": "Dr. Rivera",
+                      "slot": "slot-demo-104",
+                      "message": "Please confirm"
+                    }
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 10,
+            "conversation_group": "issue-008-attempt-10",
+            "parameters": {
+              "case_id": "case-10",
+              "source_request_ids": [
+                "issue-008-request-5"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-008-setup-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-008-probe-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-105 open. Book slot-demo-105 with Dr. Rivera."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "action",
+                        "provider",
+                        "slot",
+                        "message"
+                      ],
+                      "properties": {
+                        "action": {
+                          "type": "string"
+                        },
+                        "provider": {
+                          "type": "string"
+                        },
+                        "slot": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "action": "create_appointment",
+                      "provider": "Dr. Rivera",
+                      "slot": "slot-demo-105",
+                      "message": "Please confirm"
+                    }
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
           }
         ],
         "healthy_predicate": null,
@@ -1183,7 +1537,10 @@
             "issue-008-probe-04-01",
             "issue-008-probe-05-01",
             "issue-008-probe-06-01",
-            "issue-008-probe-07-01"
+            "issue-008-probe-07-01",
+            "issue-008-probe-08-01",
+            "issue-008-probe-09-01",
+            "issue-008-probe-10-01"
           ],
           "required_surfaces": [
             "semantic"
@@ -1192,9 +1549,9 @@
         "v0_control_predicate": {
           "kind": "zero_defect_observations"
         },
-        "execution_digest": "sha256:194848542be3bc26998bba7222123808f92f3ab9ad12bf1b0ba56219b97206c2"
+        "execution_digest": "sha256:94debe8e40e01595848799e2e166add1502923b090b89e00292591ba247d3202"
       }
     ],
-    "execution_digest": "sha256:17c19e399a3391d9ead1f8c2d24514b642d462e9bd0397ce30897a883d7cb1cf"
+    "execution_digest": "sha256:0a45f479a4f678f1f7a539faff0de31ff1992f1eedca98dacfffa41956036500"
   }
 }

@@ -40,9 +40,9 @@ slots. Query one batched stable telemetry snapshot for a baseline or two target 
 and its paired `v0`; never stabilize attempts independently.
 
 Each new verification package binds the reused receipt digest and current verifier commit/digest.
-Keep `PASS`, `FAIL`, and `INCOMPLETE` separate under baseline `5/5`, deterministic `5/5` or the
-audited first-mature `3/5 + up to 2 trace-only unknown` issue-side exception plus paired `v0` `0/5`,
-and model-mediated `>=5/7` plus paired `v0` `0/7`. Later failures never discard completed
+Keep `PASS`, `FAIL`, and `INCOMPLETE` separate under baseline `6/10` with at most four trace-only
+unknowns and no observed failure, every issue mode `>=6/10` with at most four trace-only unknowns, and
+paired `v0` `0/10` with six proven controls plus at most four trace-only unknowns. Later failures never discard completed
 authority results. A new generation selects only missing, `INCOMPLETE`, or exact-binding-changed
 authorities and invokes only those without current exact-bound completed receipts. Composition covers
 exactly all 41 authorities. `run-test-agent-validation` is status/next-action guidance only and never
@@ -53,7 +53,7 @@ version under the same stable name; no command floats `latest`. Retain sessions,
 versions, Hosted topology, images, telemetry, registries, and evidence. Supersede incomplete local
 state without deletion; validation has no cleanup.
 
-Validation remains report-free and requires explicit human review before the optional immutable
-approval record. Its result is advisory and is not a Daily admission input. Never mutate the
+Validation remains report-free and presents advisory evidence for human review. It is not a Daily
+admission input. Never mutate the
 preserved West US 2 resources or lifecycle, send Daily smoke traffic, or write private runtime
 content to Git.

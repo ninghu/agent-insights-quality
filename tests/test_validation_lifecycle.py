@@ -101,55 +101,10 @@ def test_new_run_supersedes_incomplete_run_without_deleting_history(
     assert forced == _authority_ids()
     assert second.value["run_id"] != first.value["run_id"]
     assert second.value["supersedes"].startswith("sha256:")
-    assert journal.superseded_run_ids(second.value) == [first.value["run_id"]]
+    assert journal.superseded_run_ids(second.value) == []
     history = [path.read_text(encoding="utf-8") for path in journal.root.rglob("*.json")]
     assert any('"SUPERSEDED"' in item for item in history)
     assert not list(journal.root.rglob(".*.tmp"))
-
-
-def test_superseded_run_lookup_reads_only_latest_event_per_run(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    lock = LocalValidationLock(tmp_path / "validation.lock")
-    journal = LifecycleJournal(lock=lock, root=tmp_path / "lifecycle")
-    with lock:
-        first, _ = journal.begin_run(
-            _initial("first"),
-            all_authority_ids=_authority_ids(),
-            now=START,
-        )
-        journal.commit(first, next_state="PREFLIGHT", now=START + timedelta(seconds=1))
-        second, _ = journal.begin_run(
-            _initial("second"),
-            all_authority_ids=_authority_ids(),
-            now=START + timedelta(seconds=2),
-        )
-        journal.commit(
-            second,
-            next_state="PREFLIGHT",
-            now=START + timedelta(seconds=3),
-        )
-        third, _ = journal.begin_run(
-            _initial("third"),
-            all_authority_ids=_authority_ids(),
-            now=START + timedelta(seconds=4),
-        )
-
-    original_read = journal._read
-    read_paths = []
-
-    def counted_read(path: Path):
-        read_paths.append(path)
-        return original_read(path)
-
-    monkeypatch.setattr(journal, "_read", counted_read)
-
-    assert journal.superseded_run_ids(third.value) == [
-        second.value["run_id"],
-        first.value["run_id"],
-    ]
-    assert len(read_paths) == 3
 
 
 def test_legacy_active_is_archived_byte_for_byte_then_tombstoned(

@@ -8,7 +8,6 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-from agent_insights_quality.baseline_policy import baseline_terminal_decision
 from agent_insights_quality.scoring import (
     ASSESSMENT_FIELDS,
     ATTRIBUTABLE_FINDING_TYPES,
@@ -35,7 +34,8 @@ from agent_insights_quality.azure_regions import (
 )
 from agent_insights_quality.validation_rules import issue_observation_context
 from agent_insights_quality.validation_trace_gap_policy import (
-    daily_issue_side_decision,
+    daily_target_decision,
+    validate_trace_maturity_proof,
 )
 
 REQUIRED_FIELDS = set(ASSESSMENT_FIELDS)
@@ -83,11 +83,7 @@ def resolve_test_region(
     return canonical
 
 
-def _request_summaries_complete(
-    value: dict[str, Any],
-    *,
-    allow_one_usable_unknown: bool = False,
-) -> bool:
+def _request_summaries_complete(value: dict[str, Any]) -> bool:
     requests = value.get("endpoint_request_count")
     summaries = value.get("endpoint_request_summaries")
     if not isinstance(requests, int) or not isinstance(summaries, list):
@@ -99,7 +95,7 @@ def _request_summaries_complete(
             not isinstance(summary, dict)
             or summary.get("request_index") != index
             or summary.get("response_count") != 1
-            or not isinstance(summary.get("usable_response"), bool)
+            or summary.get("usable_response") is not True
         ):
             return False
         trace_results = summary.get("trace_assertion_results")
@@ -130,12 +126,7 @@ def _request_summaries_complete(
             )
         ):
             return False
-    unusable_count = sum(
-        summary.get("usable_response") is False for summary in summaries
-    )
-    return unusable_count == 0 or (
-        allow_one_usable_unknown and unusable_count == 1
-    )
+    return True
 
 
 def _runtime_evidence_complete(
@@ -146,17 +137,6 @@ def _runtime_evidence_complete(
     requests = value.get("endpoint_request_count")
     responses = value.get("endpoint_response_count")
     usable = value.get("endpoint_usable_response_count")
-    context = (
-        issue_observation_context(traffic_path)
-        if traffic_path is not None
-        else None
-    )
-    allow_usable_unknown = bool(
-        context is not None
-        and context["validation_mode"] == "model_mediated"
-        and set(context["required_surfaces"]) == {"semantic"}
-        and usable == requests - 1
-    )
     complete = (
         isinstance(requests, int)
         and not isinstance(requests, bool)
@@ -167,17 +147,13 @@ def _runtime_evidence_complete(
         and isinstance(usable, int)
         and not isinstance(usable, bool)
         and usable > 0
-        and requests == responses
-        and (usable == requests or allow_usable_unknown)
+        and requests == responses == usable
         and value.get("trace_contract_verified") is True
-        and _request_summaries_complete(
-            value,
-            allow_one_usable_unknown=allow_usable_unknown,
-        )
+        and _request_summaries_complete(value)
     )
     if not complete or traffic_path is None:
         return complete
-    assert context is not None
+    context = issue_observation_context(traffic_path)
     if {
         key: value.get(key)
         for key in context
@@ -188,24 +164,26 @@ def _runtime_evidence_complete(
         for item in value["endpoint_request_summaries"]
         if item.get("activation_gate") is True
     ]
-    if allow_usable_unknown and sum(
-        item.get("usable_response") is True
-        and item.get("semantic_assertions_passed")
-        == item.get("semantic_assertion_count")
-        for item in observations
-    ) < int(context["k"]):
+    acceptance_value = value.get("trace_unknown_acceptance")
+    try:
+        maturity_digest = validate_trace_maturity_proof(
+            value.get("trace_maturity_proof")
+        )
+    except ContractError:
         return False
-    decided, acceptance = daily_issue_side_decision(
+    decided, acceptance = daily_target_decision(
+        target_role="issue",
         validation_mode=str(context["validation_mode"]),
         n=int(context["n"]),
         k=int(context["k"]),
         required_surfaces=context["required_surfaces"],
         summaries=observations,
         identity_verified=value.get("trace_contract_verified") is True,
+        maturity_proof_digest=maturity_digest,
     )
     return (
         decided
-        and value.get("issue_trace_gap_acceptance") == acceptance
+        and acceptance_value == acceptance
     )
 
 
@@ -221,39 +199,34 @@ def _baseline_runtime_evidence_complete(
         for item in summaries or []
         if isinstance(item, dict) and item.get("activation_gate") is True
     ]
-    terminal_mode = agent["baseline_contract"]["terminal_response"]
-    strict_terminal_evidence = (
-        _runtime_evidence_complete(value)
-        and isinstance(trace, dict)
-        and isinstance(summaries, list)
-        and bool(observations)
-        and all(
-            int(item.get("semantic_assertion_count") or 0) >= 1
-            and item.get("semantic_assertions_passed")
-            == item.get("semantic_assertion_count")
-            and item.get("trace_assertions_passed")
-            == item.get("trace_assertion_count")
-            and all(
-                result.get("passed") is True
-                and result.get("evidence_sufficient") is True
-                for result in item.get("assertion_results", [])
-            )
-            and all(
-                result.get("passed") is True
-                and result.get("evidence_sufficient") is True
-                for result in item.get("trace_assertion_results", [])
-            )
-            for item in observations
+    acceptance_value = value.get("trace_unknown_acceptance")
+    try:
+        maturity_digest = validate_trace_maturity_proof(
+            value.get("trace_maturity_proof")
         )
+    except ContractError:
+        return False
+    decided, acceptance = daily_target_decision(
+        target_role="baseline",
+        validation_mode="baseline",
+        n=int(value.get("n") or 0),
+        k=int(value.get("k") or 0),
+        required_surfaces=["semantic", "trace"],
+        summaries=observations,
+        identity_verified=value.get("trace_contract_verified") is True,
+        maturity_proof_digest=maturity_digest,
     )
-    terminal_decision = baseline_terminal_decision(
-        request_count=int(request_count or 0),
-        terminal_mode=terminal_mode,
-        trace_evidence=trace if isinstance(trace, dict) else {},
-        strict_evidence=strict_terminal_evidence,
+    unknown_count = (
+        len(acceptance["unknown_attempt_indices"])
+        if acceptance is not None
+        else 0
     )
+    required_count = int(request_count or 0) - unknown_count
+    terminal_mode = agent["baseline_contract"]["terminal_response"]
     if (
         not _runtime_evidence_complete(value)
+        or not decided
+        or acceptance_value != acceptance
         or sum(
             item.get("activation_gate") is True
             for item in value.get("endpoint_request_summaries", [])
@@ -268,21 +241,34 @@ def _baseline_runtime_evidence_complete(
             != item.get("semantic_assertion_count")
             for item in observations
         )
-        or terminal_decision.status not in {"complete", "accepted_unknown"}
+        or int(trace.get("terminal_response_count") or 0) < required_count
+        or int(trace.get("terminal_output_count") or 0) < required_count
+        or int(trace.get("unhandled_error_count") or 0) != 0
     ):
+        return False
+    if terminal_mode == "explicit_span_attributes":
+        if (
+            int(trace.get("explicit_terminal_success_count") or 0)
+            < required_count
+            or int(trace.get("explicit_terminal_output_count") or 0)
+            < required_count
+        ):
+            return False
+    elif int(trace.get("assistant_response_count") or 0) < required_count:
         return False
     if agent["baseline_contract"]["semantic_assertions"] == "required_per_request":
         if len(observations) != agent["baseline_contract"]["request_count"]:
             return False
     if agent["type"] == "prompt":
         return (
-            int(trace.get("operation_count") or 0) == request_count
+            int(trace.get("operation_count") or 0) >= required_count
             and not trace.get("tool_call_counts")
             and int(trace.get("tool_response_count") or 0) == 0
             and all(
                 item.get("direct_terminal_response_count") == 1
                 and item.get("function_call_count") == 0
                 for item in summaries
+                if item.get("error_code") != "missing_evidence"
             )
         )
     return True

@@ -21,10 +21,6 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
     assert policy.max_parallel_agents == 5
     assert policy.insight_lookback_hours == 0.1
     assert policy.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET == "g30"
-    assert (
-        policy.approved_record_container
-        == "test-agent-validation-approved-records-swedencentral-g30"
-    )
     assert policy.storage_account_prefix == FIXED_STORAGE_ACCOUNT_PREFIX == "aiqsweart"
     assert (
         policy.storage_resource_role
@@ -73,11 +69,6 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
         ("storage_resource_role", "legacy-storage", "reviewed value"),
         ("quality_artifact_container", "legacy-artifacts", "not reviewed"),
         ("deployment_registry_container", "legacy-registry", "not reviewed"),
-        (
-            "approved_record_container",
-            "test-agent-validation-approved-records",
-            "reviewed environment namespace",
-        ),
     ],
 )
 def test_automation_policy_rejects_unreviewed_values(

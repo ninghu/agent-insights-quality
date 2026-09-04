@@ -101,7 +101,7 @@
         "steps"
       ],
       "properties": {
-        "index": {"type": "integer", "minimum": 1, "maximum": 7},
+        "index": {"type": "integer", "minimum": 1, "maximum": 10},
         "evidence_sufficient": {"type": "boolean"},
         "observation": {"type": "boolean"},
         "error_code": {"$ref": "#/$defs/errorCode"},
@@ -123,13 +123,13 @@
         },
         "issue_attempts": {
           "type": "array",
-          "minItems": 5,
-          "maxItems": 7,
+          "minItems": 10,
+          "maxItems": 10,
           "items": {"$ref": "#/$defs/attempt"}
         },
         "v0_attempts": {
           "type": "array",
-          "maxItems": 7,
+          "maxItems": 10,
           "items": {"$ref": "#/$defs/attempt"}
         }
       }

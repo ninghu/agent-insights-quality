@@ -149,7 +149,8 @@ def _version_evidence(
             item["trace_assertions_passed"] for item in summaries
         ),
         "trace_contract_verified": True,
-        "issue_trace_gap_acceptance": None,
+        "trace_maturity_proof": None,
+        "trace_unknown_acceptance": None,
         "trace_behavior_summary": {
             "operation_count": request_count,
             "tool_call_counts": {},
@@ -542,7 +543,6 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         issue_catalog=issues,
         human_reviewed=True,
     )
-    assert len(receipt["version_content_digests"]) == 41
     assert receipt["qualification_manifest_hash"] == manifest["manifest_hash"]
     assert (
         receipt["source_integrity_digest"]

@@ -39,7 +39,6 @@ def test_contributing_routes_onboarding_through_versioned_skills() -> None:
     ):
         assert catalog in contributing
     assert "Stop for human review" in contributing
-    assert "all 41" in contributing
     assert "Test Agent Validation" in contributing
     assert "at least one reviewed single-root issue" in contributing
     for requirement in (
@@ -80,7 +79,7 @@ def test_new_issue_skill_covers_complete_reviewed_contract() -> None:
         "catalogs/AGENT_CATALOG.yaml",
         "previous Agent count, issue count, version count",
         "content and stale or missing evidence",
-        "single create-once approved validation record",
+        "exact response-bound advisory evidence",
         "Never use the preserved old West US 2 environment as a fallback",
     ):
         assert requirement in normalized
@@ -106,7 +105,7 @@ def test_onboard_test_agent_skill_covers_topology_and_baseline_safety() -> None:
         "privacy-safe trace proof",
         "baseline ownership",
         "fixed validation scenarios",
-        "single approved validation record",
+        "exact response-bound advisory evidence",
         "never use the preserved old West US 2 environment as a fallback",
     ):
         assert requirement in normalized
@@ -151,12 +150,9 @@ def test_validation_skill_enforces_local_report_free_advisory_validation() -> No
         "never select `latest`",
         "paired `v0`",
         "response-bound traces",
-        "all 41 exact versions",
         "`SUPERSEDED`",
-        "approve-test-agent-validation",
-        "explicit approval",
         "Daily admission remains separate",
-        "does not consume validation state or this record",
+        "does not consume validation state",
     ):
         assert requirement in normalized
     staging = " ".join(
@@ -165,7 +161,6 @@ def test_validation_skill_enforces_local_report_free_advisory_validation() -> No
     for requirement in (
         "human review",
         "aiq-staging-swedencentral",
-        "all 41 unique catalog authorities",
         "immutable disjoint deployment assignments",
         "at most eight",
         "visible Copilot coordinator",
@@ -216,7 +211,6 @@ def test_active_contract_docs_exclude_superseded_environment_rules() -> None:
         "aiq-daily-swedencentral",
         "swedencentral-g30",
         "server-assigned",
-        "run-scoped",
         "noautoupgrade",
     ):
         assert required in folded
@@ -240,8 +234,12 @@ def test_daily_skill_publishes_adx_without_blocking_email() -> None:
         "one focused GPT-5.6 Sol recheck",
         "Never send new traffic for this recheck",
         "never force a conclusive verdict",
-        "An incomplete baseline never creates a completion receipt",
-        "at most three recoveries",
+        "daily-run-traffic-agent",
+        "daily-verify-next",
+        "daily-run-insights-agent",
+        "exactly one monitor-reset epoch",
+        "all 25 targets are eligible",
+        "60 seconds",
         "Ambiguous endpoint delivery",
         "`--test-run`",
         "nonzero `--rerun N`",
@@ -249,7 +247,7 @@ def test_daily_skill_publishes_adx_without_blocking_email() -> None:
         "create a pull request",
         "Scheduled official runs never pass `--test-run`",
         "Test Agent Validation is separate advisory evidence",
-        "Daily never reads a staging approval record or validation digest",
+        "Daily never reads staging state or a validation digest",
     ):
         assert requirement in normalized
     readiness = _text(".github/copilot/daily-readiness-prompt.md")

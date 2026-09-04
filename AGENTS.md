@@ -16,8 +16,8 @@ Agents and 36 reviewed, single-root issues.
   present in committed sanitized daily reports. Never publish private assessment packages or
   work-item context to ADX.
 - Keep email requests, deployment registries, run manifests, assessment packages, assessments,
-  legacy promotion receipts, Test Agent Validation lifecycle/history/desired-state/receipts/evidence, approved
-  validation records, provider receipts,
+  legacy promotion receipts, Test Agent Validation lifecycle/history/desired-state/receipts/evidence,
+  provider receipts,
   work-item snapshots, ADX publication receipts, and rendered dashboards under the durable user-level
   `~/.aiq-runtime/agent-insights-quality/` root shared by all worktrees.
 - Canonical daily and staging deployment registries live in the dedicated Sweden Central `g30`
@@ -29,7 +29,7 @@ Agents and 36 reviewed, single-root issues.
 - `catalogs/AGENT_CATALOG.yaml` defines the five fixed Agents and profile contract.
 - `catalogs/ISSUE_CATALOG.yaml` defines the 36 fixed issue contracts.
 - Agent and Issue catalogs, Agent implementations, validation modes/rules, schemas, infrastructure,
-  score policy, and approved validation records require human review.
+  and score policy require human review.
 - Do not add compatibility readers or restore superseded identifiers and formats.
 - Every issue folder is the complete deployable source authority for that version: Prompt issues own a
   full `definition.json`; Hosted issues own a full `source/` tree containing only that defect.
@@ -50,9 +50,10 @@ Agents and 36 reviewed, single-root issues.
   its display through Azure location metadata, and use registry/config values only as cross-checks.
   Never hardcode a renderer fallback or add multi-region behavior.
 - Validation deploys 41 independent endpoints: five baselines plus all 36 issues.
-- Baselines require `5/5` healthy attempts. Deterministic issues require `5/5`, or the audited
-  first-mature `3/5 + up to 2 trace-only unknown` issue-side exception, with paired `v0` `0/5`;
-  model-mediated issues require `5/7` with paired `v0` `0/7`.
+- Baselines require `6/10` proven healthy attempts with at most four trace-only unknowns and no
+  observed failure. Every issue mode requires `>=6/10`; complete non-observations count as misses,
+  while at most four trace-only unknowns may be accepted. Paired `v0` requires `0/10` observations
+  with six proven controls plus at most four trace-only unknowns.
 - Validation mode is reviewed catalog data bound into `execution_digest`; never infer or reclassify
   it from runtime results, resample a miss, or lower `n`/`k`.
 - A visible Copilot coordinator publishes immutable assignments, releases its lock, remains
@@ -75,16 +76,20 @@ Agents and 36 reviewed, single-root issues.
   receipt extraction is one-time, atomic, and fenced against stale sub-sessions.
 - A reused receipt proves the traffic-generation/execution binding only. Every new verification
   package binds the receipt digest and current verifier commit/digest.
+- Fresh advisory validation evaluates all 41 authorities. Automatic recovery may reuse only the
+  immediately preceding generation's flattened exact result and receipt references, including
+  paired `v0`; no global PASS history is consulted.
 - Verification uses at most eight visible sub-sessions. Each claims one authority at a time, runs no
   internal concurrency, deploy, or traffic, and persists one immutable generation-fenced result
   before claiming another.
 - Query telemetry once per target as a batched stability snapshot: one baseline batch, or two issue
   batches covering the issue and paired `v0`. Never stabilize attempts independently.
-- Keep authority `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply baseline `5/5`, deterministic
-  `5/5` or the audited trace-only issue-side exception plus paired `v0` `0/5`, and model-mediated
-  `>=5/7` plus paired `v0` `0/7`.
-- A later failure never discards completed authority results. Retry only missing, `INCOMPLETE`, or
-  exact-binding-changed authorities; unchanged definitive `PASS` and `FAIL` results are reusable.
+- Keep authority `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply baseline `6/10` with at most four
+  trace-only unknowns, every issue at `>=6/10` with at most four trace-only unknowns, and paired `v0`
+  `0/10` with six proven controls plus at most four trace-only unknowns.
+- A later failure never discards completed authority results. Retry prior non-PASS, missing,
+  explicitly invalidated, policy-affected, or execution-identity-changed authorities. A policy or
+  verifier change may select receipt-only verification but never Agent traffic.
 - A later generation selects only changed, incomplete, or missing authorities. Invoke only those
   without current exact-bound completed receipts; assign the rest verify-only work with no new
   endpoint traffic.
@@ -157,8 +162,8 @@ Agents and 36 reviewed, single-root issues.
 6. Keep atomic lifecycle, history, desired state, receipts, registries, and evidence under the
    environment-namespaced durable runtime root. Retain the durable Project, Agent topology, sessions,
    responses, images, telemetry, and evidence; supersede incomplete local state without deletion.
-7. After explicit human approval, create the single minimal create-once approved validation record.
-   GitHub has no validation gate and merge remains manual.
+7. Present exact advisory validation status for human review. GitHub has no validation gate and
+   merge remains manual.
 8. Preserve the legacy West US 2 resources and lifecycle state unchanged. Sweden staging is the only
    active validation path and is advisory to the human Daily decision; it is never a fallback to the
    legacy environment.

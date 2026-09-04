@@ -220,11 +220,11 @@ class FakeRuntime:
         stabilization_seconds: int,
         on_first_pass,
         on_stable,
+        on_maturity_proof=None,
         requests: list[dict] | None = None,
         minimum_passing_trace_observations: int | None = None,
-        allow_deterministic_trace_gap: bool = False,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
-        del minimum_passing_trace_observations, allow_deterministic_trace_gap
+        del minimum_passing_trace_observations, on_maturity_proof
         requests = requests or execution_requests(traffic_path)
         assert agent_name.endswith("-agent")
         assert foundry_version
@@ -399,8 +399,13 @@ class TimedTraceRuntime(FakeRuntime):
         window_start=None,
         window_end=None,
     ):
-        assert operation_ids == (f"{1:032x}",)
-        assert response_references == (f"{self.foundry_version}-0",)
+        assert operation_ids == tuple(
+            f"{index:032x}" for index in range(1, len(operation_ids) + 1)
+        )
+        assert response_references == tuple(
+            f"{self.foundry_version}-{index}"
+            for index in range(len(response_references))
+        )
         assert foundry_version == self.foundry_version
         assert agent_name == self.agent_name
         assert window_start == "2026-08-24T10:00:00+00:00"
@@ -469,6 +474,7 @@ def _write_timed_trace_traffic(
     with_trace_assertions: bool = True,
     activation_gate: bool | None = None,
 ) -> None:
+    attempt_count = 10 if baseline else 1
     expected = {"http_status": 200}
     if activation_gate is None:
         activation_gate = with_trace_assertions
@@ -483,15 +489,18 @@ def _write_timed_trace_traffic(
                 "count": 1,
             }
         ]
-    request = {
-        "id": "request_A1b2C3d4",
-        "request": {"body": {"input": "synthetic request"}},
-        "expected": expected,
-    }
+    requests = [
+        {
+            "id": f"request_A1b2C3d4_{index:02d}",
+            "request": {"body": {"input": f"synthetic request {index}"}},
+            "expected": expected,
+        }
+        for index in range(1, attempt_count + 1)
+    ]
     path.write_text(
         json.dumps(
             {
-                "requests": [request],
+                "requests": requests,
                 "validation_rules": {
                     "schema_version": "1.0.0",
                     "scenarios": [
@@ -500,22 +509,32 @@ def _write_timed_trace_traffic(
                             "validation_mode": (
                                 "baseline" if baseline else "deterministic"
                             ),
-                            "n": 1,
-                            "k": 1,
+                            "n": attempt_count,
+                            "k": 6 if baseline else 1,
                             "fixtures": [],
                             "attempts": [
                                 {
-                                    "index": 1,
-                                    "conversation_group": "synthetic-attempt-01",
-                                    "parameters": {"case_id": "case-01"},
+                                    "index": index,
+                                    "conversation_group": (
+                                        f"synthetic-attempt-{index:02d}"
+                                    ),
+                                    "parameters": {
+                                        "case_id": f"case-{index:02d}"
+                                    },
                                     "setup_steps": [],
                                     "probe_steps": [
                                         {
                                             **request,
-                                            "id": "synthetic-probe-01",
+                                            "id": (
+                                                f"synthetic-probe-{index:02d}"
+                                            ),
                                         }
                                     ],
                                 }
+                                for index, request in enumerate(
+                                    requests,
+                                    start=1,
+                                )
                             ],
                             "healthy_predicate": (
                                 {"kind": "all_probe_assertions_pass"}
@@ -574,7 +593,7 @@ def _timed_version_kwargs(
             "name": agent_name,
             "type": agent_type,
             "baseline_contract": {
-                "request_count": 1,
+                "request_count": 10 if baseline else 1,
                 "terminal_response": (
                     "direct_prompt"
                     if agent_type == "prompt"
@@ -627,7 +646,7 @@ def test_support_baseline_uses_request_bound_trace_operations() -> None:
         ),
     )
 
-    assert operations[::2] == (("invoke_agent", "chat"),) * 5
+    assert operations[::2] == (("invoke_agent", "chat"),) * 10
     assert operations[1:8:2] == (
         ("invoke_agent", "execute_tool", "chat"),
     ) * 4
@@ -833,14 +852,18 @@ def test_hosted_no_assertion_mapping_stabilizes_before_cards(
     foundry_version: str,
     baseline: bool,
 ) -> None:
-    reference = f"{foundry_version}-0"
-    first = _timed_trace_row(
-        "lookup",
-        timestamp="2026-08-29T12:00:00Z",
-        matched_reference=reference,
-    )
+    attempt_count = 10 if baseline else 1
+    first = [
+        _timed_trace_row(
+            "lookup",
+            timestamp="2026-08-29T12:00:00Z",
+            operation_id=f"{index:032x}",
+            matched_reference=f"{foundry_version}-{index - 1}",
+        )
+        for index in range(1, attempt_count + 1)
+    ]
     runtime = TimedTraceRuntime(
-        lambda _elapsed: [first],
+        lambda _elapsed: first,
         agent_name=agent_name,
         foundry_version=foundry_version,
         baseline=baseline,
@@ -883,20 +906,24 @@ def test_hosted_no_assertion_late_operation_is_drained_and_resume_is_idempotent(
     foundry_version: str,
     baseline: bool,
 ) -> None:
-    reference = f"{foundry_version}-0"
-    first = _timed_trace_row(
-        "lookup",
-        timestamp="2026-08-29T12:00:00Z",
-        matched_reference=reference,
-    )
+    attempt_count = 10 if baseline else 1
+    first = [
+        _timed_trace_row(
+            "lookup",
+            timestamp="2026-08-29T12:00:00Z",
+            operation_id=f"{index:032x}",
+            matched_reference=f"{foundry_version}-{index - 1}",
+        )
+        for index in range(1, attempt_count + 1)
+    ]
     duplicate = _timed_trace_row(
         "lookup",
         timestamp="2026-08-29T12:02:15Z",
-        operation_id=f"{2:032x}",
-        matched_reference=reference,
+        operation_id=f"{attempt_count + 1:032x}",
+        matched_reference=f"{foundry_version}-0",
     )
     runtime = TimedTraceRuntime(
-        lambda elapsed: [first] if elapsed < 135 else [first, duplicate],
+        lambda elapsed: first if elapsed < 135 else [*first, duplicate],
         agent_name=agent_name,
         foundry_version=foundry_version,
         baseline=baseline,
@@ -1064,7 +1091,7 @@ def test_runner_executes_agents_sequentially_without_internal_fanout() -> None:
         ("finance-agent", "issue-019", "trace"),
     ],
 )
-def test_model_mediated_daily_uses_five_of_seven_reviewed_observations(
+def test_all_issue_modes_use_six_of_ten_reviewed_observations(
     agent_name: str,
     issue_id: str,
     surface: str,
@@ -1083,7 +1110,7 @@ def test_model_mediated_daily_uses_five_of_seven_reviewed_observations(
                 for index, summary in enumerate(summaries)
                 if summary.activation_gate
             ]
-            for index in observation_indexes[-2:]:
+            for index in observation_indexes[-4:]:
                 summaries[index] = replace(
                     summaries[index],
                     semantic_assertions_passed=0,
@@ -1097,7 +1124,7 @@ def test_model_mediated_daily_uses_five_of_seven_reviewed_observations(
                 )
             return replace(
                 evidence,
-                semantic_assertions_passed=evidence.semantic_assertions_passed - 2,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 4,
                 request_summaries=tuple(summaries),
             )
 
@@ -1111,7 +1138,7 @@ def test_model_mediated_daily_uses_five_of_seven_reviewed_observations(
                 for index, request in enumerate(requests)
                 if request["expected"]["activation_gate"]
             ]
-            for index in observation_indexes[-2:]:
+            for index in observation_indexes[-4:]:
                 assertions = list(results[index])
                 assertions[0] = replace(assertions[0], passed=False)
                 results[index] = tuple(assertions)
@@ -1148,19 +1175,19 @@ def test_model_mediated_daily_uses_five_of_seven_reviewed_observations(
         for summary in issue_observations
     )
     assert result.baseline.status == "passed"
-    assert len(baseline_observations) == 5
-    assert result.issues[0].status == "observed"
-    assert len(issue_observations) == 7
-    assert observed == 5
+    assert len(baseline_observations) == 10
+    assert result.issues[0].status == "inconclusive"
+    assert len(issue_observations) == 10
+    assert observed == 6
     assert runtime.invoked == ["v0", issue_id]
 
 
-def test_model_mediated_daily_does_not_resample_four_of_seven_misses() -> None:
+def test_issue_six_of_ten_does_not_resample_five_observations() -> None:
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
     issue_id = "issue-004"
 
-    class FourOfSevenRuntime(FakeRuntime):
+    class FiveOfTenRuntime(FakeRuntime):
         def invoke_version(self, **kwargs) -> InvocationEvidence:
             evidence = super().invoke_version(**kwargs)
             if kwargs["foundry_version"] != issue_id:
@@ -1171,7 +1198,7 @@ def test_model_mediated_daily_does_not_resample_four_of_seven_misses() -> None:
                 for index, summary in enumerate(summaries)
                 if summary.activation_gate
             ]
-            for index in observation_indexes[-3:]:
+            for index in observation_indexes[-5:]:
                 summaries[index] = replace(
                     summaries[index],
                     semantic_assertions_passed=0,
@@ -1185,11 +1212,11 @@ def test_model_mediated_daily_does_not_resample_four_of_seven_misses() -> None:
                 )
             return replace(
                 evidence,
-                semantic_assertions_passed=evidence.semantic_assertions_passed - 3,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 5,
                 request_summaries=tuple(summaries),
             )
 
-    runtime = FourOfSevenRuntime()
+    runtime = FiveOfTenRuntime()
     result = execute_agent(
         agent_name="weather-agent",
         agents=agents,
@@ -1208,11 +1235,11 @@ def test_model_mediated_daily_does_not_resample_four_of_seven_misses() -> None:
     ]
     assert issue.status == "inconclusive"
     assert issue.error_code == "issue_activation_failed"
-    assert len(observations) == 7
+    assert len(observations) == 10
     assert sum(
         summary.semantic_assertions_passed == summary.semantic_assertion_count
         for summary in observations
-    ) == 4
+    ) == 5
     assert runtime.invoked == ["v0", issue_id]
 
 
@@ -1845,8 +1872,8 @@ def test_pending_insight_start_from_crash_reuses_endpoint_evidence(
         checkpoint_store=store,
     )
     assert ("weather-agent", "v0") not in runtime.invoked_pairs
-    assert runtime.clean_agents.count("weather-agent") == 1
-    assert runtime.reset_agents.count("weather-agent") == 0
+    assert runtime.clean_agents.count("weather-agent") == 2
+    assert runtime.reset_agents.count("weather-agent") == 1
 
 
 def test_resume_waits_before_first_version_without_checkpoint(
@@ -1978,25 +2005,26 @@ def test_baseline_assertion_failure_is_incomplete() -> None:
             ].parent.name != "v0":
                 return evidence
             summaries = list(evidence.request_summaries)
-            observation_index = next(
+            observation_indexes = [
                 index
                 for index, summary in enumerate(summaries)
                 if summary.activation_gate
-            )
-            summaries[observation_index] = replace(
-                summaries[observation_index],
-                semantic_assertions_passed=0,
-                assertion_results=(
-                    SemanticAssertionEvidence(
-                        "synthetic_contract",
-                        False,
-                        True,
+            ]
+            for observation_index in observation_indexes[-5:]:
+                summaries[observation_index] = replace(
+                    summaries[observation_index],
+                    semantic_assertions_passed=0,
+                    assertion_results=(
+                        SemanticAssertionEvidence(
+                            "synthetic_contract",
+                            False,
+                            True,
+                        ),
                     ),
-                ),
-            )
+                )
             return replace(
                 evidence,
-                semantic_assertions_passed=evidence.semantic_assertions_passed - 1,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 5,
                 request_summaries=tuple(summaries),
             )
 
@@ -2032,7 +2060,7 @@ def test_failed_prompt_issue_activation_is_incomplete() -> None:
                 for index, summary in enumerate(summaries)
                 if summary.activation_gate
             ]
-            for observation_index in observation_indexes[-3:]:
+            for observation_index in observation_indexes[-5:]:
                 summaries[observation_index] = replace(
                     summaries[observation_index],
                     semantic_assertions_passed=0,
@@ -2046,7 +2074,7 @@ def test_failed_prompt_issue_activation_is_incomplete() -> None:
                 )
             return replace(
                 evidence,
-                semantic_assertions_passed=evidence.semantic_assertions_passed - 3,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 5,
                 request_summaries=tuple(summaries),
             )
 
@@ -2061,93 +2089,6 @@ def test_failed_prompt_issue_activation_is_incomplete() -> None:
     assert result.baseline.status == "passed"
     assert result.issues[0].status == "inconclusive"
     assert result.issues[0].error_code == "issue_activation_failed"
-
-
-def test_model_mediated_issue_accepts_one_non_observation_usable_unknown() -> None:
-    agents, issues = load_catalogs()
-    hashes = catalog_hashes(agents, issues)
-
-    class OneUsableUnknownRuntime(FakeRuntime):
-        def invoke_version(self, **kwargs) -> InvocationEvidence:
-            evidence = super().invoke_version(**kwargs)
-            if kwargs["foundry_version"] != "issue-006":
-                return evidence
-            summaries = list(evidence.request_summaries)
-            index = next(
-                index
-                for index, summary in enumerate(summaries)
-                if not summary.activation_gate
-            )
-            summaries[index] = replace(
-                summaries[index],
-                usable_response=False,
-                direct_terminal_response_count=0,
-            )
-            return replace(
-                evidence,
-                usable_response_count=evidence.usable_response_count - 1,
-                request_summaries=tuple(summaries),
-            )
-
-    result = execute_agent(
-        agent_name="weather-agent",
-        agents=agents,
-        issues=issues,
-        selected={"weather-agent": ["issue-006"]},
-        registry=_registry(agents, hashes),
-        runtime=OneUsableUnknownRuntime(),
-        seed=1,
-    )
-
-    assert result.issues[0].status == "observed"
-    assert result.issues[0].endpoint_request_count == 14
-    assert result.issues[0].endpoint_response_count == 14
-    assert result.issues[0].endpoint_usable_response_count == 13
-    assert sum(
-        not item.usable_response
-        for item in result.issues[0].endpoint_request_summaries
-    ) == 1
-
-
-def test_model_mediated_issue_rejects_two_usable_unknowns() -> None:
-    agents, issues = load_catalogs()
-    hashes = catalog_hashes(agents, issues)
-
-    class TwoUsableUnknownsRuntime(FakeRuntime):
-        def invoke_version(self, **kwargs) -> InvocationEvidence:
-            evidence = super().invoke_version(**kwargs)
-            if kwargs["foundry_version"] != "issue-006":
-                return evidence
-            summaries = list(evidence.request_summaries)
-            indexes = [
-                index
-                for index, summary in enumerate(summaries)
-                if not summary.activation_gate
-            ][:2]
-            for index in indexes:
-                summaries[index] = replace(
-                    summaries[index],
-                    usable_response=False,
-                    direct_terminal_response_count=0,
-                )
-            return replace(
-                evidence,
-                usable_response_count=evidence.usable_response_count - 2,
-                request_summaries=tuple(summaries),
-            )
-
-    result = execute_agent(
-        agent_name="weather-agent",
-        agents=agents,
-        issues=issues,
-        selected={"weather-agent": ["issue-006"]},
-        registry=_registry(agents, hashes),
-        runtime=TwoUsableUnknownsRuntime(),
-        seed=1,
-    )
-
-    assert result.issues[0].status == "inconclusive"
-    assert result.issues[0].error_code == "endpoint_contract_failed"
 
 
 def test_failed_hosted_semantic_activation_does_not_start_insights() -> None:
@@ -2166,25 +2107,26 @@ def test_failed_hosted_semantic_activation_does_not_start_insights() -> None:
             if kwargs["foundry_version"] != target:
                 return evidence
             summaries = list(evidence.request_summaries)
-            observation_index = next(
+            observation_indexes = [
                 index
                 for index, summary in enumerate(summaries)
                 if summary.activation_gate
-            )
-            summaries[observation_index] = replace(
-                summaries[observation_index],
-                semantic_assertions_passed=0,
-                assertion_results=(
-                    SemanticAssertionEvidence(
-                        "synthetic_contract",
-                        False,
-                        True,
+            ]
+            for observation_index in observation_indexes[-5:]:
+                summaries[observation_index] = replace(
+                    summaries[observation_index],
+                    semantic_assertions_passed=0,
+                    assertion_results=(
+                        SemanticAssertionEvidence(
+                            "synthetic_contract",
+                            False,
+                            True,
+                        ),
                     ),
-                ),
-            )
+                )
             return replace(
                 evidence,
-                semantic_assertions_passed=evidence.semantic_assertions_passed - 1,
+                semantic_assertions_passed=evidence.semantic_assertions_passed - 5,
                 request_summaries=tuple(summaries),
             )
 
@@ -2240,17 +2182,18 @@ def test_failed_hosted_trace_activation_is_incomplete() -> None:
             evidence = list(super().trace_assertion_evidence(**kwargs))
             if kwargs["traffic_path"].parent.name == "issue-013":
                 requests = execution_requests(kwargs["traffic_path"])
-                observation_index = next(
+                observation_indexes = [
                     index
                     for index, request in enumerate(requests)
                     if request["expected"]["activation_gate"]
-                )
-                assertions = list(evidence[observation_index])
-                assertions[0] = TraceAssertionEvidence(
-                    assertions[0].assertion,
-                    False,
-                )
-                evidence[observation_index] = tuple(assertions)
+                ]
+                for observation_index in observation_indexes[-5:]:
+                    assertions = list(evidence[observation_index])
+                    assertions[0] = TraceAssertionEvidence(
+                        assertions[0].assertion,
+                        False,
+                    )
+                    evidence[observation_index] = tuple(assertions)
             return tuple(evidence)
 
     runtime = FailedTraceActivationRuntime()
@@ -2270,8 +2213,8 @@ def test_failed_hosted_trace_activation_is_incomplete() -> None:
     ).issues[0]
     assert issue.status == "inconclusive"
     assert issue.error_code == "issue_activation_failed"
-    assert issue.trace_assertion_count == 10
-    assert issue.trace_assertions_passed == 9
+    assert issue.trace_assertion_count == 20
+    assert issue.trace_assertions_passed == 15
     failed_summary = next(
         summary
         for summary in issue.endpoint_request_summaries
@@ -2312,7 +2255,7 @@ def test_unhandled_baseline_error_fails_terminal_evidence() -> None:
         )
 
 
-def test_single_baseline_terminal_unknown_is_accepted_without_recovery(
+def test_aggregate_baseline_terminal_gap_is_not_a_strict_trace_unknown(
     tmp_path: Path,
 ) -> None:
     agents, issues = load_catalogs()
@@ -2329,14 +2272,14 @@ def test_single_baseline_terminal_unknown_is_accepted_without_recovery(
             operation_ids: tuple[str, ...],
         ) -> dict:
             evidence = super().trace_behavior_evidence(operation_ids)
-            if len(operation_ids) == 10:
+            if len(operation_ids) == 20:
                 evidence.update(
                     {
-                        "terminal_response_count": 9,
-                        "terminal_success_count": 9,
-                        "terminal_output_count": 9,
-                        "explicit_terminal_success_count": 9,
-                        "explicit_terminal_output_count": 9,
+                        "terminal_response_count": 19,
+                        "terminal_success_count": 19,
+                        "terminal_output_count": 19,
+                        "explicit_terminal_success_count": 19,
+                        "explicit_terminal_output_count": 19,
                     }
                 )
             return evidence
@@ -2353,14 +2296,15 @@ def test_single_baseline_terminal_unknown_is_accepted_without_recovery(
         checkpoint_store=store,
     )
 
-    assert result.baseline.status == "passed"
-    assert result.baseline.trace_behavior_summary["terminal_response_count"] == 9
-    assert result.issues[0].status == "observed"
+    assert result.baseline.status == "inconclusive"
+    assert result.baseline.error_code == "baseline_evidence_failed"
+    assert result.baseline.trace_behavior_summary["terminal_response_count"] == 19
+    assert result.issues[0].status == "skipped_baseline"
     assert store.agent_recovery_count("finance-agent", 3) == 0
     assert runtime.invoked.count("v0") == 1
 
 
-def test_incomplete_baseline_terminal_evidence_recovers_on_resume(
+def test_incomplete_aggregate_terminal_evidence_is_not_retrafficked(
     tmp_path: Path,
 ) -> None:
     agents, issues = load_catalogs()
@@ -2381,16 +2325,16 @@ def test_incomplete_baseline_terminal_evidence_recovers_on_resume(
             operation_ids: tuple[str, ...],
         ) -> dict:
             evidence = super().trace_behavior_evidence(operation_ids)
-            if len(operation_ids) == 10:
+            if len(operation_ids) == 20:
                 self.baseline_trace_attempts += 1
                 if self.baseline_trace_attempts == 1:
                     evidence.update(
                         {
-                            "terminal_response_count": 8,
-                            "terminal_success_count": 8,
-                            "terminal_output_count": 8,
-                            "explicit_terminal_success_count": 8,
-                            "explicit_terminal_output_count": 8,
+                            "terminal_response_count": 18,
+                            "terminal_success_count": 18,
+                            "terminal_output_count": 18,
+                            "explicit_terminal_success_count": 18,
+                            "explicit_terminal_output_count": 18,
                         }
                     )
             return evidence
@@ -2410,14 +2354,17 @@ def test_incomplete_baseline_terminal_evidence_recovers_on_resume(
     incomplete = execute_agent(**kwargs)
     recovered = execute_agent(**kwargs)
 
-    assert incomplete.baseline.error_code == "baseline_evidence_incomplete"
+    assert incomplete.baseline.error_code == "baseline_evidence_failed"
     assert all(item.status == "skipped_baseline" for item in incomplete.issues)
-    assert recovered.baseline.status == "passed"
-    assert all(item.status == "observed" for item in recovered.issues)
-    assert store.agent_recovery_count("finance-agent", 3) == 1
-    assert runtime.invoked.count("v0") == 2
-    assert all(runtime.invoked.count(issue_id) == 1 for issue_id in selected["finance-agent"])
-    assert len(list((tmp_path / "stages" / "recovery-history").rglob("*.json"))) == 1
+    assert recovered.baseline.error_code == "baseline_evidence_failed"
+    assert all(item.status == "skipped_baseline" for item in recovered.issues)
+    assert store.agent_recovery_count("finance-agent", 3) == 0
+    assert runtime.invoked.count("v0") == 1
+    assert all(
+        runtime.invoked.count(issue_id) == 0
+        for issue_id in selected["finance-agent"]
+    )
+    assert not list((tmp_path / "stages" / "recovery-history").rglob("*.json"))
 
 
 def test_ambiguous_baseline_delivery_is_not_recovery_safe() -> None:
@@ -2452,7 +2399,7 @@ def test_definitive_unhealthy_baseline_is_not_recovered(tmp_path: Path) -> None:
             operation_ids: tuple[str, ...],
         ) -> dict:
             evidence = super().trace_behavior_evidence(operation_ids)
-            if len(operation_ids) == 10:
+            if len(operation_ids) == 20:
                 evidence["unhandled_error_count"] = 1
             return evidence
 
@@ -2477,7 +2424,7 @@ def test_definitive_unhealthy_baseline_is_not_recovered(tmp_path: Path) -> None:
     assert store.agent_recovery_count("finance-agent", 3) == 0
 
 
-def test_incomplete_baseline_exhausts_bounded_recovery(tmp_path: Path) -> None:
+def test_incomplete_aggregate_baseline_does_not_claim_recovery(tmp_path: Path) -> None:
     agents, issues = load_catalogs()
     finance = next(
         item for item in agents["agents"] if item["name"] == "finance-agent"
@@ -2492,14 +2439,14 @@ def test_incomplete_baseline_exhausts_bounded_recovery(tmp_path: Path) -> None:
             operation_ids: tuple[str, ...],
         ) -> dict:
             evidence = super().trace_behavior_evidence(operation_ids)
-            if len(operation_ids) == 10:
+            if len(operation_ids) == 20:
                 evidence.update(
                     {
-                        "terminal_response_count": 8,
-                        "terminal_success_count": 8,
-                        "terminal_output_count": 8,
-                        "explicit_terminal_success_count": 8,
-                        "explicit_terminal_output_count": 8,
+                        "terminal_response_count": 18,
+                        "terminal_success_count": 18,
+                        "terminal_output_count": 18,
+                        "explicit_terminal_success_count": 18,
+                        "explicit_terminal_output_count": 18,
                     }
                 )
             return evidence
@@ -2518,12 +2465,13 @@ def test_incomplete_baseline_exhausts_bounded_recovery(tmp_path: Path) -> None:
 
     attempts = [execute_agent(**kwargs) for _ in range(5)]
 
-    assert attempts[-1].baseline.error_code == "baseline_recovery_exhausted"
+    assert attempts[-1].baseline.error_code == "baseline_evidence_failed"
     assert all(
         item.status == "skipped_baseline" for item in attempts[-1].issues
     )
-    assert store.agent_recovery_count("finance-agent", 3) == 3
-    assert runtime.invoked.count("v0") == 4
+    assert store.agent_recovery_count("finance-agent", 3) == 0
+    assert runtime.invoked.count("v0") == 1
+    assert runtime.invoked.count("v0") == 1
 
 
 def test_issue_failure_does_not_stop_later_versions() -> None:
@@ -2616,7 +2564,7 @@ def test_foreign_operation_card_is_not_persisted(tmp_path: Path) -> None:
     )
 
     assert issue.status == "not_at_bar"
-    assert issue.error_code == "expected_exactly_one_insight"
+    assert issue.error_code == "missing_insight"
     assert issue.insight_references == []
     assert issue.observed_insights == []
     assert issue.observed_insight is None

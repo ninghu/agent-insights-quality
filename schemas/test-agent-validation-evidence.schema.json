@@ -132,8 +132,8 @@
         "source_content_digest": {"$ref": "#/$defs/hash"},
         "execution_digest": {"$ref": "#/$defs/hash"},
         "validated_commit_sha": {"$ref": "#/$defs/gitSha"},
-        "n": {"enum": [5, 7]},
-        "k": {"enum": [5]},
+        "n": {"const": 10},
+        "k": {"const": 6},
         "complete_count": {"type": "integer", "minimum": 0},
         "paired_complete_count": {"type": "integer", "minimum": 0},
         "observation_count": {"type": "integer", "minimum": 0},
@@ -158,13 +158,16 @@
             "properties": {
               "authority_id": {"pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
               "logical_version": {"const": "v0"},
-              "n": {"const": 5}
+              "n": {"const": 10},
+              "k": {"const": 6}
             }
           },
           "else": {
             "properties": {
               "authority_id": {"pattern": "^issue-[0-9]{3}$"},
-              "logical_version": {"pattern": "^issue-[0-9]{3}$"}
+              "logical_version": {"pattern": "^issue-[0-9]{3}$"},
+              "n": {"const": 10},
+              "k": {"const": 6}
             }
           }
         }
@@ -197,67 +200,69 @@
         "validation_mode": {
           "enum": ["baseline", "deterministic", "model_mediated"]
         },
-        "n": {"enum": [5, 7]},
-        "k": {"enum": [5]},
+        "n": {"const": 10},
+        "k": {"const": 6},
         "complete_count": {"type": "integer", "minimum": 0},
         "paired_complete_count": {"type": "integer", "minimum": 0},
         "observation_count": {"type": "integer", "minimum": 0},
         "paired_observation_count": {"type": "integer", "minimum": 0},
         "evidence_complete": {"type": "boolean"},
         "pass": {"type": "boolean"},
-        "issue_trace_gap_acceptance": {
-          "$ref": "#/$defs/issueTraceGapAcceptance"
+        "primary_trace_unknown_acceptance": {
+          "$ref": "#/$defs/traceUnknownAcceptance"
         },
-        "paired_trace_gap_acceptance": {
-          "$ref": "#/$defs/pairedTraceGapAcceptance"
+        "paired_trace_unknown_acceptance": {
+          "$ref": "#/$defs/traceUnknownAcceptance"
         },
         "issue_attempts": {
           "type": "array",
-          "minItems": 5,
-          "maxItems": 7,
+          "minItems": 10,
+          "maxItems": 10,
           "items": {"$ref": "#/$defs/attempt"}
         },
         "v0_attempts": {
           "type": "array",
-          "maxItems": 7,
+          "maxItems": 10,
           "items": {"$ref": "#/$defs/attempt"}
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"validation_mode": {"const": "baseline"}},
+            "required": ["validation_mode"]
+          },
+          "then": {"properties": {"k": {"const": 6}}},
+          "else": {"properties": {"k": {"const": 6}}}
+        }
+      ]
     },
-    "issueTraceGapAcceptance": {
+    "traceUnknownAcceptance": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "policy",
+        "target_role",
         "observation_count",
-        "unknown_attempt_indices"
+        "unknown_attempt_indices",
+        "maturity_proof_digest"
       ],
       "properties": {
-        "policy": {
-          "const": "deterministic_issue_trace_gap_first_mature_batch_v1"
-        },
+        "policy": {"const": "mature_trace_unknown_v1"},
+        "target_role": {"enum": ["baseline", "issue", "paired_v0"]},
         "observation_count": {
           "type": "integer",
-          "minimum": 3,
-          "maximum": 4
+          "minimum": 0,
+          "maximum": 10
         },
         "unknown_attempt_indices": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 4,
           "uniqueItems": true,
-          "items": {"type": "integer", "minimum": 1, "maximum": 5}
-        }
-      }
-    },
-    "pairedTraceGapAcceptance": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["policy", "attempt_index", "history_digest"],
-      "properties": {
-        "policy": {"const": "single_paired_trace_gap_after_fresh_verify_v1"},
-        "attempt_index": {"type": "integer", "minimum": 1, "maximum": 7},
-        "history_digest": {"$ref": "#/$defs/hash"}
+          "items": {"type": "integer", "minimum": 1, "maximum": 10}
+        },
+        "maturity_proof_digest": {"$ref": "#/$defs/hash"}
       }
     },
     "attempt": {
@@ -276,7 +281,7 @@
         "error_code"
       ],
       "properties": {
-        "index": {"type": "integer", "minimum": 1, "maximum": 7},
+        "index": {"type": "integer", "minimum": 1, "maximum": 10},
         "conversation_reference": {"$ref": "#/$defs/hash"},
         "session_reference": {"$ref": "#/$defs/hash"},
         "response_references": {

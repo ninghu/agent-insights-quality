@@ -2,7 +2,7 @@
 
 ## 60-second explanation
 
-This framework continuously measures whether Agent Insights detects known Agent defects accurately, completely, and without noise. Five real deployed test Agents exercise Prompt, Microsoft Agent Framework, LangGraph, and custom AgentServer patterns. Every issue is a reviewed single-root defect with fixed synthetic endpoint traffic and an expected Insight contract. Local Test Agent Validation reconciles five baselines and all 36 issues as 41 stable, independently versioned endpoints in the durable `aiq-staging-swedencentral` Project and proves issue-versus-v0 discrimination from read-only Sweden `g30` telemetry. Its results and optional immutable approval record are advisory to a human. The human decides operationally whether to invoke Weekday Official Daily; Daily never reads staging state, approval records, or validation digests. Daily runs Agent Insights for four issues per Agent plus five baselines and uses GPT-5.6 Sol to assess cards and assign ownership. Validation never runs monitors, Agent Insights, assessment, scoring, reporting, ADX, or email.
+This framework continuously measures whether Agent Insights detects known Agent defects accurately, completely, and without noise. Five real deployed test Agents exercise Prompt, Microsoft Agent Framework, LangGraph, and custom AgentServer patterns. Every issue is a reviewed single-root defect with fixed synthetic endpoint traffic and an expected Insight contract. Local Test Agent Validation reconciles five baselines and all 36 issues as 41 stable, independently versioned endpoints in the durable `aiq-staging-swedencentral` Project and proves issue-versus-v0 discrimination from read-only Sweden `g30` telemetry. Its results are advisory to a human. The human decides operationally whether to invoke Weekday Official Daily; Daily never reads staging state or validation digests. Daily runs Agent Insights for four issues per Agent plus five baselines and uses GPT-5.6 Sol to assess cards and assign ownership. Validation never runs monitors, Agent Insights, assessment, scoring, reporting, ADX, or email.
 
 Weather and Healthcare are pure Prompt controls: they use request-provided synthetic evidence, never
 declare function tools or fixtures, and permit response continuation only for intentional memory
@@ -10,11 +10,12 @@ turns. Baseline decisions require deterministic semantic coverage, full-request 
 output evidence; a card-linked intermediate operation cannot override contradictory full-request
 evidence.
 
-Daily uses one central private lifecycle and five visible Copilot Agent-lane sub sessions. Agent
-lanes are the only parallel qualification unit; each runs its baseline and four selected issues
-sequentially and emits one immutable receipt. Composition, assessment-output validation, focused
-rechecks, improvement analysis, finalization, ADX, email claim/receipt, generated paths, and one PR
-remain centralized and ordered.
+Daily uses one central private lifecycle with three barriers: five visible whole-Agent traffic
+lanes, up to eight visible read-only version evaluators, then five visible whole-Agent Agent Insights
+lanes. Traffic and Insight work remain sequential within each Agent, and no phase can start before
+all 25 immutable artifacts from the prior phase exist. Composition, assessment-output validation,
+focused rechecks, improvement analysis, finalization, ADX, email claim/receipt, generated paths, and
+one PR remain centralized and ordered.
 
 ## High-level flow
 

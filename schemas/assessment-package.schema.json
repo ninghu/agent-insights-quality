@@ -9,6 +9,8 @@
     "foundry_version",
     "manifest_reference",
     "source_integrity",
+    "trace_maturity_proof",
+    "trace_unknown_acceptance",
     "validation_mode",
     "n",
     "k",
@@ -39,8 +41,8 @@
     "validation_mode": {
       "enum": ["baseline", "deterministic", "model_mediated"]
     },
-    "n": {"enum": [5, 7]},
-    "k": {"const": 5},
+    "n": {"const": 10},
+    "k": {"const": 6},
     "execution_digest": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
@@ -51,10 +53,16 @@
       "uniqueItems": true,
       "items": {"enum": ["semantic", "trace"]}
     },
-    "issue_trace_gap_acceptance": {
+    "trace_unknown_acceptance": {
       "oneOf": [
         {"type": "null"},
-        {"$ref": "#/$defs/issueTraceGapAcceptance"}
+        {"$ref": "#/$defs/traceUnknownAcceptance"}
+      ]
+    },
+    "trace_maturity_proof": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/traceMaturityProof"}
       ]
     },
     "runtime_status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_baseline"]},
@@ -171,7 +179,8 @@
         },
         "properties": {
           "validation_mode": {"const": "baseline"},
-          "n": {"const": 5},
+          "n": {"const": 10},
+          "k": {"const": 6},
           "expected": {
             "type": "object",
             "additionalProperties": false,
@@ -184,12 +193,14 @@
         }
       },
       "else": {
-        "required": ["issue_id", "evidence_reference", "instructions", "required_surfaces", "issue_trace_gap_acceptance"],
+        "required": ["issue_id", "evidence_reference", "instructions", "required_surfaces"],
         "not": {"required": ["behavior_summary"]},
         "properties": {
           "validation_mode": {
             "enum": ["deterministic", "model_mediated"]
           },
+          "n": {"const": 10},
+          "k": {"const": 6},
           "expected": {
             "type": "object",
             "additionalProperties": false,
@@ -210,27 +221,7 @@
               "minimum_traces": {"type": "integer", "minimum": 1}
             }
           }
-        },
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "validation_mode": {"const": "model_mediated"}
-              }
-            },
-            "then": {
-              "properties": {
-                "n": {"const": 7},
-                "issue_trace_gap_acceptance": {"type": "null"}
-              }
-            },
-            "else": {
-              "properties": {
-                "n": {"const": 5}
-              }
-            }
-          }
-        ]
+        }
       }
     }
   ],
@@ -287,7 +278,7 @@
         "validation_mode"
       ],
       "properties": {
-        "request_count": {"const": 5},
+        "request_count": {"const": 10},
         "terminal_response": {
           "enum": [
             "direct_prompt",
@@ -365,22 +356,54 @@
         }
       }
     },
-    "issueTraceGapAcceptance": {
+    "traceUnknownAcceptance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["policy", "observation_count", "unknown_attempt_indices"],
+      "required": [
+        "policy",
+        "target_role",
+        "observation_count",
+        "unknown_attempt_indices",
+        "maturity_proof_digest"
+      ],
       "properties": {
-        "policy": {
-          "const": "deterministic_issue_trace_gap_first_mature_batch_v1"
-        },
-        "observation_count": {"type": "integer", "minimum": 3, "maximum": 4},
+        "policy": {"const": "mature_trace_unknown_v1"},
+        "target_role": {"enum": ["baseline", "issue", "paired_v0"]},
+        "observation_count": {"type": "integer", "minimum": 0, "maximum": 10},
         "unknown_attempt_indices": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 4,
           "uniqueItems": true,
-          "items": {"type": "integer", "minimum": 1, "maximum": 5}
-        }
+          "items": {"type": "integer", "minimum": 1, "maximum": 10}
+        },
+        "maturity_proof_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "traceMaturityProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "evidence_window_start",
+        "evidence_window_end",
+        "maturity_boundary",
+        "snapshot_observed_at",
+        "maximum_hydration_seconds",
+        "stabilization_seconds",
+        "maturity_proof_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "1.0.0"},
+        "kind": {"const": "daily-trace-maturity-proof"},
+        "evidence_window_start": {"type": "string", "format": "date-time"},
+        "evidence_window_end": {"type": "string", "format": "date-time"},
+        "maturity_boundary": {"type": "string", "format": "date-time"},
+        "snapshot_observed_at": {"type": "string", "format": "date-time"},
+        "maximum_hydration_seconds": {"type": "integer", "minimum": 1},
+        "stabilization_seconds": {"type": "integer", "minimum": 1},
+        "maturity_proof_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     }
   }

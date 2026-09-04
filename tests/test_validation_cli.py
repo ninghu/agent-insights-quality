@@ -15,10 +15,12 @@ def test_validation_cli_exposes_stage_primitives_without_generation_inputs() -> 
     choices = parser._subparsers._group_actions[0].choices
     for command in (
         "prepare-test-agent-validation",
+        "recover-test-agent-validation",
         "deploy-test-agent-validation-shard",
         "reconcile-test-agent-validation-deployment",
         "invoke-test-agent-validation-shard",
         "prepare-test-agent-validation-assessment",
+        "release-test-agent-validation-assessment",
         "import-test-agent-validation-assessment",
         "compose-test-agent-validation",
     ):
@@ -40,7 +42,7 @@ def test_run_validation_cli_uses_automatic_local_discovery(monkeypatch) -> None:
         lambda: {
             "status": "ready",
             "result": "PASS",
-            "authority_count": 41,
+            "authority_count": 2,
         },
     )
     args = cli.build_parser().parse_args(["run-test-agent-validation"])
@@ -48,7 +50,7 @@ def test_run_validation_cli_uses_automatic_local_discovery(monkeypatch) -> None:
     assert result == {
         "status": "ready",
         "result": "PASS",
-        "authority_count": 41,
+        "authority_count": 2,
     }
 
 
@@ -85,25 +87,37 @@ def test_assessment_cli_resolves_only_the_hidden_active_assignment(
         "outcome": "PASS",
     }
 
-
-def test_approval_cli_uses_latest_ready_result_without_manual_paths(
-    monkeypatch,
-) -> None:
     monkeypatch.setattr(
         cli,
-        "approve_test_agent_validation",
+        "release_test_agent_validation_assessment",
+        lambda: {"status": "assessment_released"},
+    )
+    args = cli.build_parser().parse_args(
+        ["release-test-agent-validation-assessment"]
+    )
+    assert vars(args) == {
+        "command": "release-test-agent-validation-assessment"
+    }
+    assert json.loads(cli._dispatch(args) or "{}") == {
+        "status": "assessment_released"
+    }
+
+
+def test_recovery_cli_uses_hidden_successor_generation(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "recover_test_agent_validation",
         lambda: {
-            "status": "approved",
-            "repository": "ninghu/agent-insights-quality",
-            "pr_number": 63,
-            "commit_sha": "a" * 40,
-            "record_digest": "sha256:" + ("b" * 64),
+            "status": "recovery_verification_pending",
+            "recovery_authority_count": 1,
         },
     )
-    args = cli.build_parser().parse_args(["approve-test-agent-validation"])
-    result = json.loads(cli._dispatch(args) or "{}")
-    assert result["status"] == "approved"
-    assert result["pr_number"] == 63
+    args = cli.build_parser().parse_args(["recover-test-agent-validation"])
+    assert vars(args) == {"command": "recover-test-agent-validation"}
+    assert json.loads(cli._dispatch(args) or "{}") == {
+        "status": "recovery_verification_pending",
+        "recovery_authority_count": 1,
+    }
 
 
 def test_daily_provisioning_requires_the_coordinator_lifecycle(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from collections.abc import Mapping
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -20,7 +21,8 @@ from agent_insights_quality.validation_rules import (
     issue_observation_context,
 )
 from agent_insights_quality.validation_trace_gap_policy import (
-    daily_issue_side_decision,
+    daily_target_decision,
+    validate_trace_maturity_proof,
 )
 
 OFFICIAL_DELIVERY = "official"
@@ -48,6 +50,7 @@ def build_manifest(
     selected: dict[str, list[str]],
     registry: dict[str, Any],
     results: list[AgentResult],
+    phase_manifests: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     result_by_agent = {item.agent_name: item for item in results}
     contract_by_agent = {
@@ -121,6 +124,11 @@ def build_manifest(
         "agents": agents,
         "manifest_hash": "",
     }
+    if phase_manifests is not None:
+        manifest["phase_manifests"] = {
+            phase: dict(reference)
+            for phase, reference in phase_manifests.items()
+        }
     manifest["manifest_hash"] = content_hash(
         {key: value for key, value in manifest.items() if key != "manifest_hash"}
     )
@@ -145,7 +153,8 @@ def _result_payload(result: Any) -> dict[str, Any]:
         "trace_assertions_passed": result.trace_assertions_passed,
         "trace_contract_verified": result.trace_contract_verified,
         "trace_behavior_summary": result.trace_behavior_summary,
-        "issue_trace_gap_acceptance": result.issue_trace_gap_acceptance,
+        "trace_maturity_proof": result.trace_maturity_proof,
+        "trace_unknown_acceptance": result.trace_unknown_acceptance,
         "endpoint_request_summaries": [
             request_completion_payload(item)
             for item in result.endpoint_request_summaries
@@ -260,28 +269,34 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                     f"{agent['name']}/{logical_version} manifest execution "
                     "contract is not current"
                 )
-            if logical_version == "v0":
-                if version.get("issue_trace_gap_acceptance") is not None:
-                    raise ContractError(
-                        f"{agent['name']}/v0 cannot accept an issue trace gap"
-                    )
-                continue
             observations = [
                 item
                 for item in version["endpoint_request_summaries"]
                 if item["activation_gate"] is True
             ]
-            _, acceptance = daily_issue_side_decision(
+            acceptance_value = version.get("trace_unknown_acceptance")
+            maturity_digest = validate_trace_maturity_proof(
+                version.get("trace_maturity_proof")
+            )
+            _, acceptance = daily_target_decision(
+                target_role=(
+                    "baseline" if logical_version == "v0" else "issue"
+                ),
                 validation_mode=str(version["validation_mode"]),
                 n=int(version["n"]),
                 k=int(version["k"]),
-                required_surfaces=version["required_surfaces"],
+                required_surfaces=(
+                    ["semantic", "trace"]
+                    if logical_version == "v0"
+                    else version["required_surfaces"]
+                ),
                 summaries=observations,
                 identity_verified=version["trace_contract_verified"] is True,
+                maturity_proof_digest=maturity_digest,
             )
-            if version.get("issue_trace_gap_acceptance") != acceptance:
+            if acceptance_value != acceptance:
                 raise ContractError(
-                    f"{agent['name']}/{logical_version} issue trace gap "
+                    f"{agent['name']}/{logical_version} trace unknown "
                     "acceptance is not current"
                 )
     actual_selection = {

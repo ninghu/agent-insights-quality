@@ -8,35 +8,30 @@
     "execution_id",
     "run_contract_digest",
     "agent_name",
-    "issue_ids",
-    "supersedes_receipt_digest",
-    "reopen_event_digest",
-    "result",
+    "logical_version",
+    "foundry_version",
+    "content_digest",
+    "traffic_contract_digest",
+    "ambiguity_state",
+    "invocation",
     "receipt_digest"
   ],
   "properties": {
     "schema_version": {"const": "1.0.0"},
-    "kind": {"const": "daily-agent-lane-recovery-receipt"},
+    "kind": {"const": "daily-version-traffic-receipt"},
     "execution_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
     "run_contract_digest": {"$ref": "#/$defs/hash"},
     "agent_name": {"$ref": "#/$defs/agent"},
-    "issue_ids": {
-      "type": "array",
-      "minItems": 4,
-      "maxItems": 4,
-      "uniqueItems": true,
-      "items": {"type": "string", "pattern": "^issue-[0-9]{3}$"}
-    },
-    "supersedes_receipt_digest": {"$ref": "#/$defs/hash"},
-    "reopen_event_digest": {"$ref": "#/$defs/hash"},
-    "result": {"type": "object"},
+    "logical_version": {"$ref": "#/$defs/version"},
+    "foundry_version": {"type": "string", "minLength": 1},
+    "content_digest": {"$ref": "#/$defs/hash"},
+    "traffic_contract_digest": {"$ref": "#/$defs/hash"},
+    "ambiguity_state": {"const": "definitive"},
+    "invocation": {"type": "object"},
     "receipt_digest": {"$ref": "#/$defs/hash"}
   },
   "$defs": {
-    "hash": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "agent": {
       "enum": [
         "weather-agent",
@@ -44,6 +39,12 @@
         "finance-agent",
         "travel-agent",
         "support-ticket-agent"
+      ]
+    },
+    "version": {
+      "oneOf": [
+        {"const": "v0"},
+        {"type": "string", "pattern": "^issue-[0-9]{3}$"}
       ]
     }
   }

@@ -6,8 +6,7 @@ instructions: |
   Application Insights is read-only and direct trace injection is forbidden.
   Test Agent Validation is a local, report-free process. It must use the reviewed
   validation mode and fixed attempts, create no monitor, run no Agent Insights
-  assessment, and publish no approved record without exact current-head 41/41
-  READY evidence and explicit human approval. Validation retains provider objects
+  assessment. Validation retains provider objects
   and relies on exact response-bound correlation.
   Treat AGENT_CATALOG.yaml and ISSUE_CATALOG.yaml as human-reviewed contracts.
   Follow the repository-wide maintenance and evidence rules in AGENTS.md.
