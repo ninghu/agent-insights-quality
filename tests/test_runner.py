@@ -2026,6 +2026,93 @@ def test_failed_prompt_issue_activation_is_incomplete() -> None:
     assert result.issues[0].error_code == "issue_activation_failed"
 
 
+def test_model_mediated_issue_accepts_one_non_observation_usable_unknown() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+
+    class OneUsableUnknownRuntime(FakeRuntime):
+        def invoke_version(self, **kwargs) -> InvocationEvidence:
+            evidence = super().invoke_version(**kwargs)
+            if kwargs["foundry_version"] != "issue-006":
+                return evidence
+            summaries = list(evidence.request_summaries)
+            index = next(
+                index
+                for index, summary in enumerate(summaries)
+                if not summary.activation_gate
+            )
+            summaries[index] = replace(
+                summaries[index],
+                usable_response=False,
+                direct_terminal_response_count=0,
+            )
+            return replace(
+                evidence,
+                usable_response_count=evidence.usable_response_count - 1,
+                request_summaries=tuple(summaries),
+            )
+
+    result = execute_agent(
+        agent_name="weather-agent",
+        agents=agents,
+        issues=issues,
+        selected={"weather-agent": ["issue-006"]},
+        registry=_registry(agents, hashes),
+        runtime=OneUsableUnknownRuntime(),
+        seed=1,
+    )
+
+    assert result.issues[0].status == "observed"
+    assert result.issues[0].endpoint_request_count == 14
+    assert result.issues[0].endpoint_response_count == 14
+    assert result.issues[0].endpoint_usable_response_count == 13
+    assert sum(
+        not item.usable_response
+        for item in result.issues[0].endpoint_request_summaries
+    ) == 1
+
+
+def test_model_mediated_issue_rejects_two_usable_unknowns() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+
+    class TwoUsableUnknownsRuntime(FakeRuntime):
+        def invoke_version(self, **kwargs) -> InvocationEvidence:
+            evidence = super().invoke_version(**kwargs)
+            if kwargs["foundry_version"] != "issue-006":
+                return evidence
+            summaries = list(evidence.request_summaries)
+            indexes = [
+                index
+                for index, summary in enumerate(summaries)
+                if not summary.activation_gate
+            ][:2]
+            for index in indexes:
+                summaries[index] = replace(
+                    summaries[index],
+                    usable_response=False,
+                    direct_terminal_response_count=0,
+                )
+            return replace(
+                evidence,
+                usable_response_count=evidence.usable_response_count - 2,
+                request_summaries=tuple(summaries),
+            )
+
+    result = execute_agent(
+        agent_name="weather-agent",
+        agents=agents,
+        issues=issues,
+        selected={"weather-agent": ["issue-006"]},
+        registry=_registry(agents, hashes),
+        runtime=TwoUsableUnknownsRuntime(),
+        seed=1,
+    )
+
+    assert result.issues[0].status == "inconclusive"
+    assert result.issues[0].error_code == "endpoint_contract_failed"
+
+
 def test_failed_hosted_semantic_activation_does_not_start_insights() -> None:
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)

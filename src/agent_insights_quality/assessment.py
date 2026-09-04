@@ -437,7 +437,11 @@ def _endpoint_evidence(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _endpoint_evidence_complete(endpoint: dict[str, Any]) -> bool:
+def _endpoint_evidence_complete(
+    endpoint: dict[str, Any],
+    *,
+    allow_one_usable_unknown: bool = False,
+) -> bool:
     requests = endpoint.get("request_count")
     responses = endpoint.get("response_count")
     usable = endpoint.get("usable_response_count")
@@ -446,13 +450,24 @@ def _endpoint_evidence_complete(endpoint: dict[str, Any]) -> bool:
         and not isinstance(requests, bool)
         and requests > 0
         and responses == requests
-        and usable == requests
+        and (
+            usable == requests
+            or allow_one_usable_unknown
+            and usable == requests - 1
+        )
         and endpoint.get("trace_contract_verified") is True
-        and _request_summaries_consistent(endpoint)
+        and _request_summaries_consistent(
+            endpoint,
+            allow_one_usable_unknown=allow_one_usable_unknown,
+        )
     )
 
 
-def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
+def _request_summaries_consistent(
+    endpoint: dict[str, Any],
+    *,
+    allow_one_usable_unknown: bool = False,
+) -> bool:
     request_count = endpoint.get("request_count")
     summaries = endpoint.get("request_summaries")
     if (
@@ -470,7 +485,7 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
             not isinstance(summary, dict)
             or summary.get("request_index") != index
             or summary.get("response_count") != 1
-            or summary.get("usable_response") is not True
+            or not isinstance(summary.get("usable_response"), bool)
         ):
             return False
         results = summary.get("assertion_results")
@@ -508,6 +523,9 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
         semantic_passed += summary["semantic_assertions_passed"]
         trace_count += summary["trace_assertion_count"]
         trace_passed += summary["trace_assertions_passed"]
+    unusable_count = sum(
+        summary.get("usable_response") is False for summary in summaries
+    )
     return (
         endpoint.get("response_count") == request_count
         and endpoint.get("usable_response_count") == request_count
@@ -515,12 +533,42 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
         and endpoint.get("semantic_assertions_passed") == semantic_passed
         and endpoint.get("trace_assertion_count") == trace_count
         and endpoint.get("trace_assertions_passed") == trace_passed
+        and (
+            unusable_count == 0
+            or allow_one_usable_unknown
+            and unusable_count == 1
+        )
     )
 
 
 def _issue_activation_complete(package: dict[str, Any]) -> bool:
     endpoint = package.get("endpoint_evidence")
-    if not isinstance(endpoint, dict) or not _request_summaries_consistent(endpoint):
+    allow_usable_unknown = (
+        package.get("validation_mode") == "model_mediated"
+        and set(package.get("required_surfaces") or []) == {"semantic"}
+    )
+    if (
+        not isinstance(endpoint, dict)
+        or not _endpoint_evidence_complete(
+            endpoint,
+            allow_one_usable_unknown=allow_usable_unknown,
+        )
+        or not _request_summaries_consistent(
+            endpoint,
+            allow_one_usable_unknown=allow_usable_unknown,
+        )
+        or (
+            allow_usable_unknown
+            and sum(
+                item.get("activation_gate") is True
+                and item.get("usable_response") is True
+                and item.get("semantic_assertions_passed")
+                == item.get("semantic_assertion_count")
+                for item in endpoint.get("request_summaries", [])
+            )
+            < int(package.get("k") or 0)
+        )
+    ):
         return False
     gates = [
         summary
@@ -799,7 +847,14 @@ def load_assessments(
                 or not isinstance(minimum_traces, int)
                 or int(observed[0].get("trace_count") or 0) < minimum_traces
                 or not isinstance(endpoint, dict)
-                or not _endpoint_evidence_complete(endpoint)
+                or not _endpoint_evidence_complete(
+                    endpoint,
+                    allow_one_usable_unknown=(
+                        package.get("validation_mode") == "model_mediated"
+                        and set(package.get("required_surfaces") or [])
+                        == {"semantic"}
+                    ),
+                )
                 or (
                     activation_required
                     and not _issue_activation_complete(package)

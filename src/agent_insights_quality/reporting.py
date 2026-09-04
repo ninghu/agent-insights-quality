@@ -83,7 +83,11 @@ def resolve_test_region(
     return canonical
 
 
-def _request_summaries_complete(value: dict[str, Any]) -> bool:
+def _request_summaries_complete(
+    value: dict[str, Any],
+    *,
+    allow_one_usable_unknown: bool = False,
+) -> bool:
     requests = value.get("endpoint_request_count")
     summaries = value.get("endpoint_request_summaries")
     if not isinstance(requests, int) or not isinstance(summaries, list):
@@ -95,7 +99,7 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
             not isinstance(summary, dict)
             or summary.get("request_index") != index
             or summary.get("response_count") != 1
-            or summary.get("usable_response") is not True
+            or not isinstance(summary.get("usable_response"), bool)
         ):
             return False
         trace_results = summary.get("trace_assertion_results")
@@ -126,7 +130,12 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
             )
         ):
             return False
-    return True
+    unusable_count = sum(
+        summary.get("usable_response") is False for summary in summaries
+    )
+    return unusable_count == 0 or (
+        allow_one_usable_unknown and unusable_count == 1
+    )
 
 
 def _runtime_evidence_complete(
@@ -137,6 +146,17 @@ def _runtime_evidence_complete(
     requests = value.get("endpoint_request_count")
     responses = value.get("endpoint_response_count")
     usable = value.get("endpoint_usable_response_count")
+    context = (
+        issue_observation_context(traffic_path)
+        if traffic_path is not None
+        else None
+    )
+    allow_usable_unknown = bool(
+        context is not None
+        and context["validation_mode"] == "model_mediated"
+        and set(context["required_surfaces"]) == {"semantic"}
+        and usable == requests - 1
+    )
     complete = (
         isinstance(requests, int)
         and not isinstance(requests, bool)
@@ -147,13 +167,17 @@ def _runtime_evidence_complete(
         and isinstance(usable, int)
         and not isinstance(usable, bool)
         and usable > 0
-        and requests == responses == usable
+        and requests == responses
+        and (usable == requests or allow_usable_unknown)
         and value.get("trace_contract_verified") is True
-        and _request_summaries_complete(value)
+        and _request_summaries_complete(
+            value,
+            allow_one_usable_unknown=allow_usable_unknown,
+        )
     )
     if not complete or traffic_path is None:
         return complete
-    context = issue_observation_context(traffic_path)
+    assert context is not None
     if {
         key: value.get(key)
         for key in context
@@ -164,6 +188,13 @@ def _runtime_evidence_complete(
         for item in value["endpoint_request_summaries"]
         if item.get("activation_gate") is True
     ]
+    if allow_usable_unknown and sum(
+        item.get("usable_response") is True
+        and item.get("semantic_assertions_passed")
+        == item.get("semantic_assertion_count")
+        for item in observations
+    ) < int(context["k"]):
+        return False
     decided, acceptance = daily_issue_side_decision(
         validation_mode=str(context["validation_mode"]),
         n=int(context["n"]),

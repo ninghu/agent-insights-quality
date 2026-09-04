@@ -43,10 +43,12 @@ from agent_insights_quality.daily_coordinator import (
     prepare_daily,
     provision_daily,
     reopen_incomplete_daily_lane,
+    reopen_incomplete_daily_version,
     record_daily_email_receipt,
     record_daily_finalization,
     record_daily_improvement_input,
     run_daily_agent,
+    run_reopened_daily_version,
     validate_daily_assessment_outputs,
 )
 from agent_insights_quality.email import (
@@ -232,6 +234,13 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     daily_reopen.add_argument("--confirm", action="store_true")
+    daily_version_reopen = commands.add_parser("daily-reopen-incomplete-version")
+    daily_version_reopen.add_argument("--agent", required=True)
+    daily_version_reopen.add_argument("--issue", required=True)
+    daily_version_reopen.add_argument("--confirm", action="store_true")
+    daily_version_run = commands.add_parser("daily-run-reopened-version")
+    daily_version_run.add_argument("--agent", required=True)
+    daily_version_run.add_argument("--issue", required=True)
     daily_publication = commands.add_parser("daily-complete-publication")
     daily_publication.add_argument("--pr-number", type=int, required=True)
     daily_publication.add_argument("--path", action="append", required=True)
@@ -419,6 +428,20 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 args.agent,
                 confirmed=args.confirm,
             ),
+            sort_keys=True,
+        )
+    if args.command == "daily-reopen-incomplete-version":
+        return json.dumps(
+            reopen_incomplete_daily_version(
+                args.agent,
+                args.issue,
+                confirmed=args.confirm,
+            ),
+            sort_keys=True,
+        )
+    if args.command == "daily-run-reopened-version":
+        return json.dumps(
+            run_reopened_daily_version(args.agent, args.issue),
             sort_keys=True,
         )
     if args.command == "daily-complete-publication":

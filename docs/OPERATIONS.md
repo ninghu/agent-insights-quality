@@ -410,6 +410,22 @@ the accepted baseline evidence, sends zero baseline requests, and runs only the 
 untouched issues. Composition follows the one valid superseding receipt and rejects missing,
 conflicting, or orphaned ancestry.
 
+For a completed lane with one model-mediated Prompt issue stopped only by one unusable non-observation
+response, a human may reopen exactly that issue after the lane process exits:
+
+```powershell
+python -m agent_insights_quality daily-reopen-incomplete-version `
+  --agent <name> --issue <issue-NNN> --confirm
+python -m agent_insights_quality daily-run-reopened-version `
+  --agent <name> --issue <issue-NNN>
+```
+
+The policy requires exact response and identity coverage, no more than one unusable response, at
+least `k` complete reviewed observations, all required assertions, no Prompt function calls, and no
+unhandled error. The unusable request remains unknown. Reopen validates unchanged Agent, traffic,
+provider, and registry bindings; its fenced worker is prohibited from invoking the endpoint and may
+continue only telemetry, trace, Agent Insights, and receipt stages for that issue.
+
 Each lane holds an Agent-specific OS lock, resumes only its exact digest-bound checkpoints, and may
 claim at most three transient incomplete recoveries across all resumes. Exact fresh session, response,
 and operation identities are enforced. Completion writes one immutable receipt; stale workers are

@@ -70,6 +70,31 @@ def test_daily_lane_reopen_requires_explicit_agent_and_confirmation() -> None:
     assert args.confirm is True
 
 
+def test_daily_version_reopen_and_run_commands_are_explicit() -> None:
+    reopen = cli.build_parser().parse_args(
+        [
+            "daily-reopen-incomplete-version",
+            "--agent",
+            "weather-agent",
+            "--issue",
+            "issue-006",
+            "--confirm",
+        ]
+    )
+    run = cli.build_parser().parse_args(
+        [
+            "daily-run-reopened-version",
+            "--agent",
+            "weather-agent",
+            "--issue",
+            "issue-006",
+        ]
+    )
+
+    assert reopen.confirm is True
+    assert run.issue == "issue-006"
+
+
 @pytest.mark.parametrize("publish_preview", [False, True])
 def test_test_finalization_stays_private_and_skips_adx(
     monkeypatch,

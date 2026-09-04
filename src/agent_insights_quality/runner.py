@@ -357,6 +357,76 @@ def execute_agent(
     )
 
 
+def resume_issue_version(
+    *,
+    agent_name: str,
+    issue_id: str,
+    agents: dict[str, Any],
+    issues: dict[str, Any],
+    registry: dict[str, Any],
+    runtime: RuntimePort,
+    seed: int,
+    lookback_hours: float,
+    clean_window_poll_seconds: int,
+    clean_window_ingestion_margin_seconds: int,
+    clean_window_max_wait_seconds: int,
+    trace_assertion_stabilization_seconds: int,
+    insight_start_margin_seconds: int,
+    max_recovery_versions: int,
+    checkpoint_store: VersionCheckpointStore,
+) -> VersionResult:
+    agent = next(
+        (item for item in agents["agents"] if item["name"] == agent_name),
+        None,
+    )
+    issue = next(
+        (item for item in issues["issues"] if item["id"] == issue_id),
+        None,
+    )
+    if (
+        agent is None
+        or issue is None
+        or issue_id not in agent["issue_ids"]
+    ):
+        raise ContractError("Daily issue recovery assignment is invalid")
+    entry = version_entry(registry, agent_name, issue_id)
+    checkpoint_args = (
+        agent_name,
+        issue_id,
+        entry["foundry_version"],
+        entry["content_digest"],
+    )
+    if checkpoint_store.invocation(*checkpoint_args) is None:
+        raise ContractError("Daily issue recovery lacks exact completed invocation")
+    return _execute_version_with_recovery(
+        runtime=runtime,
+        agent=agent,
+        monitor_id=registry["agents"][agent_name]["monitor_id"],
+        logical_version=issue_id,
+        registry_entry=entry,
+        traffic_path=ROOT / issue["implementation"] / "traffic.json",
+        seed=seed,
+        expected=issue,
+        lookback_hours=lookback_hours,
+        clean_window_poll_seconds=clean_window_poll_seconds,
+        clean_window_ingestion_margin_seconds=(
+            clean_window_ingestion_margin_seconds
+        ),
+        clean_window_max_wait_seconds=clean_window_max_wait_seconds,
+        trace_assertion_stabilization_seconds=(
+            trace_assertion_stabilization_seconds
+        ),
+        insight_start_margin_seconds=insight_start_margin_seconds,
+        recovery_budget=_RecoveryBudget(
+            max_recovery_versions,
+            checkpoint_store,
+            agent_name,
+        ),
+        checkpoint_store=checkpoint_store,
+        start_stagger=_StartStagger(0),
+    )
+
+
 def _execute_agent(
     agent: dict[str, Any],
     issue_items: list[dict[str, Any]],
@@ -834,6 +904,12 @@ def _validate_endpoint_contract(
     traffic_path: Path,
 ) -> None:
     context = execution_context(traffic_path)
+    usable_unknown_accepted = issue_usable_response_unknown_accepted(
+        agent=agent,
+        traffic_path=traffic_path,
+        invocation=invocation,
+        baseline=baseline,
+    )
     expected_requests = len(execution_requests(traffic_path))
     if invocation.request_count != expected_requests:
         raise _VersionStageError(
@@ -844,9 +920,11 @@ def _validate_endpoint_contract(
             ),
         )
     if not (
-        invocation.request_count
-        == invocation.response_count
-        == invocation.usable_response_count
+        invocation.request_count == invocation.response_count
+        and (
+            invocation.usable_response_count == invocation.request_count
+            or usable_unknown_accepted
+        )
     ):
         raise _VersionStageError(
             "endpoint_contract_failed",
@@ -885,12 +963,24 @@ def _validate_endpoint_contract(
                 f"{agent['name']}/{logical_version} assertion results are incomplete"
             ),
         )
-    if agent["type"] == "prompt" and any(
-        item.response_count != 1
-        or not item.usable_response
-        or item.direct_terminal_response_count != 1
-        or item.function_call_count != 0
-        for item in summaries
+    unusable = [item for item in summaries if not item.usable_response]
+    if agent["type"] == "prompt" and (
+        any(
+            item.response_count != 1
+            or item.function_call_count != 0
+            or (
+                item.usable_response
+                and item.direct_terminal_response_count != 1
+            )
+            for item in summaries
+        )
+        or (
+            bool(unusable)
+            and (
+                not usable_unknown_accepted
+                or len(unusable) != 1
+            )
+        )
     ):
         raise _VersionStageError(
             "endpoint_contract_failed",
@@ -923,6 +1013,67 @@ def _validate_endpoint_contract(
                 "is incomplete"
             ),
         )
+    if usable_unknown_accepted:
+        issue_context = issue_observation_context(traffic_path)
+        decided, acceptance = _issue_activation_decision(
+            issue_context,
+            invocation,
+        )
+        if not decided or acceptance is not None:
+            raise _VersionStageError(
+                "endpoint_contract_failed",
+                ContractError(
+                    f"{agent['name']}/{logical_version} usable-response "
+                    "unknown lacks the reviewed observation threshold"
+                ),
+            )
+
+
+def issue_usable_response_unknown_accepted(
+    *,
+    agent: dict[str, Any],
+    traffic_path: Path,
+    invocation: InvocationEvidence,
+    baseline: bool = False,
+) -> bool:
+    if baseline:
+        return False
+    context = issue_observation_context(traffic_path)
+    if (
+        agent["type"] != "prompt"
+        or context["validation_mode"] != "model_mediated"
+        or set(context["required_surfaces"]) != {"semantic"}
+        or invocation.request_count != invocation.response_count
+        or invocation.usable_response_count != invocation.request_count - 1
+        or len(invocation.response_references) != invocation.request_count
+        or len(set(invocation.response_references))
+        != len(invocation.response_references)
+        or invocation.allow_window_correlation is not False
+        or sum(not item.usable_response for item in invocation.request_summaries) != 1
+        or any(
+            item.response_count != 1
+            or item.function_call_count != 0
+            or item.semantic_assertions_passed != item.semantic_assertion_count
+            or any(
+                not assertion.evidence_sufficient or not assertion.passed
+                for assertion in item.assertion_results
+            )
+            for item in invocation.request_summaries
+        )
+        or sum(
+            item.activation_gate
+            and item.usable_response
+            and item.semantic_assertion_count > 0
+            and item.semantic_assertions_passed == item.semantic_assertion_count
+            for item in invocation.request_summaries
+        )
+        < int(context["k"])
+    ):
+        return False
+    decided, acceptance = _issue_activation_decision(context, invocation)
+    return decided and acceptance is None
+
+
 def _with_trace_assertions(
     invocation: InvocationEvidence,
     results: tuple[tuple[Any, ...], ...],
@@ -1434,6 +1585,25 @@ def _execute_version(
                 ),
             )
         except InsightWindowExpiredError as error:
+            if (
+                expected is not None
+                and invocation.usable_response_count == invocation.request_count - 1
+                and int(trace_evidence.get("unhandled_error_count") or 0) != 0
+            ):
+                result = _activation_failure_result(
+                    logical_version=logical_version,
+                    foundry_version=foundry_version,
+                    operation_ids=operation_ids,
+                    invocation=invocation,
+                    trace_evidence=trace_evidence,
+                )
+                if checkpoint_store is not None:
+                    checkpoint_store.save_rejected_result(
+                        *checkpoint_args,
+                        result,
+                        drain_pending=False,
+                    )
+                return result
             if expected is not None:
                 raise _VersionStageError(
                     "issue_activation_failed",
