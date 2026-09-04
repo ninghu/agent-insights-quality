@@ -420,11 +420,13 @@ python -m agent_insights_quality daily-run-reopened-version `
   --agent <name> --issue <issue-NNN>
 ```
 
-The policy requires exact response and identity coverage, no more than one unusable response, at
-least `k` complete reviewed observations, all required assertions, no Prompt function calls, and no
-unhandled error. The unusable request remains unknown. Reopen validates unchanged Agent, traffic,
-provider, and registry bindings; its fenced worker is prohibited from invoking the endpoint and may
-continue only telemetry, trace, Agent Insights, and receipt stages for that issue.
+The policy supports either the reviewed one-usable-unknown Prompt issue or a failure confined to
+telemetry correlation, trace hydration, or trace stability after an exact complete invocation.
+It requires exact response and identity coverage, all available semantic evidence, no definitive
+assertion contradiction, no Prompt function calls, and no unhandled error. The unusable request
+remains unknown. Reopen validates unchanged Agent, traffic, provider, and registry bindings; its
+fenced worker is prohibited from invoking the endpoint and continues from the earliest missing
+telemetry or trace stage through Agent Insights and the supplemental receipt.
 
 Each lane holds an Agent-specific OS lock, resumes only its exact digest-bound checkpoints, and may
 claim at most three transient incomplete recoveries across all resumes. Exact fresh session, response,

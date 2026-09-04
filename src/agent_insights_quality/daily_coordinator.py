@@ -43,6 +43,7 @@ from agent_insights_quality.live import LiveRuntime
 from agent_insights_quality.models import (
     AgentResult,
     InsightEvidence,
+    InvocationEvidence,
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
@@ -1267,8 +1268,7 @@ def reopen_incomplete_daily_version(
         target = next(item for item in result.issues if item.logical_version == issue_id)
         if (
             target.status != "inconclusive"
-            or target.error_code != "endpoint_contract_failed"
-            or target.operation_ids
+            or not isinstance(target.error_code, str)
             or target.insight_references
             or target.observed_insights
         ):
@@ -1288,10 +1288,11 @@ def reopen_incomplete_daily_version(
             invocation is None
             or store.insight_start_pending(*checkpoint_args)
             or store.insight_drain_pending(*checkpoint_args)
-            or not issue_usable_response_unknown_accepted(
-                agent=agent,
-                traffic_path=ROOT / issue["implementation"] / "traffic.json",
-                invocation=invocation,
+            or not _issue_version_reopenable(
+                agent,
+                issue,
+                target,
+                invocation,
             )
         ):
             raise ContractError("Daily issue existing traffic is not safely reclassifiable")
@@ -1346,6 +1347,64 @@ def reopen_incomplete_daily_version(
             f"--agent {agent_name} --issue {issue_id}"
         ),
     }
+
+
+def _issue_version_reopenable(
+    agent: Mapping[str, Any],
+    issue: Mapping[str, Any],
+    result: VersionResult,
+    invocation: InvocationEvidence,
+) -> bool:
+    error_code = str(result.error_code or "")
+    traffic_path = ROOT / str(issue["implementation"]) / "traffic.json"
+    if error_code == "endpoint_contract_failed":
+        return issue_usable_response_unknown_accepted(
+            agent=dict(agent),
+            traffic_path=traffic_path,
+            invocation=invocation,
+        )
+    if not error_code.startswith(
+        (
+            "telemetry_failed",
+            "trace_contract_failed",
+            "trace_evidence_failed",
+            "trace_assertion_failed",
+        )
+    ):
+        return False
+    summaries = invocation.request_summaries
+    return (
+        invocation.request_count > 0
+        and invocation.request_count
+        == invocation.response_count
+        == invocation.usable_response_count
+        == len(invocation.response_references)
+        == len(summaries)
+        and len(set(invocation.response_references))
+        == len(invocation.response_references)
+        and invocation.allow_window_correlation is False
+        and all(
+            summary.response_count == 1
+            and summary.usable_response
+            and summary.semantic_assertions_passed
+            == summary.semantic_assertion_count
+            and all(
+                assertion.passed and assertion.evidence_sufficient
+                for assertion in summary.assertion_results
+            )
+            and all(
+                assertion.passed or not assertion.evidence_sufficient
+                for assertion in summary.trace_assertion_results
+            )
+            and (
+                agent["type"] != "prompt"
+                or summary.function_call_count == 0
+            )
+            for summary in summaries
+        )
+        and int(result.trace_behavior_summary.get("unhandled_error_count") or 0)
+        == 0
+    )
 
 
 class _NoEndpointInvokeRuntime:

@@ -47,6 +47,9 @@ license: MIT
    identity coverage are exact, at least `k` reviewed observations are complete, and every required
    assertion passes. Run only the returned `daily-run-reopened-version` command; it forbids endpoint
    invocation and continues only the missing evidence and Agent Insights stages.
+   The same version command may resume an exact complete saved invocation stopped only at telemetry
+   correlation, trace hydration, or trace stability, provided semantic evidence has no contradiction
+   and the issue has no ambiguous endpoint outcome.
 7. Start up to five visible Copilot assessment sub sessions, one per Agent and its five packages.
    Assess each baseline and four issues with GPT-5.6 Sol using the repository assessment prompt. Use
    independent `endpoint_evidence`; never assign `insight_engine` unless
