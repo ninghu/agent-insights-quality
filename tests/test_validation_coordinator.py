@@ -514,7 +514,10 @@ def _copilot_scheduling_context(monkeypatch, tmp_path) -> dict:
         lambda _evidence: ("PASS", None, None),
     )
 
-    def write_result(*, authority, **_kwargs):
+    lock_modes = []
+
+    def write_result(*, authority, **kwargs):
+        lock_modes.append(kwargs["coordinator_lock_held"])
         authority_id = authority.authority_id
         reference = {
             "authority_id": authority_id,
@@ -562,6 +565,7 @@ def _copilot_scheduling_context(monkeypatch, tmp_path) -> dict:
         "claimant": claimant,
         "results": results,
         "package_calls": package_calls,
+        "lock_modes": lock_modes,
     }
 
 
@@ -649,6 +653,7 @@ def test_copilot_import_isolated_by_worktree_and_replenishes_capacity(
     )
     assert imported["status"] == "verified"
     assert imported["outcome"] == "PASS"
+    assert state["lock_modes"] == [True]
     assert (
         validation_copilot.active_copilot_claims(
             prepared=state["active"]

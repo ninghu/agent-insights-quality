@@ -214,6 +214,17 @@ def verify_next_daily_target(
     claimant = claimant_reference or copilot_claimant_reference()
     claim = _claim_verification_target(active, private_root, claimant, now=now)
     if claim is None:
+        current = _reconcile_verification_barrier(active, private_root)
+        if current.value["state"] != "VERIFICATION":
+            return {
+                "status": (
+                    "verification_complete"
+                    if current.value["state"] == "INSIGHTS"
+                    else "verification_failed"
+                ),
+                "retryable": False,
+                "state": current.value["state"],
+            }
         return {
             "status": "verification_capacity_busy",
             "retryable": True,
@@ -269,22 +280,15 @@ def verify_next_daily_target(
                 "error_code": result.error_code,
             }
         value = _verification_result(active, target, traffic, claim, result)
-        lock = _coordinator_lock(private_root)
-        with lock:
-            _assert_claim_current(active, private_root, claimant, claim)
-            path = _verification_result_path(active, private_root, target)
-            immutable_json(path, value)
-            _claim_path(active, private_root, target).unlink()
-        eligible_status = (
-            "passed" if target.expected is None else "observed"
+        current = _publish_verification_result(
+            active=active,
+            base=private_root,
+            claimant=claimant,
+            claim=claim,
+            target=target,
+            value=value,
         )
-        if result.status != eligible_status:
-            _fail_daily_verification(
-                active,
-                private_root,
-                target,
-                value,
-            )
+        if current.value["state"] == "FAILED":
             return {
                 "status": "verification_failed",
                 "state": "FAILED",
@@ -293,18 +297,6 @@ def verify_next_daily_target(
                 "endpoint_requests": 0,
                 "insight_runs": 0,
             }
-        _advance_phase_if_complete(
-            active,
-            private_root,
-            source_phase="verification",
-            next_state="INSIGHTS",
-            artifact_field="verification_manifest",
-            artifact_loader=_load_verification_for_manifest,
-        )
-        current = DailyLifecycle(
-            lock=_coordinator_lock(private_root),
-            base=private_root,
-        ).read_active()
         return {
             "status": "verified",
             "state": current.value["state"],
@@ -858,17 +850,115 @@ def _verify_target(
     )
 
 
-def _fail_daily_verification(
+def _publish_verification_result(
+    *,
     active: DailyRecord,
+    base: Path,
+    claimant: str,
+    claim: Mapping[str, Any],
+    target: DailyTarget,
+    value: Mapping[str, Any],
+) -> DailyRecord:
+    lock = _coordinator_lock(base)
+    with lock:
+        _assert_claim_current(active, base, claimant, claim)
+        lifecycle = DailyLifecycle(lock=lock, base=base)
+        current = lifecycle.read_active()
+        immutable_json(
+            _verification_result_path(active, base, target),
+            value,
+        )
+        _claim_path(active, base, target).unlink()
+        eligible = "passed" if target.expected is None else "observed"
+        if value["result"]["status"] != eligible:
+            return _fail_daily_verification_locked(
+                lifecycle,
+                current,
+                base,
+                target,
+                value,
+            )
+        return _advance_verification_barrier_locked(
+            lifecycle,
+            current,
+            base,
+        )
+
+
+def _reconcile_verification_barrier(
+    active: DailyRecord,
+    base: Path,
+) -> DailyRecord:
+    lock = _coordinator_lock(base)
+    with lock:
+        current = _assert_current(
+            active,
+            base,
+            allowed_states={"VERIFICATION"},
+        )
+        return _advance_verification_barrier_locked(
+            DailyLifecycle(lock=lock, base=base),
+            current,
+            base,
+        )
+
+
+def _advance_verification_barrier_locked(
+    lifecycle: DailyLifecycle,
+    current: DailyRecord,
+    base: Path,
+) -> DailyRecord:
+    references = []
+    for target in _identity_targets(current):
+        path = _verification_result_path(current, base, target)
+        if not path.is_file():
+            return current
+        value = _load_verification_for_manifest(path, current, target)
+        eligible = "passed" if target.logical_version == "v0" else "observed"
+        if value["result"]["status"] != eligible:
+            return _fail_daily_verification_locked(
+                lifecycle,
+                current,
+                base,
+                target,
+                value,
+            )
+        references.append(
+            {
+                "agent_name": target.agent_name,
+                "logical_version": target.logical_version,
+                "path": path.relative_to(daily_runtime_root(base)).as_posix(),
+                "digest": value["result_digest"],
+            }
+        )
+    manifest = _phase_manifest(current, "verification", references)
+    path = _phase_manifest_path(current, base, "verification")
+    immutable_json(path, manifest)
+    return lifecycle.transition(
+        current,
+        next_state="INSIGHTS",
+        artifact_updates={
+            "verification_manifest": artifact_reference(
+                path,
+                daily_runtime_root(base),
+                manifest["manifest_digest"],
+            )
+        },
+    )
+
+
+def _fail_daily_verification_locked(
+    lifecycle: DailyLifecycle,
+    current: DailyRecord,
     base: Path,
     target: DailyTarget,
     verification: Mapping[str, Any],
-) -> None:
+) -> DailyRecord:
     failure = {
         "schema_version": "1.0.0",
         "kind": "daily-verification-failure",
-        "execution_id": active.value["execution_id"],
-        "run_contract_digest": active.value["bindings"]["run_contract_digest"],
+        "execution_id": current.value["execution_id"],
+        "run_contract_digest": current.value["bindings"]["run_contract_digest"],
         "agent_name": target.agent_name,
         "logical_version": target.logical_version,
         "verification_result_digest": verification["result_digest"],
@@ -878,22 +968,19 @@ def _fail_daily_verification(
     failure["failure_digest"] = content_hash(
         {key: item for key, item in failure.items() if key != "failure_digest"}
     )
-    path = _run_root(active, base) / "verification" / "failure.json"
-    lock = _coordinator_lock(base)
-    with lock:
-        current = _assert_current(active, base, allowed_states={"VERIFICATION"})
-        immutable_json(path, failure)
-        DailyLifecycle(lock=lock, base=base).transition(
-            current,
-            next_state="FAILED",
-            artifact_updates={
-                "failure": artifact_reference(
-                    path,
-                    daily_runtime_root(base),
-                    failure["failure_digest"],
-                )
-            },
-        )
+    path = _run_root(current, base) / "verification" / "failure.json"
+    immutable_json(path, failure)
+    return lifecycle.transition(
+        current,
+        next_state="FAILED",
+        artifact_updates={
+            "failure": artifact_reference(
+                path,
+                daily_runtime_root(base),
+                failure["failure_digest"],
+            )
+        },
+    )
 
 
 def _traffic_receipt(

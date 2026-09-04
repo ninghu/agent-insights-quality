@@ -277,6 +277,10 @@ def _prepare_test_agent_validation(
                         item.authority_id for item in authorities
                     ],
                 )
+                if recovery_intent is not None:
+                    superseded_authority_ids = list(
+                        recovery_intent["incomplete_authority_ids"]
+                    )
         controller = ValidationCycleController(journal, active=active)
         controller.preflight(capacity, now=datetime.now(UTC))
         provisioner = ValidationProjectProvisioner(
@@ -568,10 +572,18 @@ def recover_test_agent_validation() -> dict[str, Any]:
         resumed_intent,
         Mapping,
     ):
-        _validate_resumable_recovery_intent(
-            source,
-            recovery_intent=resumed_intent,
-            git=git,
+        rebound_intent = {
+            **dict(resumed_intent),
+            "source_run_id": source["run_id"],
+            "source_journal_digest": source["journal_digest"],
+            "intent_digest": "",
+        }
+        rebound_intent["intent_digest"] = content_hash(
+            {
+                key: item
+                for key, item in rebound_intent.items()
+                if key != "intent_digest"
+            }
         )
         candidate = {
             "incomplete_authority_ids": list(
@@ -579,7 +591,7 @@ def recover_test_agent_validation() -> dict[str, Any]:
             )
         }
         prepared = _prepare_test_agent_validation(
-            recovery_intent=resumed_intent,
+            recovery_intent=rebound_intent,
         )
     else:
         candidate = _validation_recovery_candidate(source, git=git)
@@ -1034,6 +1046,7 @@ def prepare_test_agent_validation_assessment() -> dict[str, Any]:
                 error_code=error_code,
                 query_diagnostics=query_diagnostics,
                 fence=lambda: _assert_active_generation(prepared),
+                coordinator_lock_held=True,
             )
             complete_active_pointer(
                 current_pointer,
@@ -1235,6 +1248,7 @@ def import_test_agent_validation_assessment() -> dict[str, Any]:
             query_diagnostics=None,
             fence=lambda: _assert_active_generation(prepared),
             copilot_evaluation=evaluation_reference,
+            coordinator_lock_held=True,
         )
         result = _copilot_authority_verification_result(
             load_authority_verification_result(reference)
@@ -2191,14 +2205,28 @@ def _validate_resumable_recovery_intent(
     recovery_intent: Mapping[str, Any],
     git: Any,
 ) -> None:
+    active_intent = active.get("recovery_intent")
+    rebound = (
+        isinstance(active_intent, Mapping)
+        and recovery_intent.get("source_run_id") == active.get("run_id")
+        and recovery_intent.get("source_journal_digest")
+        == active.get("journal_digest")
+        and all(
+            recovery_intent.get(field) == active_intent.get(field)
+            for field in (
+                "source_authority_results",
+                "source_invocation_receipts",
+                "incomplete_authority_ids",
+                "fresh_invocation_authority_ids",
+            )
+        )
+    )
     if (
         active.get("state") != "CREATING"
         or active.get("repository") != git.repository
         or active.get("pr_number") != git.pr_number
         or active.get("commit_sha") != git.commit_sha
-        or active.get("supersedes")
-        != recovery_intent.get("source_journal_digest")
-        or active.get("recovery_intent") != recovery_intent
+        or not rebound
         or recovery_intent.get("intent_digest")
         != content_hash(
             {

@@ -61,6 +61,7 @@ def write_authority_verification_result(
     query_diagnostics: Mapping[str, Any] | None,
     fence: Callable[[], None],
     copilot_evaluation: Mapping[str, str] | None = None,
+    coordinator_lock_held: bool = False,
     root: Path | None = None,
 ) -> dict[str, str]:
     fence()
@@ -137,10 +138,7 @@ def write_authority_verification_result(
     runtime_root = (root or validation_runtime_root()).resolve()
     path = _current_result_path(runtime_root, value)
     reference = _result_reference(value, path=path, root=runtime_root)
-    with LocalValidationLock(
-        runtime_root / "coordinator.lock",
-        wait_seconds=_PUBLICATION_LOCK_WAIT_SECONDS,
-    ):
+    def publish() -> None:
         fence()
         immutable_json(path, value)
         persisted = read_json(path)
@@ -148,6 +146,14 @@ def write_authority_verification_result(
             raise ContractError(
                 "Immutable authority verification result changed"
             )
+    if coordinator_lock_held:
+        publish()
+    else:
+        with LocalValidationLock(
+            runtime_root / "coordinator.lock",
+            wait_seconds=_PUBLICATION_LOCK_WAIT_SECONDS,
+        ):
+            publish()
     return reference
 
 

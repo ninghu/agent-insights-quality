@@ -324,6 +324,45 @@ def test_below_threshold_verification_fails_before_insights(
     )
 
 
+def test_no_claimable_target_reconciles_completed_verification_barrier(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    active, _, _ = _context(monkeypatch, tmp_path)
+    lock = DailyLock(daily_runtime_root(tmp_path) / "coordinator.lock")
+    with lock:
+        lifecycle = DailyLifecycle(lock=lock, base=tmp_path)
+        traffic = lifecycle.transition(active, next_state="TRAFFIC")
+        lifecycle.transition(
+            traffic,
+            next_state="VERIFICATION",
+            artifact_updates={
+                "traffic_manifest": {"path": "traffic.json", "digest": HASH}
+            },
+        )
+    monkeypatch.setattr(
+        daily_phases,
+        "_claim_verification_target",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        daily_phases,
+        "_reconcile_verification_barrier",
+        lambda *_args, **_kwargs: SimpleNamespace(value={"state": "INSIGHTS"}),
+    )
+
+    result = daily_phases.verify_next_daily_target(
+        base=tmp_path,
+        claimant_reference="sha256:" + "8" * 64,
+    )
+
+    assert result == {
+        "status": "verification_complete",
+        "retryable": False,
+        "state": "INSIGHTS",
+    }
+
+
 def test_monitor_reset_is_exactly_once_per_agent_and_resume_is_idempotent(
     monkeypatch,
     tmp_path: Path,
