@@ -641,6 +641,12 @@ def test_reopen_single_unknown_baseline_resumes_only_untouched_issues(
     assert all(
         item["status"] == "observed" for item in effective["result"]["issues"]
     )
+    claims = list(
+        coordinator._lane_root(active, tmp_path, "finance-agent")
+        .joinpath("worker-claims")
+        .glob("*.json")
+    )
+    assert len(claims) == 1
 
 
 @pytest.mark.parametrize(

@@ -40,7 +40,8 @@ license: MIT
    A legacy lane that already finalized this exact single-unknown shape may be salvaged only through
    the central human-confirmed `daily-reopen-incomplete-lane --agent <name> --confirm` command. It
    requires unchanged Agent, traffic, provider, registry, and runtime bindings, preserves the old
-   receipt, and resumes only the four untouched issues with no baseline traffic.
+   receipt, atomically claims one fenced recovery worker epoch, and resumes only the four untouched
+   issues with no baseline traffic. Never steal an active recovery worker claim.
 7. Start up to five visible Copilot assessment sub sessions, one per Agent and its five packages.
    Assess each baseline and four issues with GPT-5.6 Sol using the repository assessment prompt. Use
    independent `endpoint_evidence`; never assign `insight_engine` unless

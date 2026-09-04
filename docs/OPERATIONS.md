@@ -404,9 +404,11 @@ python -m agent_insights_quality daily-run-agent --agent <name>
 Reopen accepts only the reviewed single-terminal-unknown policy. It preserves the original receipt,
 writes an immutable run-fenced supplemental event, verifies unchanged Agent/traffic catalog and exact
 Daily registry bindings, and binds both the original execution commit and current framework verifier
-commit. The resume reuses the accepted baseline evidence, sends zero baseline requests, and runs only
-the four previously untouched issues. Composition follows the one valid superseding receipt and
-rejects missing, conflicting, or orphaned ancestry.
+commit. The first resume caller atomically claims one immutable worker epoch under the coordinator
+lock before stale-worker checks; other worktrees cannot steal that active claim. The resume reuses
+the accepted baseline evidence, sends zero baseline requests, and runs only the four previously
+untouched issues. Composition follows the one valid superseding receipt and rejects missing,
+conflicting, or orphaned ancestry.
 
 Each lane holds an Agent-specific OS lock, resumes only its exact digest-bound checkpoints, and may
 claim at most three transient incomplete recoveries across all resumes. Exact fresh session, response,

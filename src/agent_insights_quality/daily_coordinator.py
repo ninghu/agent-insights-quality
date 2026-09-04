@@ -85,6 +85,7 @@ _REOPEN_SCHEMA = ROOT / "schemas" / "daily-lane-reopen.schema.json"
 _RECOVERY_RECEIPT_SCHEMA = (
     ROOT / "schemas" / "daily-agent-recovery-receipt.schema.json"
 )
+_WORKER_CLAIM_SCHEMA = ROOT / "schemas" / "daily-lane-worker-claim.schema.json"
 _DISPLAY_NAMES = {
     "weather-agent": "Weather",
     "healthcare-agent": "Healthcare",
@@ -282,7 +283,6 @@ def run_daily_agent(
     private_root = (base or runtime_root()).resolve()
     active = _read_active(private_root, allowed_states={"PREPARED", "TRAFFIC"})
     reopen = _read_lane_reopen(active, private_root, agent_name)
-    _assert_checkout_binding(active, private_root, agent_name=agent_name)
     lock = _coordinator_lock(private_root)
     with lock:
         lifecycle = DailyLifecycle(lock=lock, base=private_root)
@@ -307,6 +307,22 @@ def run_daily_agent(
                 reopen=reopen,
             )
             return _lane_result(receipt, resumed=True)
+        worker_claim = (
+            _claim_reopened_lane_worker(
+                active,
+                private_root,
+                agent_name,
+                reopen,
+            )
+            if reopen is not None
+            else None
+        )
+        _assert_checkout_binding(
+            active,
+            private_root,
+            agent_name=agent_name,
+            worker_claim=worker_claim,
+        )
         capacity = _acquire_lane_capacity(active, private_root)
         try:
             return _run_daily_agent_locked(
@@ -317,6 +333,7 @@ def run_daily_agent(
                 profile_factory=profile_factory,
                 runtime_factory=runtime_factory,
                 reopen=reopen,
+                worker_claim=worker_claim,
             )
         finally:
             capacity.release()
@@ -331,8 +348,14 @@ def _run_daily_agent_locked(
     profile_factory: Callable[[str], RuntimeProfile] | None,
     runtime_factory: Callable[[RuntimeProfile], Any] | None,
     reopen: Mapping[str, Any] | None,
+    worker_claim: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    _daily_fence(active, private_root, allowed_states={"TRAFFIC"})
+    _daily_fence(
+        active,
+        private_root,
+        allowed_states={"TRAFFIC"},
+        worker_claim=worker_claim,
+    )
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
     if hashes != active.value["bindings"]["catalog_hashes"]:
@@ -383,7 +406,12 @@ def _run_daily_agent_locked(
             raise ContractError("Reopened Daily baseline checkpoint is stale")
     runtime = _FencedRuntime(
         (runtime_factory or LiveRuntime)(profile),
-        lambda: _daily_fence(active, private_root, allowed_states={"TRAFFIC"}),
+        lambda: _daily_fence(
+            active,
+            private_root,
+            allowed_states={"TRAFFIC"},
+            worker_claim=worker_claim,
+        ),
     )
     lane_index = AGENT_ORDER.index(agent_name)
     start_delay = (
@@ -438,7 +466,12 @@ def _run_daily_agent_locked(
         raise ContractError(
             f"{agent_name} has unresolved Agent Insights state; resume its lane"
         )
-    _daily_fence(active, private_root, allowed_states={"TRAFFIC"})
+    _daily_fence(
+        active,
+        private_root,
+        allowed_states={"TRAFFIC"},
+        worker_claim=worker_claim,
+    )
     receipt = (
         _stamp_lane_recovery_receipt(active, agent_name, result, reopen)
         if reopen is not None
@@ -1312,6 +1345,7 @@ def _daily_fence(
     base: Path,
     *,
     allowed_states: set[str],
+    worker_claim: Mapping[str, Any] | None = None,
 ) -> None:
     current = DailyLifecycle(
         lock=_coordinator_lock(base),
@@ -1326,6 +1360,14 @@ def _daily_fence(
         != expected_bindings["checkout_commit_sha"]
         or current_bindings["run_contract_digest"]
         != expected_bindings["run_contract_digest"]
+        or (
+            worker_claim is not None
+            and not _reopened_lane_worker_claim_is_current(
+                current,
+                base,
+                worker_claim,
+            )
+        )
     ):
         raise ContractError("Stale Daily worker is fenced from the active lifecycle")
 
@@ -1384,6 +1426,7 @@ def _daily_contract_digest(
         "schemas/daily-agent-recovery-receipt.schema.json",
         "schemas/daily-lane-recovery.schema.json",
         "schemas/daily-lane-reopen.schema.json",
+        "schemas/daily-lane-worker-claim.schema.json",
         "schemas/daily-email-test-preview.schema.json",
         "schemas/prompt-traffic.schema.json",
         "schemas/assessment-package.schema.json",
@@ -1436,6 +1479,7 @@ def _assert_checkout_binding(
     *,
     agent_name: str | None = None,
     allow_recovery_commit: bool = False,
+    worker_claim: Mapping[str, Any] | None = None,
 ) -> None:
     agents, issues = load_catalogs()
     bindings = active.value["bindings"]
@@ -1443,6 +1487,14 @@ def _assert_checkout_binding(
     if catalog_hashes(agents, issues) != bindings["catalog_hashes"]:
         raise ContractError("Stale Daily worker is fenced from the active lifecycle")
     if commit_sha == bindings["checkout_commit_sha"]:
+        return
+    if (
+        worker_claim is not None
+        and worker_claim["recovery_commit_sha"] == commit_sha
+        and worker_claim["recovery_verifier_digest"]
+        == _lane_recovery_verifier_digest()
+        and _reopened_lane_worker_claim_is_current(active, base, worker_claim)
+    ):
         return
     candidates = (
         [agent_name]
@@ -1452,11 +1504,11 @@ def _assert_checkout_binding(
         else []
     )
     for candidate in candidates:
-        reopen = _read_lane_reopen(active, base, candidate)
+        claim = _read_lane_worker_claim(active, base, candidate)
         if (
-            reopen is not None
-            and reopen["recovery_commit_sha"] == commit_sha
-            and reopen["recovery_verifier_digest"]
+            claim is not None
+            and claim["recovery_commit_sha"] == commit_sha
+            and claim["recovery_verifier_digest"]
             == _lane_recovery_verifier_digest()
         ):
             return
@@ -1512,6 +1564,189 @@ def _lane_recovery_receipt_path(
     return _lane_root(active, base, agent_name) / "recovery-completion-receipt.json"
 
 
+def _lane_worker_claim_pointer_path(
+    active: DailyRecord,
+    base: Path,
+    agent_name: str,
+) -> Path:
+    return _lane_root(active, base, agent_name) / "reopen-worker-active.json"
+
+
+def _lane_worker_claim_event_path(
+    active: DailyRecord,
+    base: Path,
+    agent_name: str,
+    digest: str,
+) -> Path:
+    return (
+        _lane_root(active, base, agent_name)
+        / "worker-claims"
+        / f"{digest.removeprefix('sha256:')}.json"
+    )
+
+
+def _claim_reopened_lane_worker(
+    active: DailyRecord,
+    base: Path,
+    agent_name: str,
+    reopen: Mapping[str, Any],
+) -> dict[str, Any]:
+    lock = _coordinator_lock(base)
+    with lock:
+        current = DailyLifecycle(lock=lock, base=base).read_active()
+        if (
+            current.value["state"] != "TRAFFIC"
+            or current.value["execution_id"] != active.value["execution_id"]
+            or _read_lane_reopen(current, base, agent_name) != reopen
+            or _lane_recovery_receipt_path(current, base, agent_name).exists()
+        ):
+            raise ContractError("Reopened Daily lane is no longer claimable")
+        pointer_path = _lane_worker_claim_pointer_path(current, base, agent_name)
+        worker_reference = content_hash(
+            {"worktree": str(ROOT.resolve()).casefold()}
+        )
+        if pointer_path.exists():
+            existing = _read_lane_worker_claim(current, base, agent_name)
+            if (
+                existing is not None
+                and existing["worker_reference"] == worker_reference
+                and existing["recovery_commit_sha"] == current_clean_commit()
+                and existing["recovery_verifier_digest"]
+                == _lane_recovery_verifier_digest()
+            ):
+                return existing
+            raise ContractError("Reopened Daily lane already has an active worker")
+        original = _read_lane_receipt(
+            _lane_receipt_path(current, base, agent_name),
+            current,
+            agent_name,
+        )
+        result = _agent_result(original["result"])
+        checkpoint_store = _checkpoint_store(current, base)
+        if any(
+            item.status != "skipped_baseline"
+            or item.operation_ids
+            or item.endpoint_request_count
+            or checkpoint_store.has_version_progress(agent_name, item.logical_version)
+            for item in result.issues
+        ):
+            raise ContractError("Reopened Daily lane has issue traffic or progress")
+        commit_sha = current_clean_commit()
+        agents, issues = load_catalogs()
+        if catalog_hashes(agents, issues) != current.value["bindings"]["catalog_hashes"]:
+            raise ContractError("Reopened Daily worker content binding changed")
+        claim = {
+            "schema_version": "1.0.0",
+            "kind": "daily-lane-worker-claim",
+            "execution_id": current.value["execution_id"],
+            "run_contract_digest": current.value["bindings"]["run_contract_digest"],
+            "agent_name": agent_name,
+            "reopen_event_digest": reopen["event_digest"],
+            "epoch": 1,
+            "recovery_commit_sha": commit_sha,
+            "recovery_verifier_digest": _lane_recovery_verifier_digest(),
+            "worker_reference": worker_reference,
+            "claim_nonce": uuid.uuid4().hex,
+            "claim_digest": "",
+        }
+        claim["claim_digest"] = content_hash(
+            {key: item for key, item in claim.items() if key != "claim_digest"}
+        )
+        _validate_lane_worker_claim(claim, current, reopen)
+        event_path = _lane_worker_claim_event_path(
+            current,
+            base,
+            agent_name,
+            claim["claim_digest"],
+        )
+        immutable_json(event_path, claim)
+        atomic_json(
+            pointer_path,
+            {
+                "schema_version": "1.0.0",
+                "epoch": claim["epoch"],
+                "claim_path": event_path.relative_to(
+                    daily_runtime_root(base)
+                ).as_posix(),
+                "claim_digest": claim["claim_digest"],
+            },
+        )
+        return claim
+
+
+def _read_lane_worker_claim(
+    active: DailyRecord,
+    base: Path,
+    agent_name: str,
+) -> dict[str, Any] | None:
+    pointer_path = _lane_worker_claim_pointer_path(active, base, agent_name)
+    if not pointer_path.is_file():
+        return None
+    pointer = read_json(pointer_path)
+    if set(pointer) != {
+        "schema_version",
+        "epoch",
+        "claim_path",
+        "claim_digest",
+    } or pointer["schema_version"] != "1.0.0":
+        raise ContractError("Daily lane worker claim pointer is invalid")
+    claim_path = (daily_runtime_root(base) / pointer["claim_path"]).resolve()
+    expected_path = _lane_worker_claim_event_path(
+        active,
+        base,
+        agent_name,
+        pointer["claim_digest"],
+    ).resolve()
+    if claim_path != expected_path or not claim_path.is_file():
+        raise ContractError("Daily lane worker claim is orphaned")
+    claim = read_json(claim_path)
+    reopen = _read_lane_reopen(active, base, agent_name)
+    if reopen is None:
+        raise ContractError("Daily lane worker claim lacks its reopen event")
+    _validate_lane_worker_claim(claim, active, reopen)
+    if (
+        pointer["epoch"] != claim["epoch"]
+        or pointer["claim_digest"] != claim["claim_digest"]
+    ):
+        raise ContractError("Daily lane worker claim pointer is stale")
+    return claim
+
+
+def _validate_lane_worker_claim(
+    value: Mapping[str, Any],
+    active: DailyRecord,
+    reopen: Mapping[str, Any],
+) -> None:
+    errors = list(
+        Draft202012Validator(read_json(_WORKER_CLAIM_SCHEMA)).iter_errors(value)
+    )
+    if errors:
+        raise ContractError(
+            f"Daily lane worker claim is invalid: {errors[0].message}"
+        )
+    if (
+        value["execution_id"] != active.value["execution_id"]
+        or value["run_contract_digest"]
+        != active.value["bindings"]["run_contract_digest"]
+        or value["agent_name"] != reopen["agent_name"]
+        or value["reopen_event_digest"] != reopen["event_digest"]
+        or value["claim_digest"]
+        != content_hash(
+            {key: item for key, item in value.items() if key != "claim_digest"}
+        )
+    ):
+        raise ContractError("Daily lane worker claim binding is stale")
+
+
+def _reopened_lane_worker_claim_is_current(
+    active: DailyRecord,
+    base: Path,
+    claim: Mapping[str, Any],
+) -> bool:
+    current = _read_lane_worker_claim(active, base, str(claim["agent_name"]))
+    return current == claim
+
+
 def _lane_recovery_verifier_digest() -> str:
     return content_hash(
         {
@@ -1522,6 +1757,7 @@ def _lane_recovery_verifier_digest() -> str:
                 ROOT / "src" / "agent_insights_quality" / "runner.py",
                 ROOT / "schemas" / "daily-lane-reopen.schema.json",
                 ROOT / "schemas" / "daily-agent-recovery-receipt.schema.json",
+                ROOT / "schemas" / "daily-lane-worker-claim.schema.json",
             )
         }
     )
