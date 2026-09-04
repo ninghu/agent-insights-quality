@@ -480,9 +480,10 @@ def _validate_baseline(
     requests = traffic.get("requests") if isinstance(traffic, dict) else None
     if not isinstance(requests, list) or len(requests) < 5:
         raise ContractError(f"{agent['name']} baseline requires at least five requests")
-    if len(requests) != int(agent["baseline_contract"]["request_count"]):
+    scenario = traffic["validation_rules"]["scenarios"][0]
+    if scenario["n"] != int(agent["baseline_contract"]["request_count"]):
         raise ContractError(
-            f"{agent['name']} baseline request count does not match its contract"
+            f"{agent['name']} baseline attempt count does not match its contract"
         )
     if agent["baseline_contract"]["trace_operations"] == "required_per_request":
         for request in requests:

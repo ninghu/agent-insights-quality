@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.util import ROOT
-from agent_insights_quality.validation_approved import APPROVED_RECORD_CONTAINER
-from agent_insights_quality.validation_blob import (
-    APPROVED_RECORD_CONTAINER as BLOB_APPROVED_RECORD_CONTAINER,
-)
 
 
 def test_live_validation_gate_workflows_are_removed() -> None:
@@ -54,8 +49,7 @@ def test_infrastructure_owns_dedicated_sweden_validation_storage() -> None:
     assert "isVersioningEnabled: true" in text
     assert "name: qualityArtifactContainerName" in text
     assert "name: deploymentRegistryContainerName" in text
-    assert "name: approvedRecordContainerName" in text
-    assert "immutableStorageWithVersioning" in text
+    assert "approvedRecordContainerName" not in text
     assert "immutabilityPolicies" not in text
     assert "qualityArtifactLifecycle" in text
     assert "prefixMatch: ['${qualityArtifactContainerName}/']" in text
@@ -63,19 +57,7 @@ def test_infrastructure_owns_dedicated_sweden_validation_storage() -> None:
     azure = (
         ROOT / "src" / "agent_insights_quality" / "azure.py"
     ).read_text(encoding="utf-8")
-    assert '"immutability-policy",' in azure
-    assert '"create",' in azure
-    assert '"lock",' in azure
-    assert 'policy.get("state") != "Locked"' in azure
-    assert "policy.approved_record_container" in azure
-    assert "policy.storage_account_prefix" in azure
-    assert "policy.storage_resource_role" in azure
-    assert (
-        APPROVED_RECORD_CONTAINER
-        == BLOB_APPROVED_RECORD_CONTAINER
-        == load_automation_policy().approved_record_container
-        == "test-agent-validation-approved-records-swedencentral-g30"
-    )
+    assert "approved validation" not in azure.casefold()
     assert "test-agent-validation-lifecycle" not in text
     assert "test-agent-validation-snapshots" not in text
     assert "test-agent-validation-shadow-receipts" not in text

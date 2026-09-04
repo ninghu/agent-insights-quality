@@ -22,6 +22,9 @@ For each step:
 - Treat an absent required operation as definitive only when the package independently proves that
   the response-bound descendant span tree is complete. A partial tree cannot prove absence, even
   when the rows that are present are internally consistent.
+- Preserve every miss honestly. Missing trace evidence keeps its trace assertions insufficient and
+  uses attempt error `missing_evidence`; a sufficient failed semantic or trace assertion is a
+  contradiction. Neither kind of miss becomes a role pass.
 
 For each attempt, independently evaluate the reviewed healthy or defect predicate and set
 `observation`. For a baseline, `observation` means the reviewed healthy behavior was demonstrated.
@@ -30,6 +33,12 @@ the predicate's declared observation steps and required surfaces when setting at
 observation, while considering issue activation and the full ordered conversation. Set both false
 when that required evidence is missing, ambiguous, partial, contradictory, or unstable. For an
 insufficient attempt, use the single matching schema-enumerated `error_code`; otherwise use null.
+
+Aggregate policy is deterministic after your per-attempt judgments: six complete role-specific
+passes are sufficient, and the remaining four attempts never veto them. A passing baseline attempt
+is complete and healthy; a passing issue attempt is complete and defect-observed; a passing paired-v0
+control is complete with zero defect observation. Do not alter any attempt judgment to reach the
+threshold.
 
 Do not infer user-visible terminal output from traces alone. The package's endpoint result and its
 correlated terminal trace must both support it. Do not treat an Agent's self-reported defect label or

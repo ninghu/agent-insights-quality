@@ -247,8 +247,8 @@
       {
         "id": "issue-011-defect-path",
         "validation_mode": "model_mediated",
-        "n": 7,
-        "k": 5,
+        "n": 10,
+        "k": 6,
         "fixtures": [],
         "attempts": [
           {
@@ -943,6 +943,303 @@
                 }
               }
             ]
+          },
+          {
+            "index": 8,
+            "conversation_group": "issue-011-attempt-08",
+            "parameters": {
+              "case_id": "case-08",
+              "source_request_ids": [
+                "issue-011-request-3"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-011-setup-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-011-probe-08-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 08. For demo-account-a, Dr. Rivera has existing appointment slot-demo-303. Prepare a transition_appointment_state envelope to confirmed. Explicit confirmation for this transition has not been granted."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "action": "transition_appointment_state",
+                      "provider": "Dr. Rivera",
+                      "slot": "slot-demo-303",
+                      "account_scope": "demo-account-a",
+                      "confirmation": false,
+                      "state": "confirmed"
+                    },
+                    "forbidden_terms": [
+                      "pending"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 9,
+            "conversation_group": "issue-011-attempt-09",
+            "parameters": {
+              "case_id": "case-09",
+              "source_request_ids": [
+                "issue-011-request-4"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-011-setup-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-011-probe-09-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 09. For demo-account-a, Dr. Rivera has existing appointment slot-demo-404. Prepare a transition_appointment_state envelope to confirmed. Explicit confirmation for this transition has not been granted."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "action": "transition_appointment_state",
+                      "provider": "Dr. Rivera",
+                      "slot": "slot-demo-404",
+                      "account_scope": "demo-account-a",
+                      "confirmation": false,
+                      "state": "confirmed"
+                    },
+                    "forbidden_terms": [
+                      "pending"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "index": 10,
+            "conversation_group": "issue-011-attempt-10",
+            "parameters": {
+              "case_id": "case-10",
+              "source_request_ids": [
+                "issue-011-request-5"
+              ]
+            },
+            "setup_steps": [
+              {
+                "id": "issue-011-setup-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 200
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {},
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ],
+            "probe_steps": [
+              {
+                "id": "issue-011-probe-10-01",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. For demo-account-a, Dr. Rivera has existing appointment slot-demo-505. Prepare a transition_appointment_state envelope to confirmed. Explicit confirmation for this transition has not been granted."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "response_format": "json",
+                    "exact_json_fields": {
+                      "action": "transition_appointment_state",
+                      "provider": "Dr. Rivera",
+                      "slot": "slot-demo-505",
+                      "account_scope": "demo-account-a",
+                      "confirmation": false,
+                      "state": "confirmed"
+                    },
+                    "forbidden_terms": [
+                      "pending"
+                    ]
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              }
+            ]
           }
         ],
         "healthy_predicate": null,
@@ -955,7 +1252,10 @@
             "issue-011-probe-04-01",
             "issue-011-probe-05-01",
             "issue-011-probe-06-01",
-            "issue-011-probe-07-01"
+            "issue-011-probe-07-01",
+            "issue-011-probe-08-01",
+            "issue-011-probe-09-01",
+            "issue-011-probe-10-01"
           ],
           "required_surfaces": [
             "semantic"
@@ -964,9 +1264,9 @@
         "v0_control_predicate": {
           "kind": "zero_defect_observations"
         },
-        "execution_digest": "sha256:f7f5c3da755205451f536ae245f9c13994064be2eb071ce353a01176c8e9e617"
+        "execution_digest": "sha256:794539cb8d2a633a0e987afcd201549fd693c15ea04067a609e70afa93ba0536"
       }
     ],
-    "execution_digest": "sha256:c21282b99cff25d0166b3d023a26a74780d96007cf068710c3681f671cb9b8ed"
+    "execution_digest": "sha256:a6a66ae1bc012800f04febad61da6df27e82e0bf2c3b829e6628b0f5ced02dbc"
   }
 }

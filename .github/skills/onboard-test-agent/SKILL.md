@@ -42,8 +42,8 @@ Add one new synthetic Test Agent only as a human-reviewed fixed-topology migrati
 9. Run repository validation, Ruff, tests, and Bicep compilation.
 10. Update each baseline and issue's fixed validation scenarios, explicit mode, `n/k`, paired-v0
    controls, execution digest, name limits, retained-resource inventory, and exact authority count.
-11. Run Test Agent Validation from one exact clean commit, require exact response-bound evidence
-   and explicit human approval, then create the single approved validation record. The visible
+11. Run Test Agent Validation from one exact clean commit and require exact response-bound advisory
+   evidence. The visible
    coordinator creates all parallel sub-sessions and may reuse exact-bound per-authority invocation
    receipts for verify-only recovery without new traffic. Verification persists independent
    `PASS`, `FAIL`, or `INCOMPLETE` authority results and retries only missing, `INCOMPLETE`, or

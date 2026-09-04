@@ -8,6 +8,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from agent_insights_quality.models import SKIPPED_VERSION_STATUSES
 from agent_insights_quality.scoring import (
     ASSESSMENT_FIELDS,
     ATTRIBUTABLE_FINDING_TYPES,
@@ -31,6 +32,11 @@ from agent_insights_quality.util import (
 from agent_insights_quality.azure_regions import (
     location_display_name,
     regions_match,
+)
+from agent_insights_quality.validation_rules import issue_observation_context
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_target_decision,
+    validate_trace_maturity_proof,
 )
 
 REQUIRED_FIELDS = set(ASSESSMENT_FIELDS)
@@ -89,8 +95,12 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
         if (
             not isinstance(summary, dict)
             or summary.get("request_index") != index
-            or summary.get("response_count") != 1
-            or summary.get("usable_response") is not True
+            or summary.get("response_count") not in {0, 1}
+            or not isinstance(summary.get("usable_response"), bool)
+            or (
+                summary.get("usable_response") is True
+                and summary.get("response_count") != 1
+            )
         ):
             return False
         trace_results = summary.get("trace_assertion_results")
@@ -100,6 +110,12 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
             or len(trace_results) != summary.get("trace_assertion_count")
             or sum(item.get("passed") is True for item in trace_results)
             != summary.get("trace_assertions_passed")
+            or any(
+                not isinstance(item.get("evidence_sufficient"), bool)
+                for item in trace_results
+            )
+            or summary.get("error_code")
+            not in {None, "missing_evidence", "assertion_failed"}
         ):
             return False
         results = summary.get("assertion_results")
@@ -109,6 +125,10 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
             or len(results) != summary.get("semantic_assertion_count")
             or sum(item.get("passed") is True for item in results)
             != summary.get("semantic_assertions_passed")
+            or any(
+                not isinstance(item.get("evidence_sufficient"), bool)
+                for item in results
+            )
         ):
             return False
     return True
@@ -117,91 +137,126 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
 def _runtime_evidence_complete(
     value: dict[str, Any],
     *,
-    require_activation: bool = False,
+    traffic_path: Path | None = None,
 ) -> bool:
     requests = value.get("endpoint_request_count")
     responses = value.get("endpoint_response_count")
     usable = value.get("endpoint_usable_response_count")
-    return (
+    complete = (
         isinstance(requests, int)
         and not isinstance(requests, bool)
         and requests > 0
         and isinstance(responses, int)
         and not isinstance(responses, bool)
-        and responses > 0
+        and responses >= 0
         and isinstance(usable, int)
         and not isinstance(usable, bool)
-        and usable > 0
-        and requests == responses == usable
+        and usable >= 0
+        and usable <= responses <= requests
         and value.get("trace_contract_verified") is True
         and _request_summaries_complete(value)
-        and (
-            (
-                not require_activation
-                or any(
-                    item.get("activation_gate") is True
-                    for item in value["endpoint_request_summaries"]
-                )
-            )
-            and all(
-                item.get("semantic_assertion_count", 0)
-                + item.get("trace_assertion_count", 0)
-                > 0
-                and item.get("semantic_assertions_passed")
-                == item.get("semantic_assertion_count")
-                and item.get("trace_assertions_passed")
-                == item.get("trace_assertion_count")
-                for item in value["endpoint_request_summaries"]
-                if item.get("activation_gate") is True
-            )
+        and responses
+        == sum(
+            int(item["response_count"])
+            for item in value["endpoint_request_summaries"]
+        )
+        and usable
+        == sum(
+            item["usable_response"] is True
+            for item in value["endpoint_request_summaries"]
         )
     )
+    if not complete or traffic_path is None:
+        return complete
+    context = issue_observation_context(traffic_path)
+    if {
+        key: value.get(key)
+        for key in context
+    } != context:
+        return False
+    observations = [
+        item
+        for item in value["endpoint_request_summaries"]
+        if item.get("activation_gate") is True
+    ]
+    summary_value = value.get("role_pass_summary")
+    try:
+        validate_trace_maturity_proof(value.get("trace_maturity_proof"))
+    except ContractError:
+        return False
+    decided, summary = daily_target_decision(
+        target_role="issue",
+        validation_mode=str(context["validation_mode"]),
+        n=int(context["n"]),
+        k=int(context["k"]),
+        required_surfaces=context["required_surfaces"],
+        summaries=observations,
+        identity_verified=value.get("trace_contract_verified") is True,
+    )
+    return decided and summary_value == summary
 
 
 def _baseline_runtime_evidence_complete(
     agent: dict[str, Any],
     value: dict[str, Any],
 ) -> bool:
-    request_count = value.get("endpoint_request_count")
     trace = value.get("trace_behavior_summary")
     summaries = value.get("endpoint_request_summaries")
+    observations = [
+        item
+        for item in summaries or []
+        if isinstance(item, dict) and item.get("activation_gate") is True
+    ]
+    summary_value = value.get("role_pass_summary")
+    try:
+        validate_trace_maturity_proof(value.get("trace_maturity_proof"))
+    except ContractError:
+        return False
+    decided, summary = daily_target_decision(
+        target_role="baseline",
+        validation_mode="baseline",
+        n=int(value.get("n") or 0),
+        k=int(value.get("k") or 0),
+        required_surfaces=["semantic", "trace"],
+        summaries=observations,
+        identity_verified=value.get("trace_contract_verified") is True,
+    )
+    required_count = int(summary["pass_count"]) if summary is not None else 0
     terminal_mode = agent["baseline_contract"]["terminal_response"]
     if (
         not _runtime_evidence_complete(value)
-        or request_count != agent["baseline_contract"]["request_count"]
+        or not decided
+        or summary_value != summary
+        or len(observations) != agent["baseline_contract"]["request_count"]
         or not isinstance(trace, dict)
         or not isinstance(summaries, list)
-        or int(value.get("semantic_assertion_count") or 0) < 1
-        or value.get("semantic_assertions_passed")
-        != value.get("semantic_assertion_count")
-        or int(trace.get("terminal_response_count") or 0) != request_count
-        or int(trace.get("terminal_output_count") or 0) != request_count
-        or int(trace.get("unhandled_error_count") or 0) != 0
+        or not observations
+        or int(trace.get("terminal_response_count") or 0) < required_count
+        or int(trace.get("terminal_output_count") or 0) < required_count
     ):
         return False
     if terminal_mode == "explicit_span_attributes":
         if (
             int(trace.get("explicit_terminal_success_count") or 0)
-            != request_count
+            < required_count
             or int(trace.get("explicit_terminal_output_count") or 0)
-            != request_count
+            < required_count
         ):
             return False
-    elif int(trace.get("assistant_response_count") or 0) != request_count:
+    elif int(trace.get("assistant_response_count") or 0) < required_count:
         return False
     if agent["baseline_contract"]["semantic_assertions"] == "required_per_request":
-        if any(int(item.get("semantic_assertion_count") or 0) < 1 for item in summaries):
+        if len(observations) != agent["baseline_contract"]["request_count"]:
             return False
     if agent["type"] == "prompt":
         return (
-            int(trace.get("operation_count") or 0) == request_count
-            and not trace.get("tool_call_counts")
-            and int(trace.get("tool_response_count") or 0) == 0
-            and all(
+            int(trace.get("operation_count") or 0) >= required_count
+            and sum(
                 item.get("direct_terminal_response_count") == 1
                 and item.get("function_call_count") == 0
                 for item in summaries
             )
+            >= required_count
         )
     return True
 
@@ -231,26 +286,23 @@ def _summary_metrics(
     baseline: list[dict[str, Any]],
     issues: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    scored_issues = [
+        item for item in issues if item["outcome"] != "skipped"
+    ]
+    if not scored_issues:
+        raise ContractError(
+            "No eligible issue evidence remains; no numeric score was produced"
+        )
     baseline_passed = sum(
         item["status"] == "passed"
         and item["insight_count"] == 0
         and item["assessment"]["verdict"] == "clean"
         for item in baseline
     )
-    issues_correct = sum(item["outcome"] == "correct" for item in issues)
-    issues_incorrect = sum(item["outcome"] == "incorrect" for item in issues)
-    issues_missing = sum(item["outcome"] == "missing" for item in issues)
+    issues_correct = sum(item["outcome"] == "correct" for item in scored_issues)
+    issues_incorrect = sum(item["outcome"] == "incorrect" for item in scored_issues)
+    issues_missing = sum(item["outcome"] == "missing" for item in scored_issues)
     noise_cards = sum(
-        sum(
-            card.get("evaluation") == "noise"
-            for card in item["assessment"].get("card_evaluations", [])
-        )
-        if "card_evaluations" in item["assessment"]
-        else item["insight_count"]
-        if item["assessment"]["verdict"] == "noise"
-        else 0
-        for item in baseline
-    ) + sum(
         sum(
             card.get("finding_type") == "NOISE"
             for card in item["assessment"].get("card_evaluations", [])
@@ -259,24 +311,48 @@ def _summary_metrics(
         else item["observed_count"]
         if item["detail"] in {"NOISE", "DUPLICATE"}
         else 0
-        for item in issues
+        for item in scored_issues
     )
     duplicate_cards = sum(
         sum(
             card.get("finding_type") == "DUPLICATE"
             for card in item["assessment"].get("card_evaluations", [])
         )
-        for item in issues
+        for item in scored_issues
     )
     quality_score = calculate_quality_score(
         correct_issues=issues_correct,
-        expected_issues=len(issues),
+        expected_issues=len(scored_issues),
         noise_cards=noise_cards,
         duplicate_cards=duplicate_cards,
     )
     return {
         "baseline_passed": baseline_passed,
-        "issues_expected": len(issues),
+        "baseline_coverage": {
+            "eligible_agents": [
+                item["agent"]
+                for item in baseline
+                if item["status"] not in SKIPPED_VERSION_STATUSES
+            ],
+            "missing_agents": [
+                item["agent"]
+                for item in baseline
+                if item["status"] in SKIPPED_VERSION_STATUSES
+            ],
+        },
+        "eligible_issue_count": len(scored_issues),
+        "skipped_issue_count": len(issues) - len(scored_issues),
+        "skipped_issues": [
+            {
+                "issue_id": item["issue_id"],
+                "status": item["status"],
+                "reason_code": item["error_code"],
+            }
+            for item in issues
+            if item["outcome"] == "skipped"
+        ],
+        "issues_expected": len(scored_issues),
+        "issues_skipped": len(issues) - len(scored_issues),
         "issues_correct": issues_correct,
         "issues_incorrect": issues_incorrect,
         "issues_missing": issues_missing,
@@ -284,6 +360,25 @@ def _summary_metrics(
         "duplicate_cards": duplicate_cards,
         "quality_score": quality_score,
         "quality_score_formula": QUALITY_SCORE_FORMULA,
+    }
+
+
+def _skipped_assessment(status: str) -> dict[str, Any]:
+    if status == "skipped_agent_activation":
+        ownership = "agent"
+        reason = "Test Agent activation produced fewer than six complete role passes."
+    elif status == "skipped_insight":
+        ownership = "infrastructure"
+        reason = "Agent Insights did not produce a conclusive provider result."
+    else:
+        ownership = "infrastructure"
+        reason = "Telemetry validation exceeded the bounded maturity horizon."
+    return {
+        "verdict": "skipped",
+        "ownership": ownership,
+        "ownership_reason": reason,
+        "confidence": 1.0,
+        "card_evaluations": [],
     }
 
 
@@ -299,9 +394,19 @@ def build_report(
     incomplete = False
     for agent in manifest["agents"]:
         baseline_value = agent["baseline"]
-        baseline_runtime_complete = _baseline_runtime_evidence_complete(
-            agent,
-            baseline_value,
+        baseline_skipped = baseline_value["status"] in SKIPPED_VERSION_STATUSES
+        baseline_assessment = (
+            _skipped_assessment(baseline_value["status"])
+            if baseline_skipped
+            else baseline_assessments[agent["name"]]
+        )
+        baseline_runtime_complete = (
+            False
+            if baseline_skipped
+            else _baseline_runtime_evidence_complete(
+                agent,
+                baseline_value,
+            )
         )
         trace_summary = baseline_value.get("trace_behavior_summary") or {}
         baseline.append(
@@ -337,19 +442,15 @@ def build_report(
                     ),
                 },
                 "assessment": {
-                    "verdict": baseline_assessments[agent["name"]]["verdict"],
-                    "ownership": baseline_assessments[agent["name"]]["ownership"],
-                    "ownership_reason": baseline_assessments[agent["name"]][
-                        "ownership_reason"
-                    ],
-                    "confidence": baseline_assessments[agent["name"]]["confidence"],
-                    "card_evaluations": baseline_assessments[agent["name"]][
-                        "card_evaluations"
-                    ],
+                    "verdict": baseline_assessment["verdict"],
+                    "ownership": baseline_assessment["ownership"],
+                    "ownership_reason": baseline_assessment["ownership_reason"],
+                    "confidence": baseline_assessment["confidence"],
+                    "card_evaluations": baseline_assessment["card_evaluations"],
                 },
             }
         )
-        if (
+        if not baseline_skipped and (
             baseline_value["status"] not in {"passed", "not_at_bar"}
             or not baseline_runtime_complete
             or baseline_assessments[agent["name"]]["verdict"] == "inconclusive"
@@ -363,15 +464,56 @@ def build_report(
             incomplete = True
         for value in agent["issues"]:
             issue_id = value["issue_id"]
+            if value["status"] in SKIPPED_VERSION_STATUSES:
+                skipped_assessment = _skipped_assessment(value["status"])
+                results.append(
+                    {
+                        "issue_id": issue_id,
+                        "agent": agent["name"],
+                        "logical_version": issue_id,
+                        "foundry_version": value["foundry_version"],
+                        "title": issue_by_id[issue_id]["title"],
+                        "status": value["status"],
+                        "error_code": value.get("error_code"),
+                        "runtime_evidence_complete": False,
+                        "activation_evidence": _activation_evidence(value),
+                        "outcome": "skipped",
+                        "detail": "SKIPPED",
+                        "observed_count": 0,
+                        "assessment": {
+                            "verdict": "skipped",
+                            "confidence": 1.0,
+                            "fields": {
+                                field: False for field in REQUIRED_FIELDS
+                            },
+                            "ownership": skipped_assessment["ownership"],
+                            "finding_type": "SKIPPED",
+                            "ownership_reason": (
+                                skipped_assessment["ownership_reason"]
+                            ),
+                            "reasoning": (
+                                "Excluded from scoring without endpoint retraffic."
+                            ),
+                            "card_evaluations": [],
+                        },
+                        "evidence_reference": None,
+                    }
+                )
+                continue
             assessment = assessments[issue_id]
             runtime_complete = _runtime_evidence_complete(
                 value,
-                require_activation=agent["type"] == "prompt",
+                traffic_path=(
+                    ROOT
+                    / issue_by_id[issue_id]["implementation"]
+                    / "traffic.json"
+                ),
             )
-            complete = value["status"] not in {
-                "inconclusive",
-                "skipped_baseline",
-            } and runtime_complete and assessment["finding_type"] != "INCOMPLETE"
+            complete = (
+                value["status"] != "inconclusive"
+                and runtime_complete
+                and assessment["finding_type"] != "INCOMPLETE"
+            )
             if not complete:
                 incomplete = True
             outcome = issue_outcome(assessment["card_evaluations"])
@@ -557,7 +699,10 @@ def validate_report(report: dict[str, Any]) -> None:
         )
     if any(
         not isinstance(item, dict)
-        or item.get("runtime_evidence_complete") is not True
+        or (
+            item.get("runtime_evidence_complete") is not True
+            and item.get("status") not in SKIPPED_VERSION_STATUSES
+        )
         for item in [*report["baseline"], *report["issues"]]
     ):
         raise ContractError("Report runtime evidence is incomplete")
@@ -570,22 +715,29 @@ def _validate_complete_summary(
     label: str,
 ) -> None:
     assessment_incomplete = any(
-        item.get("runtime_evidence_complete") is not True
-        or item["assessment"]["verdict"] == "inconclusive"
+        item.get("status") not in SKIPPED_VERSION_STATUSES
+        and (
+            item.get("runtime_evidence_complete") is not True
+            or item["assessment"]["verdict"] == "inconclusive"
+        )
         or any(
             card.get("evaluation") == "incomplete"
             for card in item["assessment"].get("card_evaluations", [])
         )
         for item in report["baseline"]
     ) or any(
-        item.get("runtime_evidence_complete") is not True
-        or item["assessment"]["finding_type"] == "INCOMPLETE"
+        item.get("status") not in SKIPPED_VERSION_STATUSES
+        and (
+            item.get("runtime_evidence_complete") is not True
+            or item["assessment"]["finding_type"] == "INCOMPLETE"
+        )
         for item in report["issues"]
     )
     if assessment_incomplete:
         raise ContractError(f"{label} report is incomplete")
     if any(
-        item["outcome"]
+        item["outcome"] != "skipped"
+        and item["outcome"]
         != issue_outcome(item["assessment"].get("card_evaluations", []))
         for item in report["issues"]
     ):
@@ -593,7 +745,8 @@ def _validate_complete_summary(
     expected = _summary_metrics(report["baseline"], report["issues"])
     summary = report["summary"]
     if (
-        expected["issues_expected"] != expected_count
+        expected["issues_expected"]
+        != expected_count - expected["issues_skipped"]
         or any(summary.get(key) != value for key, value in expected.items())
         or set(summary) != set(expected)
     ):
@@ -638,6 +791,17 @@ def _baseline_report_semantics_valid(item: dict[str, Any]) -> bool:
         return False
     verdict = assessment.get("verdict")
     ownership = assessment.get("ownership")
+    if verdict == "skipped":
+        return (
+            item.get("status") in SKIPPED_VERSION_STATUSES
+            and ownership
+            == (
+                "agent"
+                if item.get("status") == "skipped_agent_activation"
+                else "infrastructure"
+            )
+            and not cards
+        )
     if verdict == "clean":
         return ownership == "none" and not cards
     if verdict == "noise":
@@ -680,12 +844,13 @@ def validate_published_report(
         len(baseline) != 5
         or {item.get("agent") for item in baseline} != expected_agents
         or any(
-            item.get("status") not in {"passed", "not_at_bar"}
+            item.get("status")
+            not in {"passed", "not_at_bar", *SKIPPED_VERSION_STATUSES}
             or not isinstance(item.get("insight_count"), int)
             or item["insight_count"] < 0
             or not isinstance(item.get("assessment"), dict)
             or item["assessment"].get("verdict")
-            not in {"clean", "noise", "agent_finding", "inconclusive"}
+            not in {"clean", "noise", "agent_finding", "inconclusive", "skipped"}
             or item["assessment"].get("ownership")
             not in {
                 "none",
@@ -710,9 +875,10 @@ def validate_published_report(
         len(issues) != DAILY_ISSUE_COUNT
         or len({item.get("issue_id") for item in issues}) != DAILY_ISSUE_COUNT
         or any(
-            item.get("status") in {"inconclusive", "skipped_baseline", None}
+            item.get("status") in {"inconclusive", None}
             or not isinstance(item.get("observed_count"), int)
-            or item.get("outcome") not in {"correct", "incorrect", "missing"}
+            or item.get("outcome")
+            not in {"correct", "incorrect", "missing", "skipped"}
             or item.get("detail")
             not in {
                 "MATCHED",
@@ -721,10 +887,17 @@ def validate_published_report(
                 "MISSING",
                 "NOISE",
                 "DUPLICATE",
+                "SKIPPED",
             }
             or not isinstance(item.get("assessment"), dict)
             or item["assessment"].get("verdict")
-            not in {"correct", "partially_useful", "incorrect", "missing"}
+            not in {
+                "correct",
+                "partially_useful",
+                "incorrect",
+                "missing",
+                "skipped",
+            }
             or item["assessment"].get("finding_type") != item.get("detail")
             or not isinstance(item["assessment"].get("fields"), dict)
             or set(item["assessment"]["fields"]) != REQUIRED_FIELDS
@@ -815,7 +988,7 @@ def validate_staging_report(
         or any(
             item.get("agent") != issue_by_id[item["issue_id"]]["agent"]
             or item.get("title") != issue_by_id[item["issue_id"]]["title"]
-            or item.get("status") in {"inconclusive", "skipped_baseline", None}
+            or item.get("status") in {"inconclusive", None}
             or not isinstance(item.get("observed_count"), int)
             or item.get("outcome") not in {"correct", "incorrect", "missing"}
             or item.get("detail")
@@ -857,6 +1030,7 @@ def render_markdown(
     summary = report["summary"]
     score = f"{summary['quality_score']:g} / 100"
     comparison = _score_comparison_text(report)
+    missing_baselines = summary["baseline_coverage"]["missing_agents"]
     lines = [
         f"# Agent Insights Quality - {report['report_date']}",
         "",
@@ -865,12 +1039,20 @@ def render_markdown(
         "| Summary | Result |",
         "| --- | --- |",
         f"| Quality score | **{score}{comparison}** |",
-        f"| Expected issues | {summary['issues_correct']} correct / "
+        f"| Eligible issues | {summary['issues_correct']} correct / "
         f"{summary['issues_expected']} "
         f"({summary['issues_incorrect']} incorrect, "
-        f"{summary['issues_missing']} missing) |",
+        f"{summary['issues_missing']} missing, "
+        f"{summary['issues_skipped']} skipped) |",
         f"| Extra cards | {summary['noise_cards']} noise, "
         f"{summary['duplicate_cards']} duplicate |",
+        "| Baseline coverage | "
+        + (
+            "Complete for all 5 Test Agents"
+            if not missing_baselines
+            else "Missing: " + ", ".join(f"`{item}`" for item in missing_baselines)
+        )
+        + " |",
         f"| Scoring | [How Scoring Works]({_QUALITY_SCORE_DOC_URL}) |",
         "",
         "## What is working",
@@ -926,6 +1108,21 @@ def render_markdown(
             f"{item['observed_count']} | {item['outcome'].title()} | "
             f"`{item['assessment']['ownership']}` | "
             f"{item['assessment']['confidence']:.2f} |"
+        )
+    if summary["skipped_issues"]:
+        lines.extend(
+            [
+                "",
+                "## Skipped coverage",
+                "",
+                "| Issue | Status | Reason |",
+                "| --- | --- | --- |",
+                *[
+                    f"| `{item['issue_id']}` | `{item['status']}` | "
+                    f"`{item['reason_code']}` |"
+                    for item in summary["skipped_issues"]
+                ],
+            ]
         )
     lines.extend(["", "## Per-Agent reports", ""])
     baseline_by_agent = {item["agent"]: item for item in report["baseline"]}

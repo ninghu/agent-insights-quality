@@ -16,6 +16,7 @@
     "authority_id",
     "source_content_digest",
     "execution_digest",
+    "traffic_execution_digest",
     "invocation_contract_digest",
     "paired_v0_contract",
     "environment",
@@ -57,6 +58,7 @@
     "authority_id": {"$ref": "#/$defs/authorityId"},
     "source_content_digest": {"$ref": "#/$defs/hash"},
     "execution_digest": {"$ref": "#/$defs/hash"},
+    "traffic_execution_digest": {"$ref": "#/$defs/hash"},
     "invocation_contract_digest": {"$ref": "#/$defs/hash"},
     "paired_v0_contract": {
       "oneOf": [
@@ -67,12 +69,14 @@
           "required": [
             "authority_id",
             "source_content_digest",
-            "execution_digest"
+            "execution_digest",
+            "traffic_execution_digest"
           ],
           "properties": {
             "authority_id": {"$ref": "#/$defs/authorityId"},
             "source_content_digest": {"$ref": "#/$defs/hash"},
-            "execution_digest": {"$ref": "#/$defs/hash"}
+            "execution_digest": {"$ref": "#/$defs/hash"},
+            "traffic_execution_digest": {"$ref": "#/$defs/hash"}
           }
         }
       ]

@@ -55,6 +55,10 @@ from agent_insights_quality.util import (
     read_json,
     runtime_root,
 )
+from agent_insights_quality.validation_rules import (
+    staging_authority_requests,
+    issue_observation_context,
+)
 from jsonschema import Draft202012Validator
 
 
@@ -338,6 +342,9 @@ def create_promotion_receipt(
         raise ContractError("Staging report, manifest, and registry are not bound")
     report_baselines = {item["agent"]: item for item in report["baseline"]}
     report_issues = {item["issue_id"]: item for item in report["issues"]}
+    issue_by_id = {
+        issue["id"]: issue for issue in issue_catalog["issues"]
+    }
     for agent in manifest["agents"]:
         baseline_complete = _baseline_runtime_evidence_complete(
             agent,
@@ -360,7 +367,11 @@ def create_promotion_receipt(
         for issue in agent["issues"]:
             runtime_complete = _runtime_evidence_complete(
                 issue,
-                require_activation=agent["type"] == "prompt",
+                traffic_path=(
+                    ROOT
+                    / issue_by_id[issue["issue_id"]]["implementation"]
+                    / "traffic.json"
+                ),
             )
             report_issue = report_issues.get(issue["issue_id"])
             if (
@@ -438,12 +449,12 @@ def _validate_manifest_traffic_evidence(
                 raise ContractError(
                     "Manifest issue traffic is not in the reviewed catalog"
                 )
-            traffic = read_json(
+            traffic_path = (
                 ROOT / contract["implementation"] / "traffic.json"
             )
-            requests = traffic.get("requests")
+            requests = staging_authority_requests(traffic_path)
             summaries = issue["endpoint_request_summaries"]
-            if not isinstance(requests, list) or len(requests) != len(summaries):
+            if len(requests) != len(summaries):
                 raise ContractError(
                     f"{issue_id} manifest traffic coverage is inconsistent"
                 )
@@ -469,18 +480,16 @@ def _validate_manifest_traffic_evidence(
                     != len(assertion_names)
                     or observed_names != assertion_names
                     or summary["semantic_assertions_passed"]
-                    != len(assertion_names)
-                    or any(
-                        result["passed"] is not True
+                    != sum(
+                        result["passed"]
                         for result in summary["assertion_results"]
                     )
                     or summary["trace_assertion_count"]
                     != len(trace_assertion_names)
                     or observed_trace_names != trace_assertion_names
                     or summary["trace_assertions_passed"]
-                    != len(trace_assertion_names)
-                    or any(
-                        result["passed"] is not True
+                    != sum(
+                        result["passed"]
                         for result in summary["trace_assertion_results"]
                     )
                 ):
@@ -488,6 +497,38 @@ def _validate_manifest_traffic_evidence(
                         f"{issue_id} manifest assertion or activation evidence "
                         "does not match authoritative traffic"
                     )
+            context = issue_observation_context(traffic_path)
+            observations = [
+                summary for summary in summaries if summary["activation_gate"]
+            ]
+            required_surfaces = set(context["required_surfaces"])
+            observation_count = sum(
+                (
+                    "semantic" not in required_surfaces
+                    or (
+                        summary["semantic_assertion_count"] > 0
+                        and summary["semantic_assertions_passed"]
+                        == summary["semantic_assertion_count"]
+                    )
+                )
+                and (
+                    "trace" not in required_surfaces
+                    or (
+                        summary["trace_assertion_count"] > 0
+                        and summary["trace_assertions_passed"]
+                        == summary["trace_assertion_count"]
+                    )
+                )
+                for summary in observations
+            )
+            if (
+                len(observations) != int(context["n"])
+                or observation_count < int(context["k"])
+            ):
+                raise ContractError(
+                    f"{issue_id} manifest evidence does not meet its reviewed "
+                    "observation threshold"
+                )
 
 
 def build_artifact(
@@ -948,6 +989,8 @@ def _support_build_context_manifest(
     logical_version: str,
 ) -> dict[str, Path]:
     baseline = root / "v0"
+    dockerfile = baseline / "Dockerfile"
+    requirements = baseline / "requirements.txt"
     implementation = (
         baseline / "implementation.yaml"
         if logical_version == "v0"
@@ -958,21 +1001,23 @@ def _support_build_context_manifest(
         if logical_version == "v0"
         else root / "issues" / logical_version / "source"
     )
-    if not implementation.is_file() or not source.is_dir():
+    if (
+        not dockerfile.is_file()
+        or not requirements.is_file()
+        or not implementation.is_file()
+        or not source.is_dir()
+    ):
         raise ContractError(
             f"Support build authority for {logical_version} is incomplete"
         )
     manifest = {
-        f"v0/{path.relative_to(baseline).as_posix()}": path
-        for path in sorted(baseline.rglob("*"))
-        if _is_package_file(path)
-        and path != baseline / "implementation.yaml"
-        and (
-            logical_version == "v0"
-            or (baseline / "source") not in path.parents
-        )
+        "v0/Dockerfile": dockerfile,
+        "v0/requirements.txt": requirements,
+        "v0/implementation.yaml": implementation,
     }
-    source_files = [path for path in sorted(source.rglob("*")) if _is_package_file(path)]
+    source_files = [
+        path for path in sorted(source.rglob("*")) if _is_package_file(path)
+    ]
     if not source_files:
         raise ContractError(f"Support source authority for {logical_version} is empty")
     manifest.update(
@@ -981,7 +1026,6 @@ def _support_build_context_manifest(
             for path in source_files
         }
     )
-    manifest["v0/implementation.yaml"] = implementation
     return dict(sorted(manifest.items()))
 
 
@@ -1005,14 +1049,17 @@ def _support_build_context_digest_at_commit(
         relative_root = root.resolve().relative_to(ROOT.resolve()).as_posix()
     except ValueError as error:
         raise ContractError("Support build authority escapes the repository") from error
-    positive_paths = [f"{relative_root}/v0"]
-    if logical_version != "v0":
-        positive_paths.extend(
-            [
-                f"{relative_root}/issues/{logical_version}/source",
-                f"{relative_root}/issues/{logical_version}/implementation.yaml",
-            ]
-        )
+    selected_root = (
+        f"{relative_root}/v0"
+        if logical_version == "v0"
+        else f"{relative_root}/issues/{logical_version}"
+    )
+    positive_paths = [
+        f"{relative_root}/v0/Dockerfile",
+        f"{relative_root}/v0/requirements.txt",
+        f"{selected_root}/source",
+        f"{selected_root}/implementation.yaml",
+    ]
     listed = subprocess.run(
         [
             "git",
@@ -1036,14 +1083,6 @@ def _support_build_context_digest_at_commit(
         for item in listed.stdout.split(b"\0")
         if item
     }
-    if logical_version != "v0":
-        baseline_source = f"{relative_root}/v0/source/"
-        retained_paths = {
-            path
-            for path in retained_paths
-            if not path.startswith(baseline_source)
-            and path != f"{relative_root}/v0/implementation.yaml"
-        }
     manifest = _support_build_context_manifest(root, logical_version)
     current_paths = {
         source.resolve().relative_to(ROOT.resolve()).as_posix()
@@ -1051,16 +1090,8 @@ def _support_build_context_digest_at_commit(
     }
     if retained_paths != current_paths:
         return None
-    paths = [*positive_paths]
-    if logical_version != "v0":
-        paths.extend(
-            [
-                f":(exclude){relative_root}/v0/source",
-                f":(exclude){relative_root}/v0/implementation.yaml",
-            ]
-        )
     compared = subprocess.run(
-        ["git", "diff", "--quiet", commit_sha, "--", *paths],
+        ["git", "diff", "--quiet", commit_sha, "--", *positive_paths],
         cwd=ROOT,
         capture_output=True,
         timeout=120,

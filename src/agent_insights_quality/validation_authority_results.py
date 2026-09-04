@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -23,16 +24,23 @@ from agent_insights_quality.validation_evidence import (
     validate_authority_evidence,
 )
 from agent_insights_quality.validation_invocations import (
+    authority_execution_identity,
+    assert_invocation_receipt_set_isolated,
+    invocation_receipt_execution_identity,
     load_bound_invocation_receipt,
     load_invocation_receipt,
 )
-from agent_insights_quality.validation_lifecycle import validation_runtime_root
+from agent_insights_quality.validation_lifecycle import (
+    LocalValidationLock,
+    validation_runtime_root,
+)
 from agent_insights_quality.validation_runtime import AuthoritySpec
 
 AUTHORITY_RESULT_SCHEMA = (
     ROOT / "schemas" / "test-agent-validation-authority-result.schema.json"
 )
 _RESULT_KIND = "test-agent-validation-authority-result"
+_PUBLICATION_LOCK_WAIT_SECONDS = 35.0
 
 
 def write_authority_verification_result(
@@ -41,6 +49,8 @@ def write_authority_verification_result(
     plan: Mapping[str, Any],
     authority: AuthoritySpec,
     runtime: Mapping[str, Any],
+    paired_v0_authority: AuthoritySpec | None = None,
+    paired_v0_runtime: Mapping[str, Any] | None = None,
     invocation_reference: Mapping[str, str],
     authority_evidence: Mapping[str, Any] | None,
     outcome: str,
@@ -48,9 +58,10 @@ def write_authority_verification_result(
     completed_at: datetime,
     query_stage: str | None,
     error_code: str | None,
-    query_diagnostics: Mapping[str, int] | None,
+    query_diagnostics: Mapping[str, Any] | None,
     fence: Callable[[], None],
     copilot_evaluation: Mapping[str, str] | None = None,
+    coordinator_lock_held: bool = False,
     root: Path | None = None,
 ) -> dict[str, str]:
     fence()
@@ -126,11 +137,24 @@ def write_authority_verification_result(
     validate_authority_verification_result(value)
     runtime_root = (root or validation_runtime_root()).resolve()
     path = _current_result_path(runtime_root, value)
-    immutable_json(path, value)
-    persisted = read_json(path)
-    if persisted != value:
-        raise ContractError("Immutable authority verification result changed")
-    return _result_reference(value, path=path, root=runtime_root)
+    reference = _result_reference(value, path=path, root=runtime_root)
+    def publish() -> None:
+        fence()
+        immutable_json(path, value)
+        persisted = read_json(path)
+        if persisted != value:
+            raise ContractError(
+                "Immutable authority verification result changed"
+            )
+    if coordinator_lock_held:
+        publish()
+    else:
+        with LocalValidationLock(
+            runtime_root / "coordinator.lock",
+            wait_seconds=_PUBLICATION_LOCK_WAIT_SECONDS,
+        ):
+            publish()
+    return reference
 
 
 def load_authority_verification_result(
@@ -143,9 +167,19 @@ def load_authority_verification_result(
     if runtime_root not in path.parents:
         raise ContractError("Authority verification result path escapes runtime root")
     value = read_json(path)
+    if path.read_bytes() != _canonical_document_bytes(value):
+        raise ContractError(
+            "Authority verification result bytes are not canonical"
+        )
     validate_authority_verification_result(value)
     evaluation = value.get("copilot_evaluation")
     if isinstance(evaluation, Mapping):
+        from agent_insights_quality.validation_copilot import (
+            EVALUATION_SCHEMA,
+            _validate_evaluation_coverage,
+            validate_private_package,
+        )
+
         package_path = (
             runtime_root
             / "copilot-authority-evaluations"
@@ -165,6 +199,33 @@ def load_authority_verification_result(
             raise ContractError(
                 "Authority result Copilot evaluation artifact is unavailable"
             ) from error
+        evaluation_errors = list(
+            Draft202012Validator(
+                read_json(EVALUATION_SCHEMA),
+                format_checker=FormatChecker(),
+            ).iter_errors(imported)
+        )
+        if evaluation_errors:
+            raise ContractError(
+                "Authority result Copilot evaluation artifact is invalid"
+            )
+        if (
+            package_path.read_bytes() != _canonical_document_bytes(package)
+            or import_path.read_bytes() != _canonical_document_bytes(imported)
+        ):
+            raise ContractError(
+                "Authority result Copilot evaluation artifact bytes are not canonical"
+            )
+        try:
+            validate_private_package(
+                package,
+                require_current_prompt=False,
+            )
+            _validate_evaluation_coverage(imported, package)
+        except ContractError as error:
+            raise ContractError(
+                "Authority result Copilot evaluation artifact is invalid"
+            ) from error
         if (
             package.get("package_hash") != evaluation["package_hash"]
             or digest_without_field(package, "package_hash")
@@ -173,6 +234,14 @@ def load_authority_verification_result(
             or content_hash(imported) != evaluation["evaluation_digest"]
             or imported.get("package_hash") != evaluation["package_hash"]
             or imported.get("model") != evaluation["model"]
+            or package.get("repository") != value["repository"]
+            or package.get("pr_number") != value["pr_number"]
+            or package.get("origin_run_id") != value["origin_run_id"]
+            or package.get("origin_commit_sha") != value["origin_commit_sha"]
+            or package.get("authority_id") != value["authority_id"]
+            or package.get("authority_contract") != value["authority_contract"]
+            or package.get("invocation_receipt", {}).get("reference")
+            != value["invocation_receipt"]
         ):
             raise ContractError(
                 "Authority result Copilot evaluation reference changed"
@@ -216,30 +285,28 @@ def load_bound_authority_verification_result(
     expected_assignment = verification_assignment(prepared, authority.authority_id)
     binding = value["binding"]
     expected_contract = _authority_contract(authority, runtime)
+    historical_contract_fields = (
+        "authority_kind",
+        "canonical_agent",
+        "logical_version",
+        "source_content_digest",
+        "provider_content_digest",
+    )
     if (
         value["repository"] != prepared["repository"]
-        or value["pr_number"] != prepared["pr_number"]
         or value["authority_id"] != authority.authority_id
-        or value["authority_contract"] != expected_contract
-        or binding["environment_id"] != plan["environment_id"]
-        or binding["location"] != plan["location"]
-        or binding["project_name"] != prepared["project"]["name"]
-        or binding["project_reference"]
-        != content_hash({"project_id": prepared["project"]["provider_id"]})
-        or binding["telemetry_resource_set"]
-        != prepared["runtime_topology"]["telemetry_resource_set"]
-        or binding["telemetry_resource_reference"]
-        != content_hash(
-            {
-                "account_reference": prepared["runtime_topology"][
-                    "account_reference"
-                ],
-                "telemetry_resource_set": prepared["runtime_topology"][
-                    "telemetry_resource_set"
-                ],
-            }
+        or (
+            require_current_generation
+            and value["authority_contract"] != expected_contract
         )
-        or binding["runtime_mapping_digest"] != runtime_mapping_digest(runtime)
+        or (
+            not require_current_generation
+            and any(
+                value["authority_contract"][field]
+                != expected_contract[field]
+                for field in historical_contract_fields
+            )
+        )
         or binding["invocation_receipt_digest"] != invocation["receipt_digest"]
         or binding["invocation_digest"] != invocation["invocation_digest"]
         or (
@@ -262,6 +329,28 @@ def load_bound_authority_verification_result(
                 != prepared["digests"]["quota_plan_digest"]
                 or binding["assignment_digest"]
                 != expected_assignment["assignment_digest"]
+                or binding["environment_id"] != plan["environment_id"]
+                or binding["location"] != plan["location"]
+                or binding["project_name"] != prepared["project"]["name"]
+                or binding["project_reference"]
+                != content_hash(
+                    {"project_id": prepared["project"]["provider_id"]}
+                )
+                or binding["telemetry_resource_set"]
+                != prepared["runtime_topology"]["telemetry_resource_set"]
+                or binding["telemetry_resource_reference"]
+                != content_hash(
+                    {
+                        "account_reference": prepared["runtime_topology"][
+                            "account_reference"
+                        ],
+                        "telemetry_resource_set": prepared[
+                            "runtime_topology"
+                        ]["telemetry_resource_set"],
+                    }
+                )
+                or binding["runtime_mapping_digest"]
+                != runtime_mapping_digest(runtime)
             )
         )
     ):
@@ -312,39 +401,51 @@ def reusable_authority_verification_results(
     runtime_topology: Mapping[str, Any],
     prepared: Mapping[str, Any],
     plan: Mapping[str, Any],
+    prior_generations: Sequence[Mapping[str, Any]] = (),
     root: Path | None = None,
 ) -> dict[str, dict[str, str] | None]:
     runtime_root = (root or validation_runtime_root()).resolve()
-    owner, name = str(prepared["repository"]).split("/", 1)
-    result_root = (
-        runtime_root
-        / "authority-verifications"
-        / owner
-        / name
-        / str(prepared["pr_number"])
+    candidates = _result_candidates(
+        runtime_root,
+        prepared=prepared,
+        prior_generations=prior_generations,
+        authority_ids=[item.authority_id for item in authorities],
     )
     runtime_by_id = {
         item["authority_id"]: item for item in runtime_topology["agents"]
     }
-    authority_by_id = {item.authority_id: item for item in authorities}
     paired = {
         item.canonical_agent: item
         for item in authorities
         if item.authority_kind == "baseline"
     }
-    candidates: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
-    if result_root.is_dir():
-        for path in result_root.rglob("*.json"):
+    selected: dict[str, dict[str, str] | None] = {}
+    reusable_receipts: list[dict[str, Any]] = []
+    for authority in authorities:
+        current_identity = authority_execution_identity(
+            authority=authority,
+            paired_v0_authority=paired[authority.canonical_agent],
+            runtime=runtime_by_id[authority.authority_id],
+            paired_v0_runtime=runtime_by_id[
+                paired[authority.canonical_agent].authority_id
+            ],
+        )
+        matching: list[
+            tuple[str, Path, dict[str, Any], dict[str, Any]]
+        ] = []
+        for completed, path, value in candidates.get(
+            authority.authority_id,
+            [],
+        ):
+            if value["execution_identity"] != current_identity:
+                continue
             try:
-                value = read_json(path)
-                validate_authority_verification_result(value)
-                authority = authority_by_id[value["authority_id"]]
                 reference = _result_reference(
-                    value,
+                    value["result"],
                     path=path,
                     root=runtime_root,
                 )
-                load_bound_authority_verification_result(
+                bound = load_bound_authority_verification_result(
                     reference,
                     authority=authority,
                     paired_v0_authority=paired[authority.canonical_agent],
@@ -357,37 +458,158 @@ def reusable_authority_verification_results(
                     require_current_generation=False,
                     root=runtime_root,
                 )
-                completed = datetime.fromisoformat(
-                    str(value["completed_at"]).replace("Z", "+00:00")
-                ).isoformat()
+                receipt = load_bound_invocation_receipt(
+                    bound["invocation_receipt"],
+                    authority=authority,
+                    paired_v0_authority=paired[
+                        authority.canonical_agent
+                    ],
+                    runtime=runtime_by_id[authority.authority_id],
+                    paired_v0_runtime=runtime_by_id[
+                        paired[authority.canonical_agent].authority_id
+                    ],
+                    prepared=prepared,
+                    plan=plan,
+                    root=runtime_root,
+                )
             except (ContractError, KeyError, OSError, ValueError):
                 continue
-            candidates.setdefault(authority.authority_id, []).append(
-                (completed, path, value)
+            matching.append(
+                (
+                    completed,
+                    path,
+                    bound,
+                    receipt,
+                )
             )
-    selected: dict[str, dict[str, str] | None] = {}
-    for authority in authorities:
-        matching = sorted(candidates.get(authority.authority_id, []))
         if not matching:
+            selected[authority.authority_id] = None
             continue
+        matching.sort(key=lambda item: (item[0], item[2]["artifact_digest"]))
         latest_completed = matching[-1][0]
         latest = [item for item in matching if item[0] == latest_completed]
         digests = {item[2]["artifact_digest"] for item in latest}
         if len(digests) != 1:
-            selected[authority.authority_id] = None
-            continue
-        _, path, value = latest[-1]
+            raise ContractError("Newest authority verification results conflict")
+        _, path, value, _ = latest[-1]
         selected[authority.authority_id] = (
             _result_reference(value, path=path, root=runtime_root)
             if value["outcome"] == "PASS"
-            or (
-                value["outcome"] == "FAIL"
-                and value["binding"]["verifier_digest"]
-                == prepared["digests"]["verifier_digest"]
-            )
             else None
         )
+        if (
+            selected[authority.authority_id] is not None
+            and isinstance(latest[-1][3].get("invocation"), Mapping)
+        ):
+            reusable_receipts.append(latest[-1][3])
+    assert_invocation_receipt_set_isolated(
+        reusable_receipts
+    )
     return selected
+
+
+def authority_verification_history_status(
+    *,
+    authorities: Sequence[AuthoritySpec],
+    runtime_topology: Mapping[str, Any],
+    prepared: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    forced_authority_ids: set[str] | None = None,
+    prior_generations: Sequence[Mapping[str, Any]] = (),
+    root: Path | None = None,
+) -> list[dict[str, Any]]:
+    runtime_root = (root or validation_runtime_root()).resolve()
+    candidates = _result_candidates(
+        runtime_root,
+        prepared=prepared,
+        prior_generations=prior_generations,
+        authority_ids=[item.authority_id for item in authorities],
+    )
+    runtime_by_id = {
+        item["authority_id"]: item for item in runtime_topology["agents"]
+    }
+    paired = {
+        item.canonical_agent: item
+        for item in authorities
+        if item.authority_kind == "baseline"
+    }
+    forced = forced_authority_ids or set()
+    statuses = []
+    for authority in authorities:
+        current_identity = authority_execution_identity(
+            authority=authority,
+            paired_v0_authority=paired[authority.canonical_agent],
+            runtime=runtime_by_id[authority.authority_id],
+            paired_v0_runtime=runtime_by_id[
+                paired[authority.canonical_agent].authority_id
+            ],
+        )
+        entries = candidates.get(authority.authority_id, [])
+        exact = [
+            item
+            for item in entries
+            if item[2]["execution_identity"] == current_identity
+        ]
+        valid = []
+        for completed, path, candidate in exact:
+            try:
+                reference = _result_reference(
+                    candidate["result"],
+                    path=path,
+                    root=runtime_root,
+                )
+                result = load_bound_authority_verification_result(
+                    reference,
+                    authority=authority,
+                    paired_v0_authority=paired[
+                        authority.canonical_agent
+                    ],
+                    runtime=runtime_by_id[authority.authority_id],
+                    paired_v0_runtime=runtime_by_id[
+                        paired[authority.canonical_agent].authority_id
+                    ],
+                    prepared=prepared,
+                    plan=plan,
+                    require_current_generation=False,
+                    root=runtime_root,
+                )
+            except (ContractError, KeyError, OSError, ValueError):
+                continue
+            valid.append((completed, result))
+        latest = _latest_unique_result(valid)
+        changed = []
+        verification_reason = None
+        if authority.authority_id in forced:
+            status = "missing"
+            changed = ["explicit_invalidation"]
+            verification_reason = "explicit_invalidation"
+        elif latest is not None:
+            status = str(latest["outcome"])
+            if status != "PASS":
+                verification_reason = "prior_non_pass"
+        else:
+            status = "missing"
+            if exact:
+                verification_reason = "evidence_interpretation"
+            elif entries:
+                newest = _latest_unique_history_result(entries)
+                changed = _execution_identity_changed_reasons(
+                    newest["execution_identity"],
+                    current_identity,
+                )
+                verification_reason = "execution_identity_changed"
+            else:
+                verification_reason = "no_history"
+        statuses.append(
+            {
+                "authority_id": authority.authority_id,
+                "canonical_agent": authority.canonical_agent,
+                "status": status,
+                "changed": changed,
+                "verification_required_reason": verification_reason,
+            }
+        )
+    return statuses
 
 
 def has_prior_nonpass_result_for_invocation(
@@ -409,68 +631,6 @@ def has_prior_nonpass_result_for_invocation(
             root=root,
         )
     )
-
-
-def paired_trace_gap_history_digest(
-    *,
-    repository: str,
-    pr_number: int,
-    authority_id: str,
-    invocation_receipt_digest: str,
-    prior_run_ids: Sequence[str],
-    root: Path | None = None,
-) -> str | None:
-    candidates = _prior_nonpass_results(
-        repository=repository,
-        pr_number=pr_number,
-        authority_id=authority_id,
-        prior_run_ids=prior_run_ids,
-        root=root,
-    )
-    for index, (candidate, receipt) in enumerate(candidates):
-        if (
-            candidate["outcome"] != "INCOMPLETE"
-            or candidate["binding"]["invocation_receipt_digest"]
-            != invocation_receipt_digest
-            or receipt["origin_run_id"] != candidate["origin_run_id"]
-        ):
-            continue
-        older = next(
-            (
-                item[0]
-                for item in candidates[index + 1 :]
-                if item[0]["binding"]["invocation_receipt_digest"]
-                != invocation_receipt_digest
-            ),
-            None,
-        )
-        if older is not None:
-            return content_hash(
-                {
-                    "policy": "single_paired_trace_gap_after_fresh_verify_v1",
-                    "fresh_receipt_result_digest": candidate["artifact_digest"],
-                    "older_receipt_result_digest": older["artifact_digest"],
-                }
-            )
-    return None
-
-
-def latest_prior_nonpass_result(
-    *,
-    repository: str,
-    pr_number: int,
-    authority_id: str,
-    prior_run_ids: Sequence[str],
-    root: Path | None = None,
-) -> dict[str, Any] | None:
-    results = _prior_nonpass_results(
-        repository=repository,
-        pr_number=pr_number,
-        authority_id=authority_id,
-        prior_run_ids=prior_run_ids,
-        root=root,
-    )
-    return results[0][0] if results else None
 
 
 def _prior_nonpass_results(
@@ -610,7 +770,7 @@ def sanitize_verification_error(error: BaseException) -> tuple[str, str]:
 
 def verification_query_diagnostics(
     error: BaseException,
-) -> dict[str, int] | None:
+) -> dict[str, Any] | None:
     values = {
         field: getattr(error, field, None)
         for field in (
@@ -630,6 +790,41 @@ def verification_query_diagnostics(
         != values["expected_reference_count"]
     ):
         return None
+    maturity = {
+        field: getattr(error, field, None)
+        for field in (
+            "invocation_receipt_digest",
+            "evidence_window_end",
+            "maturity_boundary",
+            "snapshot_observed_at",
+            "maximum_hydration_seconds",
+            "stabilization_seconds",
+        )
+    }
+    if any(value is not None for value in maturity.values()):
+        if (
+            not all(value is not None for value in maturity.values())
+            or not all(
+                isinstance(maturity[field], str) and maturity[field]
+                for field in (
+                    "invocation_receipt_digest",
+                    "evidence_window_end",
+                    "maturity_boundary",
+                    "snapshot_observed_at",
+                )
+            )
+            or not all(
+                isinstance(maturity[field], int)
+                and not isinstance(maturity[field], bool)
+                and maturity[field] > 0
+                for field in (
+                    "maximum_hydration_seconds",
+                    "stabilization_seconds",
+                )
+            )
+        ):
+            raise ContractError("Validation evidence maturity diagnostics are invalid")
+        values.update(maturity)
     return values
 
 
@@ -646,6 +841,12 @@ def _authority_contract(
         "validation_mode": authority.validation_mode,
         "provider_content_digest": runtime["provider_content_digest"],
     }
+
+
+def _canonical_document_bytes(value: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    ).encode("ascii")
 
 
 def _current_result_path(root: Path, value: Mapping[str, Any]) -> Path:
@@ -696,3 +897,197 @@ def _result_reference(
             evidence["authority_evidence_digest"]
         )
     return reference
+
+
+def _result_candidates(
+    root: Path,
+    *,
+    prepared: Mapping[str, Any],
+    prior_generations: Sequence[Mapping[str, Any]],
+    authority_ids: Sequence[str],
+) -> dict[str, list[tuple[str, Path, dict[str, Any]]]]:
+    repository = str(prepared["repository"])
+    generations = _known_generations(prepared, prior_generations)
+    candidates: dict[str, list[tuple[str, Path, dict[str, Any]]]] = {}
+    for authority_id in authority_ids:
+        completed_digests: dict[str, set[str]] = {}
+        for generation in generations:
+            path = _result_path(
+                root,
+                repository=repository,
+                pr_number=generation["pr_number"],
+                run_id=generation["run_id"],
+                authority_id=authority_id,
+            )
+            if not path.is_file():
+                continue
+            try:
+                raw = read_json(path)
+                reference = _result_reference(raw, path=path, root=root)
+                value = load_authority_verification_result(
+                    reference,
+                    root=root,
+                )
+                receipt = load_invocation_receipt(
+                    value["invocation_receipt"],
+                    root=root,
+                )
+            except (ContractError, KeyError, OSError, ValueError):
+                continue
+            if (
+                value["repository"] != repository
+                or value["pr_number"] != generation["pr_number"]
+                or value["origin_run_id"] != generation["run_id"]
+                or value["authority_id"] != authority_id
+                or path.resolve() != _current_result_path(root, value).resolve()
+            ):
+                raise ContractError(
+                    "Authority verification result generation provenance changed"
+                )
+            completed = str(value["completed_at"])
+            completed_digests.setdefault(completed, set()).add(
+                str(value["artifact_digest"])
+            )
+            candidates.setdefault(authority_id, []).append(
+                (
+                    completed,
+                    path.resolve(),
+                    {
+                        "execution_identity": (
+                            invocation_receipt_execution_identity(receipt)
+                        ),
+                        "result": value,
+                    },
+                )
+            )
+        if any(len(digests) > 1 for digests in completed_digests.values()):
+            raise ContractError("Newest authority verification results conflict")
+    return candidates
+
+
+def _known_generations(
+    prepared: Mapping[str, Any],
+    prior_generations: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    repository = str(prepared["repository"])
+    values = [
+        {
+            "repository": repository,
+            "pr_number": int(prepared["pr_number"]),
+            "run_id": str(prepared["run_id"]),
+        },
+        *[dict(item) for item in prior_generations],
+    ]
+    generations: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    for value in values:
+        try:
+            pr_number = int(value["pr_number"])
+            run_id = str(value["run_id"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ContractError("Validation generation reference is invalid") from error
+        if (
+            value.get("repository", repository) != repository
+            or pr_number < 1
+            or re.fullmatch(r"validation-[0-9a-f]{12}", run_id) is None
+        ):
+            raise ContractError("Validation generation reference is invalid")
+        key = (pr_number, run_id)
+        if key not in seen:
+            generations.append(
+                {
+                    "repository": repository,
+                    "pr_number": pr_number,
+                    "run_id": run_id,
+                }
+            )
+            seen.add(key)
+    return generations
+
+
+def _latest_unique_result(
+    candidates: Sequence[tuple[str, Mapping[str, Any]]],
+) -> Mapping[str, Any] | None:
+    if not candidates:
+        return None
+    ordered = sorted(
+        candidates,
+        key=lambda item: (item[0], item[1]["artifact_digest"]),
+    )
+    latest_completed = ordered[-1][0]
+    latest = [item for item in ordered if item[0] == latest_completed]
+    if len({item[1]["artifact_digest"] for item in latest}) != 1:
+        raise ContractError("Newest authority verification results conflict")
+    return latest[-1][1]
+
+
+def _latest_unique_history_result(
+    candidates: Sequence[tuple[str, Path, Mapping[str, Any]]],
+) -> Mapping[str, Any]:
+    ordered = sorted(
+        candidates,
+        key=lambda item: (
+            item[0],
+            item[2]["result"]["artifact_digest"],
+        ),
+    )
+    latest_completed = ordered[-1][0]
+    latest = [item for item in ordered if item[0] == latest_completed]
+    if (
+        len(
+            {
+                item[2]["result"]["artifact_digest"]
+                for item in latest
+            }
+        )
+        != 1
+    ):
+        raise ContractError("Newest authority verification results conflict")
+    return latest[-1][2]
+
+
+def _execution_identity_changed_reasons(
+    previous: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> list[str]:
+    reasons = []
+    pairs = (
+        ("source_content", "authority", "source_content_digest"),
+        ("traffic_execution", "authority", "traffic_execution_digest"),
+        ("provider_content", "authority", "provider_content_digest"),
+        ("paired_v0_source_content", "paired_v0", "source_content_digest"),
+        (
+            "paired_v0_traffic_execution",
+            "paired_v0",
+            "traffic_execution_digest",
+        ),
+        ("paired_v0_provider_content", "paired_v0", "provider_content_digest"),
+    )
+    for reason, section, field in pairs:
+        previous_section = previous.get(section)
+        current_section = current.get(section)
+        previous_value = (
+            previous_section.get(field)
+            if isinstance(previous_section, Mapping)
+            else None
+        )
+        current_value = (
+            current_section.get(field)
+            if isinstance(current_section, Mapping)
+            else None
+        )
+        if previous_value != current_value:
+            reasons.append(reason)
+    if (
+        previous.get("authority", {}).get("runtime_kind")
+        != current.get("authority", {}).get("runtime_kind")
+    ):
+        reasons.append("source_content")
+    if (
+        isinstance(previous.get("paired_v0"), Mapping)
+        and isinstance(current.get("paired_v0"), Mapping)
+        and previous["paired_v0"].get("runtime_kind")
+        != current["paired_v0"].get("runtime_kind")
+    ):
+        reasons.append("paired_v0_source_content")
+    return list(dict.fromkeys(reasons))

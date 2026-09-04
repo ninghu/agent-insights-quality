@@ -4,16 +4,28 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 
 
+SKIPPED_VERSION_STATUSES = frozenset(
+    {
+        "skipped_agent_activation",
+        "skipped_insight",
+        "skipped_telemetry",
+    }
+)
+
+
 @dataclass(frozen=True)
 class SemanticAssertionEvidence:
     assertion: str
     passed: bool
+    evidence_sufficient: bool = True
+    evidence_sufficient: bool
 
 
 @dataclass(frozen=True)
 class TraceAssertionEvidence:
     assertion: str
     passed: bool
+    evidence_sufficient: bool = True
 
 
 @dataclass(frozen=True)
@@ -30,6 +42,7 @@ class RequestCompletionEvidence:
     trace_assertion_count: int = 0
     trace_assertions_passed: int = 0
     trace_assertion_results: tuple[TraceAssertionEvidence, ...] = ()
+    error_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +60,7 @@ class InvocationEvidence:
     trace_assertion_count: int = 0
     trace_assertions_passed: int = 0
     request_summaries: tuple[RequestCompletionEvidence, ...] = ()
+    session_references: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,8 +81,13 @@ def linked_operations_match_scope(
     linked_operation_ids: Collection[str],
     operation_ids: Collection[str],
 ) -> bool:
-    linked = set(linked_operation_ids)
-    return bool(linked) and linked.issubset(operation_ids)
+    linked_values = list(linked_operation_ids)
+    linked = set(linked_values)
+    return (
+        bool(linked)
+        and len(linked_values) == len(linked)
+        and linked.issubset(operation_ids)
+    )
 
 
 @dataclass(frozen=True)
@@ -78,6 +97,7 @@ class InsightRunEvidence:
     window_end: str
     status: str
     insights: tuple[InsightEvidence, ...]
+    invalid_insight_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -107,6 +127,8 @@ class VersionResult:
     trace_assertions_passed: int = 0
     trace_contract_verified: bool = False
     trace_behavior_summary: dict[str, object] = field(default_factory=dict)
+    trace_maturity_proof: dict[str, object] | None = None
+    role_pass_summary: dict[str, object] | None = None
     endpoint_request_summaries: list[RequestCompletionEvidence] = field(
         default_factory=list
     )
@@ -132,6 +154,7 @@ def request_completion_payload(
             {
                 "assertion": assertion.assertion,
                 "passed": assertion.passed,
+                "evidence_sufficient": assertion.evidence_sufficient,
             }
             for assertion in value.assertion_results
         ],
@@ -141,10 +164,12 @@ def request_completion_payload(
             {
                 "assertion": assertion.assertion,
                 "passed": assertion.passed,
+                "evidence_sufficient": assertion.evidence_sufficient,
             }
             for assertion in value.trace_assertion_results
         ],
         "activation_gate": value.activation_gate,
         "direct_terminal_response_count": value.direct_terminal_response_count,
         "function_call_count": value.function_call_count,
+        "error_code": value.error_code,
     }

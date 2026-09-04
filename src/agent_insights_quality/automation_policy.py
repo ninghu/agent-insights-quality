@@ -24,11 +24,17 @@ TRACE_ASSERTION_POLL_SECONDS = 15
 class AutomationPolicy:
     issues_per_agent_daily: int
     max_parallel_agents: int
+    daily_inter_version_pacing_seconds: int
     insight_lookback_hours: float
+    insight_lookback_max_hours: float
+    insight_lookback_precision_minutes: int
     clean_window_poll_seconds: int
     clean_window_ingestion_margin_seconds: int
     clean_window_max_wait_seconds: int
     trace_assertion_stabilization_seconds: int
+    daily_trace_hydration_grace_seconds: int
+    daily_trace_hydration_maximum_wait_seconds: int
+    daily_trace_hydration_maximum_poll_seconds: int
     insight_start_margin_seconds: int
     max_recovery_versions: int
     agent_start_stagger_seconds: int
@@ -37,14 +43,13 @@ class AutomationPolicy:
     storage_resource_role: str
     quality_artifact_container: str
     deployment_registry_container: str
-    approved_record_container: str
 
 
 def load_automation_policy(
     path: Path = ROOT / "config" / "automation.yaml",
 ) -> AutomationPolicy:
     value = read_yaml(path)
-    if value.get("schema_version") != "3.0.0":
+    if value.get("schema_version") != "4.0.0":
         raise ContractError("Automation policy schema version is invalid")
     daily_issues = _positive_int(
         value.get("issues_per_agent_daily"),
@@ -58,9 +63,27 @@ def load_automation_policy(
     )
     if max_parallel_agents > 5:
         raise ContractError("Automation parallel Agent limit exceeds the fixed inventory")
+    pacing_seconds = _positive_int(
+        value.get("daily_inter_version_pacing_seconds"),
+        "Daily inter-version pacing",
+    )
+    if pacing_seconds != 60:
+        raise ContractError("Daily inter-version pacing must be 60 seconds")
     lookback = _finite_number(value.get("insight_lookback_hours"), "lookback")
     if lookback < MINIMUM_LOOKBACK_HOURS:
         raise ContractError("Automation lookback is below the reviewed minimum")
+    maximum_lookback = _finite_number(
+        value.get("insight_lookback_max_hours"),
+        "maximum lookback",
+    )
+    if maximum_lookback < lookback or maximum_lookback > 24:
+        raise ContractError("Automation maximum lookback is outside the reviewed bounds")
+    lookback_precision = _positive_int(
+        value.get("insight_lookback_precision_minutes"),
+        "lookback precision",
+    )
+    if lookback_precision != 1:
+        raise ContractError("Automation lookback precision must be one minute")
     poll = _positive_int(value.get("clean_window_poll_seconds"), "poll interval")
     margin = _nonnegative_int(
         value.get("clean_window_ingestion_margin_seconds"),
@@ -74,6 +97,18 @@ def load_automation_policy(
         value.get("trace_assertion_stabilization_seconds"),
         "trace assertion stabilization interval",
     )
+    hydration_grace = _nonnegative_int(
+        value.get("daily_trace_hydration_grace_seconds"),
+        "Daily trace hydration grace",
+    )
+    hydration_maximum = _positive_int(
+        value.get("daily_trace_hydration_maximum_wait_seconds"),
+        "Daily trace hydration maximum",
+    )
+    hydration_maximum_poll = _positive_int(
+        value.get("daily_trace_hydration_maximum_poll_seconds"),
+        "Daily trace hydration maximum poll",
+    )
     start_margin = _positive_int(
         value.get("insight_start_margin_seconds"),
         "Insight start margin",
@@ -82,14 +117,24 @@ def load_automation_policy(
         raise ContractError(
             "Maximum clean-window wait is shorter than the uncertainty horizon"
         )
-    if assertion_stabilization <= 2 * TRACE_ASSERTION_POLL_SECONDS + margin:
+    if assertion_stabilization != 2 * TRACE_ASSERTION_POLL_SECONDS:
         raise ContractError(
-            "Trace assertion stabilization interval is shorter than the reviewed "
-            "ingestion margin"
+            "Trace assertion stabilization interval must use the reviewed "
+            "two-snapshot duration"
         )
     if assertion_stabilization >= TRACE_ASSERTION_DEADLINE_SECONDS:
         raise ContractError(
             "Trace assertion stabilization interval must fit within its bounded deadline"
+        )
+    if hydration_maximum < 60 or hydration_maximum > 5 * 60:
+        raise ContractError(
+            "Daily trace hydration maximum is outside the reviewed horizon"
+        )
+    if hydration_grace >= hydration_maximum:
+        raise ContractError("Daily trace hydration grace exceeds its horizon")
+    if hydration_maximum_poll < poll or hydration_maximum_poll > 60:
+        raise ContractError(
+            "Daily trace hydration maximum poll is outside reviewed bounds"
         )
     if start_margin + TRACE_ASSERTION_POLL_SECONDS >= lookback * 3600:
         raise ContractError(
@@ -127,21 +172,20 @@ def load_automation_policy(
     )
     if deployment_registry_container != FIXED_DEPLOYMENT_REGISTRY_CONTAINER:
         raise ContractError("Automation deployment-registry container is not reviewed")
-    approved_record_container = str(value.get("approved_record_container") or "")
-    if approved_record_container != (
-        f"test-agent-validation-approved-records-swedencentral-{resource_set}"
-    ):
-        raise ContractError(
-            "Automation approved-record container is not the reviewed environment namespace"
-        )
     return AutomationPolicy(
         issues_per_agent_daily=daily_issues,
         max_parallel_agents=max_parallel_agents,
+        daily_inter_version_pacing_seconds=pacing_seconds,
         insight_lookback_hours=lookback,
+        insight_lookback_max_hours=maximum_lookback,
+        insight_lookback_precision_minutes=lookback_precision,
         clean_window_poll_seconds=poll,
         clean_window_ingestion_margin_seconds=margin,
         clean_window_max_wait_seconds=maximum_wait,
         trace_assertion_stabilization_seconds=assertion_stabilization,
+        daily_trace_hydration_grace_seconds=hydration_grace,
+        daily_trace_hydration_maximum_wait_seconds=hydration_maximum,
+        daily_trace_hydration_maximum_poll_seconds=hydration_maximum_poll,
         insight_start_margin_seconds=start_margin,
         max_recovery_versions=recoveries,
         agent_start_stagger_seconds=stagger,
@@ -150,7 +194,6 @@ def load_automation_policy(
         storage_resource_role=storage_resource_role,
         quality_artifact_container=quality_artifact_container,
         deployment_registry_container=deployment_registry_container,
-        approved_record_container=approved_record_container,
     )
 
 

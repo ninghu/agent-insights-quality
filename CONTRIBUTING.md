@@ -29,8 +29,10 @@ Each permanent Test Agent owns one healthy baseline and one or more reviewed iss
   telemetry is produced naturally.
 - Every authority has versioned setup/probe scenarios. Classify the observation mechanism explicitly
   as `baseline`, `deterministic`, or `model_mediated`; never derive it from Prompt versus Hosted type.
-- Preserve the fixed validation matrices: baseline `5/5`, deterministic issue `5/5` with paired `v0`
-  `0/5`, and model-mediated issue `5/7` with paired `v0` `0/7`.
+- Preserve the fixed validation matrices: baseline `6/10` proven healthy with at most four trace-only
+  unknowns and no observed failure; every issue mode `>=6/10`, with complete non-observations counted
+  as misses and at most four trace-only unknowns; paired `v0` `0/10` with six proven controls and at
+  most four trace-only unknowns.
 
 ## Use the onboarding skills
 
@@ -132,22 +134,29 @@ immutable shard ID and resolve the hidden active generation and authority assign
 `run-test-agent-validation` is status/next-action guidance only and never creates sub-sessions.
 
 Immediately after definitive authority completion, its sub-session atomically publishes a
-generation-fenced invocation receipt. Cross-generation or verifier-only reuse requires exact Agent
-source/content/execution, provider-version, runtime, environment, Project, telemetry resource-set,
-response/session, invoke/evidence-window, source-artifact schema/version/origin/digest, and complete
-issue/paired-`v0` provenance. Unknown, ambiguous, duplicate, partial, or indeterminate retried-POST
-outcomes are not reusable, and one-time extraction is fenced against stale sub-sessions.
+generation-fenced invocation receipt. Cross-generation reuse eligibility requires exact Agent
+source/content/execution and provider content, including paired-`v0`; provider version, runtime
+mapping, environment, Project, telemetry, PR, commit, and generation remain audit provenance only.
+Response/session, invoke/evidence-window, source-artifact schema/version/origin/digest, and complete
+issue/paired-`v0` provenance are still fully validated. Unknown, ambiguous, duplicate, partial, or
+indeterminate retried-POST outcomes are not reusable, and one-time extraction is fenced against stale
+sub-sessions.
 
 Verification runs in at most eight visible Copilot sub-sessions. Each claims one authority at a time,
 uses no internal concurrency, deployment, or traffic, and persists the immutable generation-fenced
 result before claiming another. Verify one batched stability snapshot per target: one batch for a
 baseline, or two batches for an issue and its paired `v0`; never stabilize attempts independently.
 
-Keep `PASS`, `FAIL`, and `INCOMPLETE` separate. The reviewed thresholds are baseline `5/5`,
-deterministic `5/5` plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
-Later failures do not discard completed authority results. The next generation selects only missing,
-`INCOMPLETE`, or binding-changed authorities; within that set, only authorities without current
-exact-bound completed receipts receive new traffic. A reused receipt proves the
+Keep `PASS`, `FAIL`, and `INCOMPLETE` separate. The reviewed thresholds are baseline `6/10` with at
+most four trace-only unknowns and no observed failure, every issue mode `>=6/10` with at most four
+trace-only unknowns, and paired `v0` `0/10` with six proven controls plus at most four trace-only
+unknowns.
+Later failures do not discard completed authority results. An integrity-bound per-authority index
+retains unchanged PASS history across commits, PRs, verifier/schema/policy changes, and telemetry
+topology changes without scanning aggregate historical evidence. The next generation selects only
+prior non-PASS, missing, explicitly invalidated, policy-affected, or execution-identity-changed
+authorities; within that set, only authorities without exact source/provider/traffic-bound completed
+receipts receive new traffic. A reused receipt proves the
 traffic-generation/execution binding, while each new verification package binds its immutable digest
 and the current verifier commit/digest. No validation cleanup runs, and final composition covers
 exactly all 41 authorities.
@@ -156,10 +165,9 @@ The fixed daily contract selects four issues per Agent: 20 issues plus five base
 assessment packages. Test Agent Validation is a separate local report-free process and never runs Agent
 Insights, assessment, scoring, ADX publication, or email.
 
-After exact current-head 41/41 READY evidence, explicit human approval permits one minimal create-once
-approved validation record. GitHub runs ordinary mechanical CI only and merge remains manual. This
-durable `aiq-staging-swedencentral` process is the official staging qualification gate for new
-candidates.
+The durable `aiq-staging-swedencentral` process provides advisory evidence for human review. Daily
+does not consume staging state or a validation digest; the human decision is represented only by
+manually invoking Daily. GitHub runs ordinary mechanical CI only and merge remains manual.
 
 Local runtime prerequisites and operator roles are documented in
 [`docs/AUTOMATION_SETUP.md`](docs/AUTOMATION_SETUP.md).

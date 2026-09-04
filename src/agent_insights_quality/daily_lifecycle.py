@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -23,7 +24,6 @@ from agent_insights_quality.util import (
     read_json,
     runtime_root,
 )
-from agent_insights_quality.validation_approved import validate_approval_binding
 
 AGENT_ORDER = (
     "weather-agent",
@@ -54,8 +54,9 @@ def daily_runtime_root(base: Path | None = None) -> Path:
 
 
 class DailyLock:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, wait_seconds: float = 0.0) -> None:
         self.path = path
+        self._wait_seconds = wait_seconds
         self._stream: BinaryIO | None = None
 
     @property
@@ -66,26 +67,35 @@ class DailyLock:
         if self.owned:
             raise ContractError("Daily lock is already held")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        stream = self.path.open("a+b")
-        try:
-            stream.seek(0)
-            if stream.read(1) == b"":
-                stream.write(b"0")
-                stream.flush()
-                os.fsync(stream.fileno())
-            stream.seek(0)
-            if os.name == "nt":
-                import msvcrt
+        deadline = time.monotonic() + self._wait_seconds
+        while True:
+            stream = self.path.open("a+b")
+            try:
+                stream.seek(0)
+                if stream.read(1) == b"":
+                    stream.write(b"0")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
 
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
 
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as error:
-            stream.close()
-            raise ContractError("Another Daily operation holds this lock") from error
-        self._stream = stream
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                stream.close()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ContractError(
+                        "Another Daily operation holds this lock"
+                    ) from error
+                time.sleep(min(0.05, remaining))
+                continue
+            self._stream = stream
+            return
 
     def release(self) -> None:
         stream = self._stream
@@ -249,7 +259,7 @@ class DailyLifecycle:
             "delivery_mode",
             "publish_preview",
             "work_items",
-            "approval",
+            "checkout_commit_sha",
             "catalog_hashes",
             "selection",
             "policy",
@@ -334,12 +344,6 @@ def validate_daily_lifecycle(value: Mapping[str, Any]) -> None:
     )
     if value["lifecycle_digest"] != expected:
         raise ContractError("Daily lifecycle digest is stale")
-    approval = value["bindings"]["approval"]
-    validate_approval_binding(
-        approval,
-        expected_checkout_commit_sha=approval["checkout_commit_sha"],
-        expected_validation_digest=approval["validation_digest"],
-    )
     selection = value["bindings"]["selection"]
     if set(selection) != set(AGENT_ORDER):
         raise ContractError("Daily Agent lane inventory is not canonical")

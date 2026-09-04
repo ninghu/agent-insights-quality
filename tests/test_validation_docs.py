@@ -19,32 +19,25 @@ def test_validation_docs_preserve_report_free_boundary_and_fixed_matrix() -> Non
         )
     )
     for requirement in (
-        "41 independent",
-        "5/5",
-        "5/7",
+        "6/10",
+        "6/10",
         "paired `v0`",
         "report-free",
         "READY",
         "OS file lock",
-        "explicit human approval",
+        "advisory",
     ):
         assert requirement.casefold() in combined.casefold()
     assert "Validation never runs monitors, Agent Insights, assessment" in combined
 
 
-def test_cutover_docs_are_new_only_fail_forward_and_keep_daily_test_external() -> None:
+def test_cutover_docs_are_new_only_and_keep_daily_test_external() -> None:
     operations = _text("docs/OPERATIONS.md")
     normalized = " ".join(operations.split())
     for requirement in (
         "new-only",
-        "no process may read both",
-        "quiescence lock",
-        "remain new-only on failure",
         "read-only readiness",
-        "isolated `--test-run --rerun N` email-only Daily Test",
-        "external, non-gating",
         "old environment is never a staging fallback",
-        "approved-record Blob path",
     ):
         assert requirement in normalized
 

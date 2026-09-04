@@ -32,11 +32,14 @@ Application Insights remains read-only.
 This is an official scheduled run. Never pass `--test-run`; that explicit mode is reserved for a
 reviewed email-only rerun and intentionally skips ADX and pull-request publication.
 
-Run `daily-prepare` and `daily-provision` centrally. Use `daily-guide` to create five visible Copilot
-sub sessions for the Weather, Healthcare, Finance, Travel, and Support Agent lanes. Each lane runs
-only its `daily-run-agent` command, with `v0` followed by four issues sequentially. Never run a lane
-through a subprocess, thread pool, hidden worker, or version-level sub session. Keep the coordinator
-responsive with `daily-status`; after all five immutable receipts exist, run `daily-compose`.
+Run `daily-prepare` and `daily-provision` centrally, then use `daily-guide`. Create five visible
+whole-Agent sessions and run only their `daily-run-agent --agent <name>` commands. Each processes
+`v0` and four issues sequentially; every version completes traffic, five-minute bounded telemetry
+verification, Agent Insights, and immutable result publication before the reviewed 60-second pacing.
+The five Agent lanes run concurrently without a subprocess, thread pool, or hidden worker. Each
+Agent monitor resets once. A skipped version is visible and does not block the next version or cause
+endpoint retraffic. Keep the coordinator responsive with read-only `daily-status`; run
+`daily-compose` after all five lanes are terminal.
 
 Run up to five visible per-Agent assessment sub sessions after the 25-package barrier. Validate their
 outputs and any exact eligible focused rechecks with `daily-validate-assessments`. Keep improvement

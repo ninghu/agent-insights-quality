@@ -218,9 +218,18 @@ def _write_receipt(
     authorities: list,
     runtimes: dict[str, DeployedRuntime],
     qualifier: str = "one",
+    minute: int = 0,
     migrated_from: dict[str, str] | None = None,
 ) -> dict[str, str]:
     invocation = _invocation(authority, qualifier=qualifier)
+    for scenario in invocation["scenarios"]:
+        for attempt in [
+            *scenario["issue_invocations"],
+            *scenario["v0_invocations"],
+        ]:
+            started = datetime(2026, 8, 31, 12, minute, tzinfo=UTC)
+            attempt["started_at"] = started.isoformat()
+            attempt["completed_at"] = (started + timedelta(seconds=1)).isoformat()
     return write_invocation_receipt(
         prepared=prepared,
         plan=plan,
@@ -570,11 +579,12 @@ def _write_completed_supplemental_replay_state(
     )
 
 
-def test_all_current_receipts_select_zero_invoke_and_41_verify(
+def test_two_current_receipts_select_zero_invoke_and_two_verify(
     tmp_path: Path,
 ) -> None:
     prepared, plan, authorities, runtimes = _context()
-    for authority in authorities:
+    selected_authorities = authorities[:2]
+    for index, authority in enumerate(selected_authorities):
         _write_receipt(
             root=tmp_path,
             prepared=prepared,
@@ -582,9 +592,10 @@ def test_all_current_receipts_select_zero_invoke_and_41_verify(
             authority=authority,
             authorities=authorities,
             runtimes=runtimes,
+            qualifier=f"authority-{index}",
         )
 
-    verify_ids = [item.authority_id for item in authorities]
+    verify_ids = [item.authority_id for item in selected_authorities]
     invoke_ids, reused = select_reusable_invocation_receipts(
         authorities=authorities,
         authority_ids=verify_ids,
@@ -595,7 +606,7 @@ def test_all_current_receipts_select_zero_invoke_and_41_verify(
     )
 
     assert invoke_ids == []
-    assert len(reused) == len(verify_ids) == 41
+    assert len(reused) == len(verify_ids) == 2
     first = load_invocation_receipt(reused[0], root=tmp_path)
     assert first["origin_binding"]["quota_plan_digest"] == prepared["digests"][
         "quota_plan_digest"
@@ -618,6 +629,7 @@ def test_reused_invocation_sends_no_traffic_and_binds_current_verifier(
         runtimes=runtimes,
     )
     current = copy.deepcopy(prepared)
+    current["pr_number"] = 74
     current["commit_sha"] = NEXT_HEAD
     current["digests"]["shared_validation_digest"] = content_hash(
         {"verifier": NEXT_HEAD}
@@ -627,12 +639,22 @@ def test_reused_invocation_sends_no_traffic_and_binds_current_verifier(
     current_plan["shared_validation_digest"] = current["digests"][
         "shared_validation_digest"
     ]
+    current_plan["invocation_contract_digest"] = content_hash(
+        {"global-contract": "pr74"}
+    )
     invoked, reused = select_reusable_invocation_receipts(
         authorities=authorities,
         authority_ids=[issue.authority_id],
         runtime_topology=current["runtime_topology"],
         prepared=current,
         plan=current_plan,
+        prior_generations=[
+            {
+                "repository": prepared["repository"],
+                "pr_number": prepared["pr_number"],
+                "run_id": prepared["run_id"],
+            }
+        ],
         root=tmp_path,
     )
     assert invoked == []
@@ -640,6 +662,103 @@ def test_reused_invocation_sends_no_traffic_and_binds_current_verifier(
     assert load_invocation_receipt(reference, root=tmp_path)[
         "origin_commit_sha"
     ] == HEAD
+    assert load_invocation_receipt(reference, root=tmp_path)["pr_number"] == 999
+    assert load_invocation_receipt(reference, root=tmp_path)[
+        "invocation_contract_digest"
+    ] == plan["invocation_contract_digest"]
+
+
+def test_receipt_lookup_is_bounded_to_known_generations(tmp_path: Path) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    issue = next(
+        item for item in authorities if item.authority_id == "issue-020"
+    )
+    reference = _write_receipt(
+        root=tmp_path,
+        prepared=prepared,
+        plan=plan,
+        authority=issue,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    unrelated = (
+        tmp_path
+        / "invocation-receipts"
+        / prepared["repository"].replace("/", "--")
+        / str(prepared["pr_number"])
+        / "validation-ffffffffffff"
+        / issue.authority_id.replace("/", "--")
+        / "corrupt.json"
+    )
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("{not-json", encoding="utf-8")
+
+    selected, reused = select_reusable_invocation_receipts(
+        authorities=authorities,
+        authority_ids=[issue.authority_id],
+        runtime_topology=prepared["runtime_topology"],
+        prepared=prepared,
+        plan=plan,
+        root=tmp_path,
+    )
+
+    assert selected == []
+    assert reused == [reference]
+
+
+def test_newer_incompatible_receipt_falls_back_to_older_exact(
+    tmp_path: Path,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    issue = next(
+        item for item in authorities if item.authority_id == "issue-020"
+    )
+    older = _write_receipt(
+        root=tmp_path,
+        prepared=prepared,
+        plan=plan,
+        authority=issue,
+        authorities=authorities,
+        runtimes=runtimes,
+        qualifier="older",
+        minute=0,
+    )
+    changed_issue = replace(
+        issue,
+        source_content_digest=content_hash({"newer": "incompatible"}),
+    )
+    changed_authorities = [
+        changed_issue if item.authority_id == issue.authority_id else item
+        for item in authorities
+    ]
+    changed_runtimes = dict(runtimes)
+    changed_runtimes[issue.authority_id] = replace(
+        runtimes[issue.authority_id],
+        provider_content_digest=changed_issue.source_content_digest,
+    )
+    _write_receipt(
+        root=tmp_path,
+        prepared=prepared,
+        plan=plan,
+        authority=changed_issue,
+        authorities=changed_authorities,
+        runtimes=changed_runtimes,
+        qualifier="newer",
+        minute=1,
+    )
+
+    selected, reused = select_reusable_invocation_receipts(
+        authorities=authorities,
+        authority_ids=[issue.authority_id],
+        runtime_topology=prepared["runtime_topology"],
+        prepared=prepared,
+        plan=plan,
+        root=tmp_path,
+    )
+
+    assert selected == []
+    assert reused == [older]
+
 
 def test_verifier_consumes_only_lifecycle_selected_receipt(
     monkeypatch,
@@ -690,18 +809,13 @@ def test_verifier_consumes_only_lifecycle_selected_receipt(
     [
         "source_content",
         "provider_content",
-        "provider_version",
-        "paired_provider_version",
-        "execution",
+        "traffic",
         "paired_source",
-        "paired_execution",
-        "runtime_mapping",
-        "environment",
-        "location",
-        "telemetry",
+        "paired_traffic",
+        "repository",
     ],
 )
-def test_reuse_rejects_every_stale_contract_mismatch(
+def test_reuse_rejects_execution_identity_mismatch(
     tmp_path: Path,
     mismatch: str,
 ) -> None:
@@ -741,9 +855,14 @@ def test_reuse_rejects_every_stale_contract_mismatch(
         runtime_by_id[f"{issue.canonical_agent}/v0"][
             "provider_agent_version_id"
         ] = "changed-paired-version"
-    elif mismatch == "execution":
+    elif mismatch == "traffic":
+        changed_rules = copy.deepcopy(issue.validation_rules)
+        changed_rules["scenarios"][0]["attempts"][0]["probe_steps"][0][
+            "request"
+        ]["body"]["input"][0]["content"] = "changed synthetic request"
         current_authorities[current_authorities.index(issue)] = replace(
             issue,
+            validation_rules=changed_rules,
             execution_digest=content_hash({"changed": "execution"}),
         )
     elif mismatch == "paired_source":
@@ -755,13 +874,18 @@ def test_reuse_rejects_every_stale_contract_mismatch(
             paired,
             source_content_digest=content_hash({"changed": "paired-source"}),
         )
-    elif mismatch == "paired_execution":
+    elif mismatch == "paired_traffic":
         paired_id = f"{issue.canonical_agent}/v0"
         paired = next(
             item for item in current_authorities if item.authority_id == paired_id
         )
+        changed_rules = copy.deepcopy(paired.validation_rules)
+        changed_rules["scenarios"][0]["attempts"][0]["probe_steps"][0][
+            "request"
+        ]["body"]["input"][0]["content"] = "changed paired request"
         current_authorities[current_authorities.index(paired)] = replace(
             paired,
+            validation_rules=changed_rules,
             execution_digest=content_hash(
                 {"changed": "paired-execution"}
             ),
@@ -776,6 +900,10 @@ def test_reuse_rejects_every_stale_contract_mismatch(
         current_plan["location"] = "changed-location"
     elif mismatch == "telemetry":
         current["substrate"]["telemetry_resource_id"] = "/changed/telemetry"
+    elif mismatch == "project":
+        current["project"]["name"] = "changed-project"
+    elif mismatch == "repository":
+        current["repository"] = "other/repository"
 
     selected, reused = select_reusable_invocation_receipts(
         authorities=current_authorities,
@@ -787,6 +915,134 @@ def test_reuse_rejects_every_stale_contract_mismatch(
     )
     assert selected == [issue.authority_id]
     assert reused == []
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "provider_version",
+        "paired_provider_version",
+        "runtime_mapping",
+        "environment",
+        "location",
+        "telemetry",
+        "project",
+        "policy_digest",
+        "paired_policy_digest",
+    ],
+)
+def test_reuse_ignores_audit_and_telemetry_topology_changes(
+    tmp_path: Path,
+    change: str,
+) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    issue = next(
+        item for item in authorities if item.authority_id == "issue-020"
+    )
+    reference = _write_receipt(
+        root=tmp_path,
+        prepared=prepared,
+        plan=plan,
+        authority=issue,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    current = copy.deepcopy(prepared)
+    current_plan = copy.deepcopy(plan)
+    runtime_by_id = {
+        item["authority_id"]: item
+        for item in current["runtime_topology"]["agents"]
+    }
+    if change == "provider_version":
+        runtime_by_id[issue.authority_id]["provider_agent_version_id"] = (
+            "changed-version"
+        )
+    elif change == "paired_provider_version":
+        runtime_by_id[f"{issue.canonical_agent}/v0"][
+            "provider_agent_version_id"
+        ] = "changed-paired-version"
+    elif change == "runtime_mapping":
+        runtime_by_id[issue.authority_id]["connection_ids"] = [
+            "changed-connection"
+        ]
+    elif change == "environment":
+        current["project"]["provider_id"] = "changed-project"
+    elif change == "location":
+        current_plan["location"] = "changed-location"
+    elif change == "telemetry":
+        current["substrate"]["telemetry_resource_id"] = "/changed/telemetry"
+    elif change == "project":
+        current["project"]["name"] = "changed-project"
+    elif change == "policy_digest":
+        current_authorities = list(authorities)
+        current_authorities[current_authorities.index(issue)] = replace(
+            issue,
+            execution_digest=content_hash({"changed": "policy"}),
+        )
+        authorities = current_authorities
+    else:
+        current_authorities = list(authorities)
+        paired_id = f"{issue.canonical_agent}/v0"
+        paired = next(
+            item for item in current_authorities if item.authority_id == paired_id
+        )
+        current_authorities[current_authorities.index(paired)] = replace(
+            paired,
+            execution_digest=content_hash({"changed": "paired-policy"}),
+        )
+        authorities = current_authorities
+
+    selected, reused = select_reusable_invocation_receipts(
+        authorities=authorities,
+        authority_ids=[issue.authority_id],
+        runtime_topology=current["runtime_topology"],
+        prepared=current,
+        plan=current_plan,
+        root=tmp_path,
+    )
+
+    assert selected == []
+    assert reused == [reference]
+
+
+def test_known_generation_receipt_ambiguity_fails_closed(tmp_path: Path) -> None:
+    prepared, plan, authorities, runtimes = _context()
+    issue = next(
+        item for item in authorities if item.authority_id == "issue-020"
+    )
+    for pr_number, qualifier in ((65, "pr65"), (66, "pr66")):
+        historical = copy.deepcopy(prepared)
+        historical["pr_number"] = pr_number
+        historical["run_id"] = f"validation-{pr_number:012d}"
+        _write_receipt(
+            root=tmp_path,
+            prepared=historical,
+            plan=plan,
+            authority=issue,
+            authorities=authorities,
+            runtimes=runtimes,
+            qualifier=qualifier,
+        )
+    current = copy.deepcopy(prepared)
+    current["pr_number"] = 74
+
+    with pytest.raises(ContractError, match="receipts conflict"):
+        select_reusable_invocation_receipts(
+            authorities=authorities,
+            authority_ids=[issue.authority_id],
+            runtime_topology=current["runtime_topology"],
+            prepared=current,
+            plan=plan,
+            prior_generations=[
+                {
+                    "repository": prepared["repository"],
+                    "pr_number": pr_number,
+                    "run_id": f"validation-{pr_number:012d}",
+                }
+                for pr_number in (65, 66)
+            ],
+            root=tmp_path,
+        )
 
 
 def test_current_same_schema_extractor_imports_40_and_retries_issue_020(
@@ -1246,7 +1502,6 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
         root=tmp_path,
     )
     assert selected == []
-    assert len(reused) == 41
     current_active["schema_version"] = "3.0.0"
     current_active["journal_digest"] = _digest_without(
         current_active,
@@ -1261,59 +1516,6 @@ def test_supplemental_migration_recovers_only_original_marker_misses(
         root=tmp_path,
     ) as repeated:
         assert repeated == result
-
-
-def test_completed_supplemental_migration_replays_without_archive(
-    tmp_path: Path,
-) -> None:
-    _, plan, authorities, _, marker, supplemental = (
-        _write_completed_supplemental_replay_state(tmp_path)
-    )
-
-    with recover_supplemental_legacy_invocations(
-        active_path=tmp_path / "lifecycle" / "active.json",
-        plan=plan,
-        authorities=authorities,
-        root=tmp_path,
-    ) as result:
-        assert len(marker["imported_authority_ids"]) == 28
-        assert len(marker["incomplete_authority_ids"]) == 13
-        assert len(supplemental["imported_authority_ids"]) == 13
-        assert supplemental["incomplete_authority_ids"] == []
-        assert result == {
-            "source_run_id": RUN_ID,
-            "imported_authority_ids": [
-                item.authority_id for item in authorities
-            ],
-            "incomplete_authority_ids": [],
-        }
-    assert not list((tmp_path / "lifecycle" / "superseded-formats").glob("*.json"))
-
-
-def test_completed_supplemental_replay_accepts_historical_receipt_contract(
-    tmp_path: Path,
-) -> None:
-    _, plan, authorities, _, _, _ = (
-        _write_completed_supplemental_replay_state(tmp_path)
-    )
-    current_authorities = list(authorities)
-    current_authorities[0] = replace(
-        current_authorities[0],
-        source_content_digest=content_hash({"source": "current"}),
-    )
-    current_plan = copy.deepcopy(plan)
-    current_plan["authorities"][0]["source_content_digest"] = (
-        current_authorities[0].source_content_digest
-    )
-
-    with recover_supplemental_legacy_invocations(
-        active_path=tmp_path / "lifecycle" / "active.json",
-        plan=current_plan,
-        authorities=current_authorities,
-        root=tmp_path,
-    ) as result:
-        assert len(result["imported_authority_ids"]) == 41
-        assert result["incomplete_authority_ids"] == []
 
 
 @pytest.mark.parametrize("fault", ["intrinsic-digest", "source-binding"])
@@ -1462,63 +1664,6 @@ def test_incomplete_supplemental_migration_requires_exact_archive(
         assert len(result["imported_authority_ids"]) == 40
         assert len(result["incomplete_authority_ids"]) == 1
         assert result["source_run_id"] == prepared["run_id"]
-
-
-def test_completed_original_migration_replays_without_legacy_active(
-    tmp_path: Path,
-) -> None:
-    prepared, plan, authorities, runtimes = _context()
-    authority_ids = [item.authority_id for item in authorities]
-    assert len(authority_ids) == 41
-    for authority in authorities:
-        _write_receipt(
-            root=tmp_path,
-            prepared=prepared,
-            plan=plan,
-            authority=authority,
-            authorities=authorities,
-            runtimes=runtimes,
-            qualifier=f"complete-{authority.authority_id}",
-            migrated_from={
-                "schema_version": "2.0.0",
-                "kind": "test-agent-validation-shard-invocations",
-                "artifact_digest": content_hash(
-                    {"authority_id": authority.authority_id}
-                ),
-            },
-        )
-    marker = {
-        "schema_version": "1.0.0",
-        "kind": "shard-invocations-v2-to-authority-receipts-v1",
-        "source_run_id": RUN_ID,
-        "source_lifecycle_digest": prepared["journal_digest"],
-        "imported_authority_ids": authority_ids,
-        "incomplete_authority_ids": [],
-        "migration_digest": "",
-    }
-    marker["migration_digest"] = _digest_without(
-        marker,
-        "migration_digest",
-    )
-    atomic_json(
-        tmp_path
-        / "migrations"
-        / "shard-invocations-v2-to-authority-receipts-v1.json",
-        marker,
-    )
-    active_path = tmp_path / "lifecycle" / "active.json"
-
-    with recover_supplemental_legacy_invocations(
-        active_path=active_path,
-        plan=plan,
-        authorities=authorities,
-        root=tmp_path,
-    ) as result:
-        assert result == {
-            "source_run_id": RUN_ID,
-            "imported_authority_ids": authority_ids,
-            "incomplete_authority_ids": [],
-        }
 
 
 def test_completed_migration_accepts_coherent_historical_receipt_pr(

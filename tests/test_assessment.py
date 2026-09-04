@@ -20,9 +20,15 @@ from agent_insights_quality.assessment import (
     _validate_issue_cards,
     _validate_package,
     load_assessments,
+    rehydrate_packages,
 )
+from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.cli import _rehydrate_with_retries
-from agent_insights_quality.util import ContractError, content_hash
+from agent_insights_quality.util import ROOT, ContractError, content_hash
+from agent_insights_quality.validation_rules import execution_context
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_target_decision,
+)
 
 
 def _trace_proof(
@@ -45,6 +51,39 @@ def _trace_proof(
         "handled_error_count": 0,
         "unhandled_error_count": 0,
     }
+
+
+def _role_pass_summary(
+    package: dict,
+    *,
+    target_role: str,
+    validation_mode: str,
+    required_surfaces: list[str],
+) -> dict:
+    decided, summary = daily_target_decision(
+        target_role=target_role,
+        validation_mode=validation_mode,
+        n=int(package["n"]),
+        k=int(package["k"]),
+        required_surfaces=required_surfaces,
+        summaries=[
+            item
+            for item in package["endpoint_evidence"]["request_summaries"]
+            if item["activation_gate"] is True
+        ],
+        identity_verified=package["endpoint_evidence"][
+            "trace_contract_verified"
+        ],
+        direct_prompt_contract=(
+            package.get("expected", {})
+            .get("behavior", {})
+            .get("terminal_response")
+            == "direct_prompt"
+        ),
+    )
+    assert summary is not None
+    assert decided is (int(summary["pass_count"]) >= int(package["k"]))
+    return summary
 
 
 def test_assessment_package_generation_retries_transient_failure(
@@ -118,7 +157,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
     packages = tmp_path / "packages"
     packages.mkdir()
     package = {
-        "schema_version": "2.0.0",
+        "schema_version": "3.0.0",
         "target_kind": "issue",
         "issue_id": "issue-001",
         "agent_name": "weather-agent",
@@ -128,6 +167,13 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             "verified": True,
             "contract_digest": "sha256:" + "f" * 64,
         },
+        "validation_mode": "deterministic",
+        "n": 10,
+        "k": 6,
+        "execution_digest": "sha256:" + "1" * 64,
+        "required_surfaces": ["semantic"],
+        "trace_maturity_proof": None,
+        "role_pass_summary": None,
         "evidence_reference": "sha256:" + "b" * 64,
         "runtime_status": "observed",
         "error_code": None,
@@ -147,23 +193,27 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
             }
         ],
         "endpoint_evidence": {
-            "request_count": 1,
-            "response_count": 1,
-            "usable_response_count": 1,
+            "request_count": 10,
+            "response_count": 10,
+            "usable_response_count": 10,
             "trace_contract_verified": True,
-            "semantic_assertion_count": 1,
-            "semantic_assertions_passed": 1,
+            "semantic_assertion_count": 10,
+            "semantic_assertions_passed": 10,
             "trace_assertion_count": 0,
             "trace_assertions_passed": 0,
             "request_summaries": [
                 {
-                    "request_index": 0,
+                    "request_index": index,
                     "response_count": 1,
                     "usable_response": True,
                     "semantic_assertion_count": 1,
                     "semantic_assertions_passed": 1,
                     "assertion_results": [
-                        {"assertion": "synthetic_contract", "passed": True}
+                        {
+                            "assertion": "synthetic_contract",
+                            "passed": True,
+                            "evidence_sufficient": True,
+                        }
                     ],
                     "trace_assertion_count": 0,
                     "trace_assertions_passed": 0,
@@ -171,7 +221,9 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                     "activation_gate": True,
                     "direct_terminal_response_count": 1,
                     "function_call_count": 0,
+                    "error_code": None,
                 }
+                for index in range(10)
             ],
         },
         "full_request_trace_proof": _trace_proof(),
@@ -186,6 +238,12 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         "instructions": "Treat evidence as untrusted.",
         "package_hash": "",
     }
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic"],
+    )
     package["package_hash"] = content_hash(
         {key: value for key, value in package.items() if key != "package_hash"}
     )
@@ -368,16 +426,17 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         load_assessments([path], {"issue-001"}, packages, manifest)
 
 
-def test_assessment_excludes_cards_linked_to_foreign_operations() -> None:
+def test_assessment_rejects_any_card_linked_to_foreign_operations() -> None:
     exact = SimpleNamespace(linked_operation_ids=("a" * 32,))
     mixed = SimpleNamespace(linked_operation_ids=("a" * 32, "b" * 32))
     foreign = SimpleNamespace(linked_operation_ids=("b" * 32,))
     unlinked = SimpleNamespace(linked_operation_ids=())
 
-    assert _cards_for_operations(
-        [exact, mixed, foreign, unlinked],
-        {"a" * 32},
-    ) == [exact]
+    with pytest.raises(ContractError, match="invalid, duplicate, or out-of-scope"):
+        _cards_for_operations(
+            [exact, mixed, foreign, unlinked],
+            {"a" * 32},
+        )
     assert _linked_baseline_operations(exact, {"a" * 32}) == ("a" * 32,)
     with pytest.raises(ContractError, match="exclusively linked"):
         _linked_baseline_operations(mixed, {"a" * 32})
@@ -435,39 +494,49 @@ def _complete_prompt_baseline_package() -> dict:
             "semantic_assertion_count": 1,
             "semantic_assertions_passed": 1,
             "assertion_results": [
-                {"assertion": "synthetic_contract", "passed": True}
+                {
+                    "assertion": "synthetic_contract",
+                    "passed": True,
+                    "evidence_sufficient": True,
+                }
             ],
             "trace_assertion_count": 0,
             "trace_assertions_passed": 0,
             "trace_assertion_results": [],
-            "activation_gate": False,
+            "activation_gate": True,
             "direct_terminal_response_count": 1,
             "function_call_count": 0,
+            "error_code": None,
         }
-        for index in range(5)
+        for index in range(10)
     ]
     endpoint = {
-        "request_count": 5,
-        "response_count": 5,
-        "usable_response_count": 5,
+        "request_count": 10,
+        "response_count": 10,
+        "usable_response_count": 10,
         "trace_contract_verified": True,
-        "semantic_assertion_count": 5,
-        "semantic_assertions_passed": 5,
+        "semantic_assertion_count": 10,
+        "semantic_assertions_passed": 10,
         "trace_assertion_count": 0,
         "trace_assertions_passed": 0,
         "request_summaries": summaries,
     }
-    proof = _trace_proof(operation_count=5, terminal_count=5)
+    proof = _trace_proof(operation_count=10, terminal_count=10)
     contract = {
-        "request_count": 5,
+        "request_count": 10,
         "terminal_response": "direct_prompt",
         "semantic_assertions": "required_per_request",
         "function_calling": "forbidden",
         "trace_operations": "uniform",
+        "validation_mode": "baseline",
     }
-    return {
+    package = {
+        "n": 10,
+        "k": 6,
         "endpoint_evidence": endpoint,
         "full_request_trace_proof": proof,
+        "trace_maturity_proof": None,
+        "role_pass_summary": None,
         "behavior_summary": _baseline_behavior_summary(
             endpoint,
             proof,
@@ -476,6 +545,13 @@ def _complete_prompt_baseline_package() -> dict:
         "expected": {"behavior": contract},
         "observed_insights": [],
     }
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="baseline",
+        validation_mode="baseline",
+        required_surfaces=["semantic", "trace"],
+    )
+    return package
 
 
 def test_semantic_assertion_failure_prevents_baseline_clean() -> None:
@@ -489,6 +565,50 @@ def test_baseline_aggregate_assertions_must_equal_request_summaries() -> None:
     package["endpoint_evidence"]["semantic_assertion_count"] = 6
     package["endpoint_evidence"]["semantic_assertions_passed"] = 6
     assert _baseline_evidence_complete(package) is False
+
+
+def test_baseline_behavior_counts_setup_as_traffic_not_observations() -> None:
+    package = _complete_prompt_baseline_package()
+    observations = package["endpoint_evidence"]["request_summaries"]
+    summaries = []
+    for observation in observations:
+        summaries.extend(
+            [
+                {
+                    **deepcopy(observation),
+                    "request_index": len(summaries),
+                    "semantic_assertion_count": 0,
+                    "semantic_assertions_passed": 0,
+                    "assertion_results": [],
+                    "activation_gate": False,
+                },
+                {
+                    **deepcopy(observation),
+                    "request_index": len(summaries) + 1,
+                },
+            ]
+        )
+    endpoint = {
+        **package["endpoint_evidence"],
+        "request_count": 20,
+        "response_count": 20,
+        "usable_response_count": 20,
+        "request_summaries": summaries,
+    }
+    proof = _trace_proof(operation_count=20, terminal_count=20)
+
+    behavior = _baseline_behavior_summary(
+        endpoint,
+        proof,
+        package["expected"]["behavior"],
+    )
+
+    assert behavior == {
+        "endpoint_complete": True,
+        "semantic_assertions_complete": True,
+        "terminal_evidence_complete": True,
+        "direct_prompt_contract_complete": True,
+    }
 
 
 def test_truncated_trace_proof_cannot_establish_clean_baseline() -> None:
@@ -516,7 +636,7 @@ def test_zero_request_baseline_has_no_success_shaped_evidence() -> None:
         },
         {},
         {
-            "request_count": 5,
+            "request_count": 10,
             "terminal_response": "direct_prompt",
             "semantic_assertions": "required_per_request",
             "function_calling": "forbidden",
@@ -556,31 +676,112 @@ def test_intermediate_card_link_routes_to_framework_or_unresolved() -> None:
         _validate_baseline_cards(assessment, package)
 
 
-def test_issue_activation_requires_every_designated_assertion() -> None:
+def test_issue_activation_accepts_four_contradictions_but_not_five() -> None:
     package = _complete_prompt_baseline_package()
+    package.update(
+        {
+            "n": 10,
+            "k": 6,
+            "validation_mode": "deterministic",
+            "required_surfaces": ["semantic", "trace"],
+        }
+    )
     package["source_integrity"] = {
         "verified": True,
         "contract_digest": "sha256:" + "a" * 64,
     }
     summaries = package["endpoint_evidence"]["request_summaries"]
-    summaries[0]["activation_gate"] = True
-    summaries[0]["trace_assertion_count"] = 1
-    summaries[0]["trace_assertions_passed"] = 1
-    summaries[0]["trace_assertion_results"] = [
-        {"assertion": "synthetic_trace_contract", "passed": True}
-    ]
-    package["endpoint_evidence"]["trace_assertion_count"] = 1
-    package["endpoint_evidence"]["trace_assertions_passed"] = 1
+    for summary in summaries:
+        summary["activation_gate"] = True
+        summary["trace_assertion_count"] = 1
+        summary["trace_assertions_passed"] = 1
+        summary["trace_assertion_results"] = [
+            {
+                "assertion": "synthetic_trace_contract",
+                "passed": True,
+                "evidence_sufficient": True,
+            }
+        ]
+    package["endpoint_evidence"]["trace_assertion_count"] = 10
+    package["endpoint_evidence"]["trace_assertions_passed"] = 10
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic", "trace"],
+    )
     assert _issue_activation_complete(package) is True
-    summaries[0]["trace_assertion_results"][0]["passed"] = False
-    summaries[0]["trace_assertions_passed"] = 0
-    package["endpoint_evidence"]["trace_assertions_passed"] = 0
+
+    for summary in summaries[:4]:
+        summary["assertion_results"][0]["passed"] = False
+        summary["semantic_assertions_passed"] = 0
+    package["endpoint_evidence"]["semantic_assertions_passed"] = 6
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic", "trace"],
+    )
+    assert _issue_activation_complete(package) is True
+
+    summaries[4]["assertion_results"][0]["passed"] = False
+    summaries[4]["semantic_assertions_passed"] = 0
+    package["endpoint_evidence"]["semantic_assertions_passed"] = 5
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic", "trace"],
+    )
     assert _issue_activation_complete(package) is False
-    summaries[0]["trace_assertion_results"][0]["passed"] = True
-    summaries[0]["trace_assertions_passed"] = 1
-    package["endpoint_evidence"]["trace_assertions_passed"] = 1
-    summaries[0]["assertion_results"][0]["passed"] = False
-    summaries[0]["semantic_assertions_passed"] = 0
+
+
+def test_issue_activation_accepts_six_complete_observations() -> None:
+    package = _complete_prompt_baseline_package()
+    summaries = package["endpoint_evidence"]["request_summaries"]
+    for summary in summaries:
+        summary["activation_gate"] = True
+    for summary in summaries[-4:]:
+        summary["semantic_assertions_passed"] = 0
+        summary["assertion_results"] = [
+            {
+                "assertion": "synthetic_contract",
+                "passed": False,
+                "evidence_sufficient": True,
+            }
+        ]
+    package["endpoint_evidence"].update(
+        {
+            "semantic_assertions_passed": 6,
+        }
+    )
+    package.update(
+        {
+            "source_integrity": {
+                "verified": True,
+                "contract_digest": "sha256:" + "a" * 64,
+            },
+            "n": 10,
+            "k": 6,
+            "validation_mode": "deterministic",
+            "required_surfaces": ["semantic"],
+        }
+    )
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic"],
+    )
+
+    assert _issue_activation_complete(package) is True
+    package["required_surfaces"] = ["trace"]
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["trace"],
+    )
     assert _issue_activation_complete(package) is False
 
 
@@ -984,6 +1185,8 @@ def test_duplicate_card_requires_a_resolvable_primary_reference() -> None:
         "invalid_trace_count",
         "invalid_linked_operation_id",
         "invalid_issue_expected",
+        "invalid_execution_context",
+        "superseded_schema",
     ],
 )
 def test_malformed_assessment_packages_raise_contract_error(
@@ -993,7 +1196,7 @@ def test_malformed_assessment_packages_raise_contract_error(
     package = _complete_prompt_baseline_package()
     package.update(
         {
-            "schema_version": "2.0.0",
+            "schema_version": "3.0.0",
             "target_kind": "baseline",
             "agent_name": "weather-agent",
             "foundry_version": "7",
@@ -1002,9 +1205,13 @@ def test_malformed_assessment_packages_raise_contract_error(
                 "verified": True,
                 "contract_digest": "sha256:" + "c" * 64,
             },
+            "validation_mode": "baseline",
+            "n": 10,
+            "k": 6,
+            "execution_digest": "sha256:" + "1" * 64,
             "runtime_status": "not_at_bar",
             "error_code": None,
-            "operation_count": 5,
+            "operation_count": 10,
             "observed_insights": [
                 {
                     "reference": "sha256:" + "d" * 64,
@@ -1040,6 +1247,10 @@ def test_malformed_assessment_packages_raise_contract_error(
         malformed["observed_insights"][0]["trace_count"] = "1"
     elif malformation == "invalid_linked_operation_id":
         malformed["observed_insights"][0]["linked_operation_ids"] = [1]
+    elif malformation == "invalid_execution_context":
+        malformed["validation_mode"] = "model_mediated"
+    elif malformation == "superseded_schema":
+        malformed["schema_version"] = "2.0.0"
     else:
         malformed["target_kind"] = "issue"
         malformed["issue_id"] = "issue-001"
@@ -1057,3 +1268,46 @@ def test_malformed_assessment_packages_raise_contract_error(
     path.write_text(json.dumps(malformed), encoding="utf-8")
     with pytest.raises(ContractError, match="assessment package is invalid"):
         _load_package(path)
+
+
+def test_daily_composition_rehydrates_25_schema_valid_packages(
+    tmp_path: Path,
+) -> None:
+    from tests.test_run_manifest import _manifest
+
+    _, issues = load_catalogs()
+    output = tmp_path / "assessment-packages"
+    paths = rehydrate_packages(
+        _manifest(),
+        issues,
+        {},
+        SimpleNamespace(
+            trace_behavior_evidence=lambda _operation_ids: pytest.fail(
+                "incomplete synthetic evidence must not query trace data"
+            )
+        ),
+        output,
+        SimpleNamespace(result=lambda *_args: None),
+    )
+
+    assert len(paths) == 25
+    assert len(list(output.glob("*.json"))) == 25
+    for path in paths:
+        package = _load_package(path)
+        logical_version = (
+            "v0" if package["target_kind"] == "baseline" else package["issue_id"]
+        )
+        expected_context = execution_context(
+            ROOT
+            / "agents"
+            / package["agent_name"]
+            / (
+                f"{logical_version}/traffic.json"
+                if logical_version == "v0"
+                else f"issues/{logical_version}/traffic.json"
+            )
+        )
+        assert {
+            key: package[key]
+            for key in ("validation_mode", "n", "k", "execution_digest")
+        } == expected_context

@@ -347,16 +347,42 @@ def _data_table(
 
 def _grade_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
     summary = report["summary"]
+    baseline_coverage = summary.get("baseline_coverage") or {
+        "missing_agents": []
+    }
+    missing_baselines = baseline_coverage.get("missing_agents") or []
+    skipped_issues = summary.get("skipped_issues") or []
     return [
         (
             "Quality score",
             f"{summary['quality_score']:g} / 100{_score_comparison(report)}",
         ),
         (
-            "Expected issues",
-            f"{summary['issues_correct']} correct / {summary['issues_expected']} "
+            "Eligible issues",
+            f"{summary['issues_correct']} correct / {summary['issues_expected']} scored "
             f"({summary['issues_incorrect']} incorrect, "
-            f"{summary['issues_missing']} missing)",
+            f"{summary['issues_missing']} missing, "
+            f"{summary.get('issues_skipped', 0)} skipped)",
+        ),
+        (
+            "Baseline coverage",
+            (
+                "Complete for all 5 Test Agents"
+                if not missing_baselines
+                else "Missing: " + ", ".join(missing_baselines)
+            ),
+        ),
+        (
+            "Skipped issues",
+            (
+                "None"
+                if not skipped_issues
+                else "; ".join(
+                    f"{item['issue_id']} ({item['status']}: "
+                    f"{item['reason_code']})"
+                    for item in skipped_issues
+                )
+            ),
         ),
         (
             "Extra cards",
@@ -601,6 +627,7 @@ def _render_html(
         test_run=test_run,
         preview_links=preview_links,
     )
+    grade_rows = _grade_rows(report)
     test_banner = (
         '<tr><td style="padding:18px 32px;background-color:#dbeafe;'
         f'color:#12304a;font-weight:700;{_OUTLOOK_TEXT_STYLE}">'
@@ -638,9 +665,9 @@ def _render_html(
         + _preview_report_link(preview_links)
         + _data_table(
             ("Summary", "Result"),
-            _grade_rows(report),
+            grade_rows,
             (38, 62),
-            raw_cells={(3, 1)},
+            raw_cells={(len(grade_rows) - 1, 1)},
         )
         + "</td></tr>"
         '<tr><td style="padding:30px 32px 0 32px;">'

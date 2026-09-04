@@ -25,7 +25,6 @@ from agent_insights_quality.models import (
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
-    linked_operations_match_scope,
 )
 from agent_insights_quality.automation_policy import (
     TRACE_ASSERTION_DEADLINE_SECONDS,
@@ -40,6 +39,9 @@ from agent_insights_quality.util import (
     InsightWindowExpiredError,
     TraceAssertionActivationError,
     json_values_equal,
+)
+from agent_insights_quality.validation_trace_gap_policy import (
+    build_trace_maturity_proof,
 )
 from agent_insights_quality.azure_cli import azure_cli
 
@@ -98,11 +100,15 @@ _TRACE_ASSERTION_SIGNATURE_CHANGE_DIAGNOSTICS = (
 _TRACE_ASSERTION_MULTIPLE_CHANGE_DIAGNOSTIC = (
     "trace_assertion_multiple_signature_components_changed"
 )
+_TRACE_ASSERTION_REQUIRED_SURFACE_DIAGNOSTIC = (
+    "trace_assertion_required_surface_missing"
+)
 _TRACE_ASSERTION_DIAGNOSTICS = frozenset(
     (
         _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
         *_TRACE_ASSERTION_SIGNATURE_CHANGE_DIAGNOSTICS,
         _TRACE_ASSERTION_MULTIPLE_CHANGE_DIAGNOSTIC,
+        _TRACE_ASSERTION_REQUIRED_SURFACE_DIAGNOSTIC,
     )
 )
 _PERMANENT_LOGS_QUERY_ERROR_CODES = {
@@ -224,6 +230,9 @@ class LiveRuntime:
     def report_progress(self, message: str) -> None:
         self._progress.emit(message)
 
+    def current_time(self) -> datetime:
+        return self._utcnow().astimezone(UTC)
+
     def rate_limit_feedback(self) -> dict[str, int | float | None]:
         value = getattr(self._rate_limit_feedback, "value", None)
         return (
@@ -265,8 +274,12 @@ class LiveRuntime:
         query: str,
         *,
         timespan: Any,
+        retry_transient: bool = True,
     ) -> Any:
-        for attempt in range(len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1):
+        retry_delays = (
+            _TELEMETRY_QUERY_RETRY_DELAYS if retry_transient else ()
+        )
+        for attempt in range(len(retry_delays) + 1):
             try:
                 with self._telemetry_query_lock:
                     with self._progress.heartbeat("Azure Monitor query"):
@@ -283,14 +296,14 @@ class LiveRuntime:
                     raise TelemetryQueryError(
                         "Azure Monitor rejected the telemetry query"
                     ) from error
-                if attempt == len(_TELEMETRY_QUERY_RETRY_DELAYS):
+                if attempt == len(retry_delays):
                     raise TelemetryQueryError(
                         "Azure Monitor telemetry query retries were exhausted"
                     ) from error
-                delay = _TELEMETRY_QUERY_RETRY_DELAYS[attempt]
+                delay = retry_delays[attempt]
                 self.report_progress(
                     f"telemetry query failed transiently; retrying in {delay}s "
-                    f"({attempt + 2}/{len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1})"
+                    f"({attempt + 2}/{len(retry_delays) + 1})"
                 )
                 self._sleep(delay)
         raise ContractError("Telemetry query retry loop did not execute")
@@ -302,14 +315,19 @@ class LiveRuntime:
         timespan: Any,
         statuses: Any,
         purpose: str,
+        retry_transient: bool = True,
     ) -> Any:
         started = self._monotonic()
+        retry_delays = (
+            _TELEMETRY_QUERY_RETRY_DELAYS if retry_transient else ()
+        )
         with self._progress.heartbeat(f"{purpose.capitalize()} query stabilization"):
-            for attempt in range(len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1):
+            for attempt in range(len(retry_delays) + 1):
                 result = self._query_resource(
                     self._logs_client(),
                     query,
                     timespan=timespan,
+                    retry_transient=retry_transient,
                 )
                 if result.status == statuses.SUCCESS:
                     return result
@@ -318,16 +336,16 @@ class LiveRuntime:
                     raise TelemetryQueryError(
                         f"Azure Monitor rejected the {purpose} query"
                     )
-                if attempt == len(_TELEMETRY_QUERY_RETRY_DELAYS):
+                if attempt == len(retry_delays):
                     raise TelemetryQueryError(
                         f"Azure Monitor {purpose} query retries were exhausted"
                     )
-                delay = _TELEMETRY_QUERY_RETRY_DELAYS[attempt]
+                delay = retry_delays[attempt]
                 elapsed = max(0.0, self._monotonic() - started)
                 self.report_progress(
                     f"{purpose.capitalize()} query returned {status_class} after "
                     f"{elapsed:.0f}s; retrying in {delay}s "
-                    f"({attempt + 2}/{len(_TELEMETRY_QUERY_RETRY_DELAYS) + 1})"
+                    f"({attempt + 2}/{len(retry_delays) + 1})"
                 )
                 self._sleep(delay)
         raise TelemetryQueryError(f"Azure Monitor {purpose} query did not execute")
@@ -431,10 +449,12 @@ union traces, dependencies, requests
         foundry_version: str,
         traffic_path: Path,
         seed: int,
+        requests: list[dict[str, Any]] | None = None,
     ) -> InvocationEvidence:
-        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
-        requests = payload if isinstance(payload, list) else payload.get("requests")
-        if not isinstance(requests, list) or len(requests) < 1:
+        if requests is None:
+            payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+            requests = payload if isinstance(payload, list) else payload.get("requests")
+        if not isinstance(requests, list) or not requests:
             raise ContractError(f"{traffic_path} has no traffic requests")
         normalized = [
             {**_normalize_fixture(item), "_index": index}
@@ -445,6 +465,9 @@ union traces, dependencies, requests
             groups.setdefault(fixture["conversation_key"], []).append(fixture)
         started = self._utcnow().astimezone(UTC)
         response_references: list[str] = []
+        prior_session_references = set(
+            self._used_session_ids.get(agent_name, set())
+        )
         self._traffic_ledger.mark_started(
             agent_name,
             now=started,
@@ -535,6 +558,12 @@ union traces, dependencies, requests
             )
         _validate_response_references(tuple(response_references), len(requests))
         completed = self._utcnow().astimezone(UTC)
+        session_references = tuple(
+            sorted(
+                set(self._used_session_ids.get(agent_name, set()))
+                - prior_session_references
+            )
+        )
         return InvocationEvidence(
             operation_ids=(),
             response_references=tuple(response_references),
@@ -547,6 +576,7 @@ union traces, dependencies, requests
             semantic_assertion_count=semantic_assertion_count,
             semantic_assertions_passed=semantic_assertions_passed,
             request_summaries=tuple(request_summaries),
+            session_references=session_references,
         )
 
     def _reserve_response_references(
@@ -1158,6 +1188,11 @@ union traces, dependencies, requests
         allow_shared_operations: bool = False,
         poll_seconds: int | None = None,
         maximum_wait_seconds: int | None = None,
+        minimum_grace_seconds: int = 0,
+        maximum_poll_seconds: int | None = None,
+        age_bounded: bool = False,
+        mature: bool = False,
+        maturity_proof: Mapping[str, Any] | None = None,
     ) -> tuple[str, ...]:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -1178,11 +1213,19 @@ union traces, dependencies, requests
             _kql_string_literal(value)
             for value in invocation.response_references
         )
+        expected_agent = _kql_string_literal(agent_name)
+        expected_version = _kql_string_literal(foundry_version)
         query = f"""
 union traces, dependencies, requests
 | where timestamp >= datetime({start.astimezone(UTC).isoformat()})
   and timestamp <= datetime({traffic_end.astimezone(UTC).isoformat()})
 | extend operation_name = tostring(customDimensions["gen_ai.operation.name"])
+| extend observed_agent=coalesce(
+    tostring(customDimensions["gen_ai.agent.name"]),
+    tostring(customDimensions["agent.name"]))
+| extend agent_version=coalesce(
+    tostring(customDimensions["gen_ai.agent.version"]),
+    tostring(customDimensions["agent.version"]))
 | extend response_id=coalesce(
     tostring(customDimensions["gen_ai.response.id"]),
     tostring(customDimensions["azure.ai.agentserver.response_id"]),
@@ -1196,6 +1239,8 @@ union traces, dependencies, requests
     request_id in ({references}), request_id,
     "")
 | where operation_name == "invoke_agent"
+  and observed_agent == {expected_agent}
+  and agent_version == {expected_version}
   and matched_reference in ({references})
 | summarize
     matched_references=make_set(matched_reference),
@@ -1208,10 +1253,44 @@ union traces, dependencies, requests
             poll_seconds = TRACE_ASSERTION_POLL_SECONDS
         if maximum_wait_seconds is None:
             maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
-        if poll_seconds <= 0 or maximum_wait_seconds <= 0:
+        if maximum_poll_seconds is None:
+            maximum_poll_seconds = poll_seconds
+        if (
+            poll_seconds <= 0
+            or maximum_wait_seconds <= 0
+            or minimum_grace_seconds < 0
+            or maximum_poll_seconds < poll_seconds
+            or not isinstance(age_bounded, bool)
+            or not isinstance(mature, bool)
+        ):
             raise ContractError("Telemetry discovery timing policy is invalid")
-        deadline = self._monotonic() + maximum_wait_seconds
+        if age_bounded and not mature:
+            grace_remaining = (
+                traffic_end.astimezone(UTC)
+                + timedelta(seconds=minimum_grace_seconds)
+                - self._utcnow().astimezone(UTC)
+            ).total_seconds()
+            if grace_remaining > 0:
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: waiting for hydration grace"
+                )
+                self._sleep(grace_remaining)
+        wait_seconds = (
+            max(
+                0.0,
+                (
+                    traffic_end.astimezone(UTC)
+                    + timedelta(seconds=maximum_wait_seconds)
+                    - self._utcnow().astimezone(UTC)
+                ).total_seconds(),
+            )
+            if age_bounded
+            else float(maximum_wait_seconds)
+        )
+        final_snapshot = mature or (age_bounded and wait_seconds <= 0)
+        deadline = self._monotonic() + wait_seconds
         next_progress = self._monotonic() + 60
+        current_poll_seconds = poll_seconds
         matched_operation_count = 0
         stable_operations: tuple[str, ...] | None = None
         stable_since: float | None = None
@@ -1220,6 +1299,7 @@ union traces, dependencies, requests
                 client,
                 query,
                 timespan=(start, traffic_end),
+                retry_transient=not final_snapshot,
             )
             if result.status == LogsQueryStatus.SUCCESS and result.tables:
                 operations = _complete_operation_ids(
@@ -1236,6 +1316,9 @@ union traces, dependencies, requests
                 )
                 now = self._monotonic()
                 if operations is not None:
+                    current_poll_seconds = poll_seconds
+                    if final_snapshot:
+                        return operations
                     if operations != stable_operations:
                         stable_operations = operations
                         stable_since = now
@@ -1248,10 +1331,20 @@ union traces, dependencies, requests
                 else:
                     stable_operations = None
                     stable_since = None
+                    current_poll_seconds = min(
+                        maximum_poll_seconds,
+                        max(poll_seconds, current_poll_seconds * 2),
+                    )
             else:
                 stable_operations = None
                 stable_since = None
+                current_poll_seconds = min(
+                    maximum_poll_seconds,
+                    max(poll_seconds, current_poll_seconds * 2),
+                )
             now = self._monotonic()
+            if final_snapshot:
+                break
             if now >= deadline:
                 break
             if now >= next_progress:
@@ -1264,11 +1357,13 @@ union traces, dependencies, requests
                     f"({elapsed}s)"
                 )
                 next_progress = self._monotonic() + 60
-            self._sleep(min(poll_seconds, deadline - now))
-        raise TelemetryCorrelationError(
+            self._sleep(min(current_poll_seconds, deadline - now))
+        error = TelemetryCorrelationError(
             matched_reference_count=matched_operation_count,
             expected_reference_count=invocation.request_count,
         )
+        _bind_maturity_proof(error, maturity_proof if mature else None)
+        raise error
 
     def telemetry_identity_passes(
         self,
@@ -1279,6 +1374,7 @@ union traces, dependencies, requests
         invocation: InvocationEvidence,
         poll_seconds: int | None = None,
         maximum_wait_seconds: int | None = None,
+        mature: bool = False,
     ) -> tuple[bool, ...]:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -1309,8 +1405,12 @@ union traces, dependencies, requests
   and timestamp < datetime({query_end.isoformat()})
   and operation_Id in ({values})
 | extend operation_name=tostring(customDimensions["gen_ai.operation.name"])
-| extend observed_agent=tostring(customDimensions["gen_ai.agent.name"])
-| extend agent_version=tostring(customDimensions["gen_ai.agent.version"])
+| extend observed_agent=coalesce(
+    tostring(customDimensions["gen_ai.agent.name"]),
+    tostring(customDimensions["agent.name"]))
+| extend agent_version=coalesce(
+    tostring(customDimensions["gen_ai.agent.version"]),
+    tostring(customDimensions["agent.version"]))
 | extend response_id=coalesce(
     tostring(customDimensions["gen_ai.response.id"]),
     tostring(customDimensions["azure.ai.agentserver.response_id"]),
@@ -1342,7 +1442,11 @@ union traces, dependencies, requests
             poll_seconds = TRACE_ASSERTION_POLL_SECONDS
         if maximum_wait_seconds is None:
             maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
-        if poll_seconds <= 0 or maximum_wait_seconds <= 0:
+        if (
+            poll_seconds <= 0
+            or maximum_wait_seconds <= 0
+            or not isinstance(mature, bool)
+        ):
             raise ContractError("Telemetry identity timing policy is invalid")
         deadline = self._monotonic() + maximum_wait_seconds
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
@@ -1353,6 +1457,7 @@ union traces, dependencies, requests
                 client,
                 query,
                 timespan=(start, query_end),
+                retry_transient=not mature,
             )
             if result.status != LogsQueryStatus.SUCCESS:
                 raise ContractError("Exact validation telemetry identity query failed")
@@ -1382,6 +1487,8 @@ union traces, dependencies, requests
                     strict=True,
                 )
             )
+            if mature:
+                return identity_results
             if any(
                 names - expected[0] or versions - expected[1]
                 for names, versions in observed.values()
@@ -1421,6 +1528,7 @@ union traces, dependencies, requests
         operation_ids: tuple[str, ...],
         lookback_hours: float,
         start_margin_seconds: int,
+        intent_reference: str | None = None,
         persist: Callable[[InsightRunCheckpoint], None],
     ) -> InsightRunCheckpoint:
         earliest, _ = self._operation_time_bounds(
@@ -1438,6 +1546,7 @@ union traces, dependencies, requests
             monitor_id=monitor_id,
             lookback_hours=lookback_hours,
             start_deadline=start_deadline,
+            intent_reference=intent_reference,
         )
         persist(checkpoint)
         return checkpoint
@@ -1468,22 +1577,34 @@ union traces, dependencies, requests
                 len(self._linked_ids(item)),
             )
         ]
-        evidence = tuple(
-            self._to_insight(value)
-            for value in changed
-            if str(value.get("agent_version") or value.get("agentVersion") or "")
-            == foundry_version
-            and linked_operations_match_scope(
-                self._linked_ids(value),
-                operation_ids,
+        evidence_values = []
+        invalid_insight_count = 0
+        for value in changed:
+            run_binding = _insight_run_binding(value)
+            if run_binding != checkpoint.run_id:
+                continue
+            card_version = str(
+                value.get("agent_version") or value.get("agentVersion") or ""
             )
-        )
+            linked = self._linked_ids(value)
+            if card_version != foundry_version or (
+                linked and not set(linked).issubset(operation_ids)
+            ):
+                raise ContractError(
+                    "Agent Insights run returned a cross-version or out-of-scope card"
+                )
+            if not linked:
+                invalid_insight_count += 1
+                continue
+            evidence_values.append(value)
+        evidence = tuple(self._to_insight(value) for value in evidence_values)
         result = InsightRunEvidence(
             run_reference=_opaque(checkpoint.run_id),
             window_start=str(run.get("window_start") or run.get("windowStart") or ""),
             window_end=str(run.get("window_end") or run.get("windowEnd") or ""),
             status=str(run.get("status") or ""),
             insights=evidence,
+            invalid_insight_count=invalid_insight_count,
         )
         if validate_window and result.status.lower() == "succeeded":
             earliest, latest = self._operation_time_bounds(
@@ -1494,12 +1615,66 @@ union traces, dependencies, requests
             self._assert_run_contains_operations(result, earliest, latest)
         return result
 
+    def discover_insights_run(
+        self,
+        *,
+        agent_name: str,
+        monitor_id: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+    ) -> tuple[str, InsightRunCheckpoint | None]:
+        if not operation_ids:
+            return "ambiguous", None
+        earliest, latest = self._operation_time_bounds(
+            agent_name=agent_name,
+            foundry_version=foundry_version,
+            operation_ids=operation_ids,
+        )
+        payload = self._json_request(
+            "GET",
+            self._insights_url(
+                f"/agent_insight_monitors/{urllib.parse.quote(monitor_id, safe='')}"
+                "/runs?limit=100"
+            ),
+        )
+        values = payload.get("data") or payload.get("value") or payload.get("items") or []
+        if not isinstance(values, list):
+            return "ambiguous", None
+        candidates: list[str] = []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            run_id = str(item.get("id") or "")
+            window_start = str(item.get("window_start") or item.get("windowStart") or "")
+            window_end = str(item.get("window_end") or item.get("windowEnd") or "")
+            if not run_id or not window_start or not window_end:
+                continue
+            try:
+                start = datetime.fromisoformat(window_start.replace("Z", "+00:00"))
+                end = datetime.fromisoformat(window_end.replace("Z", "+00:00"))
+            except ValueError:
+                return "ambiguous", None
+            if start.astimezone(UTC) <= earliest and end.astimezone(UTC) >= latest:
+                candidates.append(run_id)
+        if not candidates:
+            return "absent", None
+        if len(set(candidates)) != 1:
+            return "ambiguous", None
+        return (
+            "matched",
+            InsightRunCheckpoint(
+                run_id=candidates[0],
+                before_revisions={},
+            ),
+        )
+
     def _start_insights_once(
         self,
         *,
         monitor_id: str,
         lookback_hours: float,
         start_deadline: datetime | None = None,
+        intent_reference: str | None = None,
     ) -> InsightRunCheckpoint:
         before = self._insight_revisions(monitor_id)
         if start_deadline is not None:
@@ -1522,6 +1697,7 @@ union traces, dependencies, requests
             ),
             {"lookback_hours": service_lookback},
             expected={200, 201, 202},
+            correlation_id=intent_reference,
             timeout_seconds=timeout_seconds,
             request_deadline=start_deadline,
         )
@@ -1644,6 +1820,10 @@ union traces, dependencies, requests
         required_operations_by_request: tuple[tuple[str, ...], ...],
         window_start: str,
         window_end: str,
+        poll_seconds: int = 15,
+        maximum_wait_seconds: int = 15 * 60,
+        maximum_poll_seconds: int = 15,
+        age_bounded: bool = False,
     ) -> None:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -1670,9 +1850,23 @@ union traces, dependencies, requests
   by operation_Id
 """
         start = datetime.fromisoformat(window_start)
-        end = datetime.fromisoformat(window_end) + timedelta(minutes=15)
-        deadline = time.monotonic() + 15 * 60
-        while time.monotonic() < deadline:
+        traffic_end = datetime.fromisoformat(window_end)
+        end = traffic_end + timedelta(seconds=maximum_wait_seconds)
+        wait_seconds = (
+            max(
+                0.0,
+                (
+                    traffic_end.astimezone(UTC)
+                    + timedelta(seconds=maximum_wait_seconds)
+                    - self._utcnow().astimezone(UTC)
+                ).total_seconds(),
+            )
+            if age_bounded
+            else float(maximum_wait_seconds)
+        )
+        deadline = self._monotonic() + wait_seconds
+        current_poll = poll_seconds
+        while True:
             result = self._query_resource(
                 self._logs_client(),
                 query,
@@ -1688,7 +1882,14 @@ union traces, dependencies, requests
                 )
             ):
                 return
-            self._sleep(15)
+            now = self._monotonic()
+            if now >= deadline:
+                break
+            self._sleep(min(current_poll, deadline - now))
+            current_poll = min(
+                maximum_poll_seconds,
+                max(poll_seconds, current_poll * 2),
+            )
         raise ContractError("Trace contract did not stabilize before the bounded deadline")
 
     def trace_behavior_evidence(
@@ -1869,13 +2070,22 @@ union withsource=telemetry_type traces, dependencies, requests
         traffic_path: Path,
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
+        requests: list[dict[str, Any]] | None = None,
+        minimum_passing_trace_observations: int | None = None,
         on_stable: Callable[[dict[str, Any]], None] | None = None,
+        on_maturity_proof: Callable[[dict[str, Any]], None] | None = None,
         on_stable_output_messages: (
             Callable[[tuple[tuple[bool, bool], ...]], None] | None
         ) = None,
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
+        minimum_grace_seconds: int = 0,
+        maximum_poll_seconds: int | None = None,
+        age_bounded: bool = False,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
-        payload = json.loads(traffic_path.read_text(encoding="utf-8"))
-        requests = payload if isinstance(payload, list) else payload.get("requests")
+        if requests is None:
+            payload = json.loads(traffic_path.read_text(encoding="utf-8"))
+            requests = payload if isinstance(payload, list) else payload.get("requests")
         if not isinstance(requests, list):
             raise ContractError("Hosted evidence traffic coverage is inconsistent")
         return LiveRuntime.trace_assertion_evidence_for_requests(
@@ -1889,8 +2099,17 @@ union withsource=telemetry_type traces, dependencies, requests
             requests=requests,
             stabilization_seconds=stabilization_seconds,
             on_first_pass=on_first_pass,
+            minimum_passing_trace_observations=(
+                minimum_passing_trace_observations
+            ),
             on_stable=on_stable,
+            on_maturity_proof=on_maturity_proof,
             on_stable_output_messages=on_stable_output_messages,
+            poll_seconds=poll_seconds,
+            maximum_wait_seconds=maximum_wait_seconds,
+            minimum_grace_seconds=minimum_grace_seconds,
+            maximum_poll_seconds=maximum_poll_seconds,
+            age_bounded=age_bounded,
         )
 
     def trace_assertion_evidence_for_requests(
@@ -1907,6 +2126,9 @@ union withsource=telemetry_type traces, dependencies, requests
         on_first_pass: Callable[[], None],
         poll_seconds: int | None = None,
         maximum_wait_seconds: int | None = None,
+        minimum_grace_seconds: int = 0,
+        maximum_poll_seconds: int | None = None,
+        age_bounded: bool = False,
         on_stable: Callable[[dict[str, Any]], None] | None = None,
         on_stable_output_messages: (
             Callable[[tuple[tuple[bool, bool], ...]], None] | None
@@ -1919,15 +2141,22 @@ union withsource=telemetry_type traces, dependencies, requests
             | None
         ) = None,
         allow_shared_operations: bool = False,
+        minimum_passing_trace_observations: int | None = None,
+        on_maturity_proof: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         if poll_seconds is None:
             poll_seconds = TRACE_ASSERTION_POLL_SECONDS
         if maximum_wait_seconds is None:
             maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if maximum_poll_seconds is None:
+            maximum_poll_seconds = poll_seconds
         if (
             stabilization_seconds <= 0
             or poll_seconds <= 0
             or maximum_wait_seconds < stabilization_seconds
+            or minimum_grace_seconds < 0
+            or maximum_poll_seconds < poll_seconds
+            or not isinstance(age_bounded, bool)
         ):
             raise ContractError("Hosted evidence timing policy is invalid")
         if len(requests) != len(response_references):
@@ -1939,8 +2168,57 @@ union withsource=telemetry_type traces, dependencies, requests
             allow_shared=allow_shared_operations,
         )
         fixtures = tuple(_normalize_fixture(item) for item in requests)
-        deadline = self._monotonic() + maximum_wait_seconds
+        observation_indexes = [
+            index
+            for index, fixture in enumerate(fixtures)
+            if fixture["activation_gate"]
+        ]
+        if (
+            minimum_passing_trace_observations is not None
+            and (
+                minimum_passing_trace_observations < 0
+                or minimum_passing_trace_observations > len(observation_indexes)
+            )
+        ):
+            raise ContractError("Hosted trace observation threshold is invalid")
+        if age_bounded:
+            traffic_end = datetime.fromisoformat(
+                window_end.replace("Z", "+00:00")
+            ).astimezone(UTC)
+            grace_remaining = (
+                traffic_end
+                + timedelta(seconds=minimum_grace_seconds)
+                - _runtime_utcnow(self)
+            ).total_seconds()
+            if grace_remaining > 0:
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: waiting for hydration grace"
+                )
+                self._sleep(grace_remaining)
+            wait_seconds = max(
+                0.0,
+                (
+                    traffic_end
+                    + timedelta(seconds=maximum_wait_seconds)
+                    - _runtime_utcnow(self)
+                ).total_seconds(),
+            )
+        else:
+            wait_seconds = maximum_wait_seconds
+        if on_maturity_proof is not None and not age_bounded:
+            wait_seconds = max(
+                wait_seconds,
+                _seconds_until_maturity_boundary(
+                    window_end=window_end,
+                    maximum_hydration_seconds=maximum_wait_seconds,
+                    stabilization_seconds=stabilization_seconds,
+                    observed_at=_runtime_utcnow(self),
+                ),
+            )
+        deadline = self._monotonic() + wait_seconds
+        final_snapshot = age_bounded and wait_seconds <= 0
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
+        current_poll_seconds = poll_seconds
         last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
         stable_signature: tuple[
             tuple[tuple[str, str], ...],
@@ -1948,7 +2226,7 @@ union withsource=telemetry_type traces, dependencies, requests
             tuple[str, ...],
         ] | None = None
         stable_since: float | None = None
-        first_mapping_observed = False
+        first_pass_published = False
         passing = False
         correlated: tuple[list[dict[str, Any]], ...] | None = None
         response_anchors: tuple[str, ...] | None = None
@@ -2011,10 +2289,11 @@ union withsource=telemetry_type traces, dependencies, requests
             )
             correlated = correlation[0] if correlation is not None else None
             response_anchors = correlation[1] if correlation is not None else None
-            if _request_correlation_impossible(
+            correlation_impossible = _request_correlation_impossible(
                 rows,
                 response_references,
-            ):
+            )
+            if correlation_impossible and not age_bounded:
                 raise _trace_assertion_activation_error(
                     "Hosted evidence found ambiguous response-to-operation correlation",
                     code=_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
@@ -2027,6 +2306,11 @@ union withsource=telemetry_type traces, dependencies, requests
                     ),
                     expected_reference_count=len(response_references),
                 )
+            if correlation_impossible:
+                correlation = None
+                correlated = None
+                response_anchors = None
+                diagnostic_code = _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC
             output_messages_states = (
                 _canonical_output_messages_state_from_correlated_rows(correlated)
                 if on_stable_output_messages is not None
@@ -2050,9 +2334,6 @@ union withsource=telemetry_type traces, dependencies, requests
                 on_stable_semantic_assertions is None
                 or semantic_results is not None
             ):
-                if not first_mapping_observed:
-                    first_mapping_observed = True
-                    on_first_pass()
                 last_results = tuple(
                     _trace_assertion_result(request_rows, fixture)
                     for request_rows, fixture in zip(
@@ -2061,10 +2342,29 @@ union withsource=telemetry_type traces, dependencies, requests
                         strict=True,
                     )
                 )
-                passing = all(
-                    assertion.passed
-                    for request_results in last_results
-                    for assertion in request_results
+                passing = (
+                    all(
+                        assertion.passed
+                        for request_results in last_results
+                        for assertion in request_results
+                    )
+                    if minimum_passing_trace_observations is None
+                    else sum(
+                        bool(last_results[index])
+                        and all(
+                            assertion.passed
+                            for assertion in last_results[index]
+                        )
+                        for index in observation_indexes
+                    )
+                    >= minimum_passing_trace_observations
+                    and all(
+                        all(
+                            assertion.evidence_sufficient
+                            for assertion in last_results[index]
+                        )
+                        for index in observation_indexes
+                    )
                 )
                 signature = _trace_assertion_stability_signature(
                     rows,
@@ -2084,9 +2384,16 @@ union withsource=telemetry_type traces, dependencies, requests
                 if (
                     passing
                     and stable_since is not None
-                    and now - stable_since >= stabilization_seconds
+                    and (
+                        final_snapshot
+                        or now - stable_since >= stabilization_seconds
+                    )
                 ):
+                    if not first_pass_published:
+                        first_pass_published = True
+                        on_first_pass()
                     return publish_stable_results()
+                current_poll_seconds = poll_seconds
             else:
                 passing = False
                 stable_signature = None
@@ -2095,6 +2402,10 @@ union withsource=telemetry_type traces, dependencies, requests
                     _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC
                     if correlated is None
                     else None
+                )
+                current_poll_seconds = min(
+                    maximum_poll_seconds,
+                    max(poll_seconds, current_poll_seconds * 2),
                 )
             now = self._monotonic()
             if now >= deadline:
@@ -2114,7 +2425,16 @@ union withsource=telemetry_type traces, dependencies, requests
                     f"Hosted {state} evidence is stabilizing ({elapsed}s)"
                 )
                 next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
-            self._sleep(min(poll_seconds, deadline - now))
+            self._sleep(min(current_poll_seconds, deadline - now))
+        if (
+            age_bounded
+            and correlated is not None
+            and last_results is not None
+            and passing
+        ):
+            if not first_pass_published:
+                on_first_pass()
+            return publish_stable_results()
         if (
             correlated is not None
             and last_results is not None
@@ -2122,6 +2442,24 @@ union withsource=telemetry_type traces, dependencies, requests
             and stable_since is not None
             and self._monotonic() - stable_since >= stabilization_seconds
         ):
+            if on_maturity_proof is not None and any(
+                not assertion.evidence_sufficient
+                for request_results in last_results
+                for assertion in request_results
+            ):
+                proof = build_trace_maturity_proof(
+                    evidence_window_start=window_start,
+                    evidence_window_end=window_end,
+                    snapshot_observed_at=self._utcnow().astimezone(UTC),
+                    maximum_hydration_seconds=(
+                        maximum_wait_seconds - stabilization_seconds
+                        if age_bounded
+                        else maximum_wait_seconds
+                    ),
+                    stabilization_seconds=stabilization_seconds,
+                )
+                if proof is not None:
+                    on_maturity_proof(proof)
             return publish_stable_results()
         if correlated is not None:
             raise _trace_assertion_activation_error(
@@ -2156,6 +2494,14 @@ union withsource=telemetry_type traces, dependencies, requests
         poll_seconds: int | None = None,
         maximum_wait_seconds: int | None = None,
         on_first_pass: Callable[[], None] = lambda: None,
+        requests: list[dict[str, Any]] | None = None,
+        required_trace_attempt_indexes: (
+            tuple[tuple[int, ...], ...] | None
+        ) = None,
+        minimum_complete_trace_attempts: int | None = None,
+        mature: bool = False,
+        maturity_proof: Mapping[str, Any] | None = None,
+        on_hydration_state: Callable[[str], None] | None = None,
     ) -> tuple[tuple[list[dict[str, Any]], ...], tuple[str, ...]]:
         if poll_seconds is None:
             poll_seconds = TRACE_ASSERTION_POLL_SECONDS
@@ -2175,7 +2521,49 @@ union withsource=telemetry_type traces, dependencies, requests
             len(response_references),
             allow_shared=True,
         )
-        deadline = self._monotonic() + maximum_wait_seconds
+        if (
+            (requests is None) != (required_trace_attempt_indexes is None)
+            or (
+                requests is not None
+                and len(requests) != len(response_references)
+            )
+            or (
+                required_trace_attempt_indexes is not None
+                and (
+                    not required_trace_attempt_indexes
+                    or any(
+                        any(index < 0 or index >= len(response_references) for index in group)
+                        for group in required_trace_attempt_indexes
+                    )
+                )
+            )
+            or (
+                minimum_complete_trace_attempts is not None
+                and (
+                    required_trace_attempt_indexes is None
+                    or minimum_complete_trace_attempts < 1
+                    or minimum_complete_trace_attempts
+                    > len(required_trace_attempt_indexes)
+                )
+            )
+            or not isinstance(mature, bool)
+        ):
+            raise ContractError("Validation trace hydration policy is invalid")
+        fixtures = (
+            tuple(_normalize_fixture(item) for item in requests)
+            if requests is not None
+            else None
+        )
+        wait_seconds = maximum_wait_seconds
+        if maturity_proof is not None and not mature:
+            wait_seconds = max(
+                wait_seconds,
+                _seconds_until_timestamp(
+                    str(maturity_proof["maturity_boundary"]),
+                    observed_at=_runtime_utcnow(self),
+                ),
+            )
+        deadline = self._monotonic() + wait_seconds
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
         stable_signature: tuple[tuple[str, ...], tuple[str, ...]] | None = None
         stable_since: float | None = None
@@ -2184,6 +2572,7 @@ union withsource=telemetry_type traces, dependencies, requests
         first_mapping_observed = False
         rows: list[dict[str, Any]] = []
         changed = False
+        hydration_state = "complete"
         while True:
             rows = self._trace_rows(
                 operation_ids,
@@ -2192,6 +2581,7 @@ union withsource=telemetry_type traces, dependencies, requests
                 agent_name,
                 window_start,
                 window_end,
+                not mature,
             )
             correlation = _correlated_request_rows(
                 rows,
@@ -2203,7 +2593,7 @@ union withsource=telemetry_type traces, dependencies, requests
             correlated = correlation[0] if correlation is not None else None
             anchors = correlation[1] if correlation is not None else None
             if _request_correlation_impossible(rows, response_references):
-                raise _trace_assertion_activation_error(
+                error = _trace_assertion_activation_error(
                     "Validation evidence found ambiguous response correlation",
                     code=_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
                     matched_reference_count=(
@@ -2217,11 +2607,26 @@ union withsource=telemetry_type traces, dependencies, requests
                     ),
                     expected_reference_count=len(response_references),
                 )
+                _bind_maturity_proof(error, maturity_proof if mature else None)
+                raise error
             now = self._monotonic()
             if correlated is not None and anchors is not None:
                 if not first_mapping_observed:
                     first_mapping_observed = True
                     on_first_pass()
+                hydration_state = (
+                    _trace_batch_hydration_state(
+                        correlated=correlated,
+                        fixtures=fixtures,
+                        attempt_indexes=required_trace_attempt_indexes,
+                        minimum_complete_attempts=(
+                            minimum_complete_trace_attempts
+                        ),
+                    )
+                    if fixtures is not None
+                    and required_trace_attempt_indexes is not None
+                    else "complete"
+                )
                 signature = (
                     anchors,
                     _trace_rows_signature(
@@ -2237,13 +2642,24 @@ union withsource=telemetry_type traces, dependencies, requests
                     stable_signature = signature
                     stable_since = now
                 if (
-                    stable_since is not None
+                    mature
+                ):
+                    if on_hydration_state is not None:
+                        on_hydration_state(hydration_state)
+                    return correlated, anchors
+                if (
+                    hydration_state == "complete"
+                    and stable_since is not None
                     and now - stable_since >= stabilization_seconds
                 ):
+                    if on_hydration_state is not None:
+                        on_hydration_state(hydration_state)
                     return correlated, anchors
             else:
                 stable_signature = None
                 stable_since = None
+            if mature:
+                break
             if now >= deadline:
                 break
             if now >= next_progress:
@@ -2253,10 +2669,22 @@ union withsource=telemetry_type traces, dependencies, requests
                 )
                 next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
             self._sleep(min(poll_seconds, deadline - now))
-        raise _trace_assertion_activation_error(
+        if (
+            hydration_state == "absence_pending"
+            and correlated is not None
+            and anchors is not None
+            and stable_since is not None
+            and self._monotonic() - stable_since >= stabilization_seconds
+        ):
+            if on_hydration_state is not None:
+                on_hydration_state(hydration_state)
+            return correlated, anchors
+        error = _trace_assertion_activation_error(
             "Validation evidence did not stabilize before the bounded deadline",
             code=(
-                "trace_assertion_correlated_row_set_changed"
+                _TRACE_ASSERTION_REQUIRED_SURFACE_DIAGNOSTIC
+                if hydration_state == "incomplete"
+                else "trace_assertion_correlated_row_set_changed"
                 if correlated is not None and changed
                 else _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC
             ),
@@ -2269,6 +2697,8 @@ union withsource=telemetry_type traces, dependencies, requests
             ),
             expected_reference_count=len(response_references),
         )
+        _bind_maturity_proof(error, maturity_proof if mature else None)
+        raise error
 
     def _trace_rows(
         self,
@@ -2278,6 +2708,7 @@ union withsource=telemetry_type traces, dependencies, requests
         agent_name: str | None = None,
         window_start: str | None = None,
         window_end: str | None = None,
+        retry_transient: bool = True,
     ) -> list[dict[str, Any]]:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -2407,6 +2838,7 @@ union withsource=telemetry_type traces, dependencies, requests
             timespan=timespan,
             statuses=LogsQueryStatus,
             purpose="trace behavior evidence",
+            retry_transient=retry_transient,
         )
         rows = [
             {
@@ -2788,6 +3220,8 @@ class TelemetryOnlyRuntime:
     assert_telemetry_read_access = LiveRuntime.assert_telemetry_read_access
     wait_for_telemetry = LiveRuntime.wait_for_telemetry
     telemetry_identity_passes = LiveRuntime.telemetry_identity_passes
+    verify_trace_contract = LiveRuntime.verify_trace_contract
+    trace_behavior_evidence = LiveRuntime.trace_behavior_evidence
     trace_assertion_evidence_for_requests = (
         LiveRuntime.trace_assertion_evidence_for_requests
     )
@@ -3379,6 +3813,16 @@ def _correlated_request_rows(
         rows_by_operation[operation_id].append(row)
     if set(rows_by_operation) != allowed_operations:
         return None
+    rows_by_operation = {
+        operation_id: _filter_wrong_identity_subtrees(
+            _deduplicate_identical_telemetry_rows(operation_rows),
+            agent_name=agent_name,
+            foundry_version=foundry_version,
+        )
+        for operation_id, operation_rows in rows_by_operation.items()
+    }
+    if any(not operation_rows for operation_rows in rows_by_operation.values()):
+        return None
     bindings: list[tuple[str, str, dict[str, Any], set[str]]] = []
     for reference, operation_id in zip(
         response_references,
@@ -3394,6 +3838,7 @@ def _correlated_request_rows(
             and str(row.get("agent_name") or "") == agent_name
             and str(row.get("agent_version") or "") == foundry_version
         ]
+        candidates = _deduplicate_identical_telemetry_rows(candidates)
         allowed_transport_span_ids: set[str] = set()
         if len(candidates) == 2:
             request_candidates = [
@@ -3462,6 +3907,61 @@ def _correlated_request_rows(
         anchors.append(anchor_span_id)
         correlated.append(selected)
     return tuple(correlated), tuple(anchors)
+
+
+def _deduplicate_identical_telemetry_rows(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = json.dumps(row, sort_keys=True, ensure_ascii=True, default=str)
+        unique.setdefault(key, row)
+    return list(unique.values())
+
+
+def _filter_wrong_identity_subtrees(
+    rows: list[dict[str, Any]],
+    *,
+    agent_name: str,
+    foundry_version: str,
+) -> list[dict[str, Any]]:
+    exact_root_ids = {
+        str(row.get("span_id") or "")
+        for row in rows
+        if row.get("operation_name") == "invoke_agent"
+        and row.get("agent_name") == agent_name
+        and row.get("agent_version") == foundry_version
+    }
+    wrong_root_ids = {
+        str(row.get("span_id") or "")
+        for row in rows
+        if row.get("operation_name") == "invoke_agent"
+        and (
+            (
+                row.get("agent_name")
+                and row.get("agent_name") != agent_name
+            )
+            or (
+                row.get("agent_version")
+                and row.get("agent_version") != foundry_version
+            )
+        )
+    }
+    excluded = wrong_root_ids - exact_root_ids
+    changed = True
+    while changed:
+        descendants = {
+            str(row.get("span_id") or "")
+            for row in rows
+            if str(row.get("parent_span_id") or "") in excluded
+        }
+        changed = not descendants <= excluded
+        excluded.update(descendants)
+    return [
+        row
+        for row in rows
+        if str(row.get("span_id") or "") not in excluded
+    ]
 
 
 def _valid_span_graph(
@@ -3604,7 +4104,7 @@ def _trace_assertion_stability_signature(
     results: tuple[tuple[TraceAssertionEvidence, ...], ...],
 ) -> tuple[
     tuple[tuple[str, str], ...],
-    tuple[tuple[tuple[str, bool], ...], ...],
+    tuple[tuple[tuple[str, bool, bool], ...], ...],
     tuple[str, ...],
 ]:
     correlation = tuple(
@@ -3619,12 +4119,107 @@ def _trace_assertion_stability_signature(
         )
     )
     assertion_results = tuple(
-        tuple((assertion.assertion, assertion.passed) for assertion in request_results)
+        tuple(
+            (
+                assertion.assertion,
+                assertion.passed,
+                assertion.evidence_sufficient,
+            )
+            for assertion in request_results
+        )
         for request_results in results
     )
     return correlation, assertion_results, _trace_rows_signature(
         [row for request_rows in correlated for row in request_rows]
     )
+
+
+def _trace_batch_hydration_state(
+    *,
+    correlated: tuple[list[dict[str, Any]], ...],
+    fixtures: tuple[dict[str, Any], ...],
+    attempt_indexes: tuple[tuple[int, ...], ...],
+    minimum_complete_attempts: int | None,
+) -> str:
+    request_states = [
+        _trace_request_hydration_state(correlated[index], fixtures[index])
+        for index in range(len(correlated))
+    ]
+    attempt_states = [
+        (
+            "incomplete"
+            if any(request_states[index] == "incomplete" for index in indexes)
+            else "absence_pending"
+            if any(
+                request_states[index] == "absence_pending" for index in indexes
+            )
+            else "complete"
+        )
+        for indexes in attempt_indexes
+    ]
+    required = minimum_complete_attempts or len(attempt_states)
+    complete = sum(state == "complete" for state in attempt_states)
+    if complete >= required:
+        return "complete"
+    potentially_complete = sum(state != "incomplete" for state in attempt_states)
+    return (
+        "absence_pending"
+        if potentially_complete >= required
+        else "incomplete"
+    )
+
+
+def _trace_request_hydration_state(
+    rows: list[dict[str, Any]],
+    fixture: dict[str, Any],
+) -> str:
+    state = "complete"
+    for assertion in fixture.get("trace_assertions", []):
+        kind = assertion["kind"]
+        tool_name = str(assertion.get("tool_name") or "")
+        tools = _tool_rows(rows, tool_name) if tool_name else []
+        if kind == "tool_call_count":
+            count = int(assertion["count"])
+            if count == 0 and not tools:
+                state = "absence_pending"
+            elif count > 0 and len(tools) < count:
+                return "incomplete"
+        elif kind in {
+            "tool_argument_presence",
+            "scope_relation",
+            "tool_result_class",
+        }:
+            if not tools:
+                return "incomplete"
+        elif kind == "terminal_claim_relation":
+            if not tools or not _terminal_text(rows).strip():
+                return "incomplete"
+        elif kind == "retry_sequence":
+            if len(tools) < len(assertion["result_sequence"]):
+                return "incomplete"
+        elif kind == "payload_multiplicity":
+            if assertion["source"] == "tool_result":
+                if not tools:
+                    return "incomplete"
+            elif not any(
+                _json_trace_value(row.get("input_messages")) not in (None, "", [])
+                for row in rows
+            ):
+                return "incomplete"
+        elif kind == "span_relation":
+            if not _tool_rows(rows, assertion["first_tool"]) or not _tool_rows(
+                rows,
+                assertion["second_tool"],
+            ):
+                return "incomplete"
+        elif kind == "operation_sequence":
+            expected = Counter(assertion["operations"])
+            observed = Counter(
+                str(row.get("operation_name") or "") for row in rows
+            )
+            if any(observed[name] < count for name, count in expected.items()):
+                return "incomplete"
+    return state
 
 
 def _trace_assertion_signature_change_diagnostic(
@@ -3672,6 +4267,64 @@ def _trace_assertion_activation_error(
         expected_reference_count - matched_reference_count
     )
     return error
+
+
+def _bind_maturity_proof(
+    error: BaseException,
+    proof: Mapping[str, Any] | None,
+) -> None:
+    if proof is None:
+        return
+    for field in (
+        "invocation_receipt_digest",
+        "evidence_window_end",
+        "maturity_boundary",
+        "snapshot_observed_at",
+        "maximum_hydration_seconds",
+        "stabilization_seconds",
+    ):
+        if field not in proof:
+            raise ContractError("Validation evidence maturity proof is incomplete")
+        setattr(error, field, proof[field])
+
+
+def _seconds_until_maturity_boundary(
+    *,
+    window_end: str,
+    maximum_hydration_seconds: int,
+    stabilization_seconds: int,
+    observed_at: datetime,
+) -> float:
+    try:
+        end = datetime.fromisoformat(window_end.replace("Z", "+00:00")).astimezone(
+            UTC
+        )
+    except ValueError as error:
+        raise ContractError("Trace evidence window end is invalid") from error
+    boundary = end + timedelta(
+        seconds=maximum_hydration_seconds + stabilization_seconds
+    )
+    return max((boundary - observed_at.astimezone(UTC)).total_seconds(), 0.0)
+
+
+def _seconds_until_timestamp(value: str, *, observed_at: datetime) -> float:
+    try:
+        boundary = datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(
+            UTC
+        )
+    except ValueError as error:
+        raise ContractError("Trace maturity boundary is invalid") from error
+    return max((boundary - observed_at.astimezone(UTC)).total_seconds(), 0.0)
+
+
+def _runtime_utcnow(runtime: Any) -> datetime:
+    clock = getattr(runtime, "_utcnow", None)
+    if callable(clock):
+        return clock().astimezone(UTC)
+    wall = getattr(runtime, "wall", None)
+    if isinstance(wall, datetime) and wall.tzinfo is not None:
+        return wall.astimezone(UTC)
+    return datetime.now(UTC)
 
 
 def _json_trace_value(value: Any) -> Any:
@@ -4213,9 +4866,45 @@ def _trace_assertion_result(
             TraceAssertionEvidence(
                 assertion=str(assertion["name"]),
                 passed=bool(passed),
+                evidence_sufficient=bool(
+                    passed
+                    or _failed_trace_assertion_is_decisive(
+                        kind=kind,
+                        rows=rows,
+                        tools=tools,
+                    )
+                ),
             )
         )
     return tuple(results)
+
+
+def _failed_trace_assertion_is_decisive(
+    *,
+    kind: str,
+    rows: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> bool:
+    any_tool = any(
+        row.get("operation_name") == "execute_tool" for row in rows
+    )
+    if kind in {
+        "tool_call_count",
+        "tool_argument_presence",
+        "scope_relation",
+        "tool_result_class",
+        "retry_sequence",
+    }:
+        return bool(tools or any_tool)
+    if kind == "terminal_claim_relation":
+        return bool(_terminal_text(rows)) and bool(tools or any_tool)
+    if kind == "payload_multiplicity":
+        return bool(tools or any_tool or _terminal_text(rows))
+    if kind == "span_relation":
+        return any_tool
+    if kind == "operation_sequence":
+        return bool(_terminal_text(rows))
+    return False
 
 
 def _usable_response(response: dict[str, Any], expected_status: int) -> bool:
@@ -4299,7 +4988,11 @@ def _semantic_assertion_result(
 
     def record(assertion: str, passed: bool) -> None:
         results.append(
-            SemanticAssertionEvidence(assertion=assertion, passed=bool(passed))
+            SemanticAssertionEvidence(
+                assertion=assertion,
+                passed=bool(passed),
+                evidence_sufficient=True,
+            )
         )
 
     parsed_json: Any = None
@@ -4428,6 +5121,20 @@ def _semantic_assertion_result(
         len(results),
         sum(item.passed for item in results),
         tuple(results),
+    )
+
+
+def _insight_run_binding(value: Mapping[str, Any]) -> str:
+    details = value.get("details")
+    nested = details if isinstance(details, Mapping) else {}
+    return str(
+        value.get("run_id")
+        or value.get("runId")
+        or value.get("agent_insight_run_id")
+        or value.get("agentInsightRunId")
+        or nested.get("run_id")
+        or nested.get("runId")
+        or ""
     )
 
 

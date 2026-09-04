@@ -9,20 +9,24 @@ import agent_insights_quality.validation_authority_results as authority_results
 from agent_insights_quality.catalogs import load_catalogs
 
 from agent_insights_quality.util import ContractError, atomic_json, content_hash
-from agent_insights_quality.live import _trace_assertion_activation_error
+from agent_insights_quality.live import (
+    _bind_maturity_proof,
+    _trace_assertion_activation_error,
+)
 from agent_insights_quality.validation_evidence import (
     digest_without_field,
     persist_evidence,
+    role_pass_attempt_payload,
     runtime_mapping_digest,
-    select_reusable_authority_evidence,
     stamp_evidence_digests,
     validate_evidence,
 )
+from agent_insights_quality.validation_trace_gap_policy import role_pass_summary
 from agent_insights_quality.validation_authority_results import (
+    authority_verification_history_status,
     has_prior_nonpass_result_for_invocation,
     load_bound_authority_verification_result,
     load_authority_verification_result,
-    paired_trace_gap_history_digest,
     reusable_authority_verification_results,
     sanitize_verification_error,
     verification_query_diagnostics,
@@ -34,7 +38,9 @@ from agent_insights_quality.validation_manifest import (
     current_validation_digest,
     current_shared_validation_digest,
 )
-from agent_insights_quality.validation_verifier import current_verifier_digest
+from agent_insights_quality.validation_invocations import (
+    authority_traffic_execution_digest,
+)
 
 HASH = "sha256:" + ("a" * 64)
 HEAD = "b" * 40
@@ -77,6 +83,35 @@ def test_invalid_trace_activation_diagnostics_remain_generic() -> None:
     )
     assert verification_query_diagnostics(error) is None
     assert error.__dict__ == {}
+
+
+def test_mature_trace_gap_diagnostics_bind_snapshot_and_receipt() -> None:
+    activation = _trace_assertion_activation_error(
+        "Validation evidence did not stabilize before the bounded deadline",
+        code="trace_assertion_required_surface_missing",
+        matched_reference_count=5,
+        expected_reference_count=5,
+    )
+    proof = {
+        "invocation_receipt_digest": HASH,
+        "evidence_window_end": "2026-09-03T12:00:00+00:00",
+        "maturity_boundary": "2026-09-03T12:18:00+00:00",
+        "snapshot_observed_at": "2026-09-03T12:18:00+00:00",
+        "maximum_hydration_seconds": 900,
+        "stabilization_seconds": 180,
+    }
+    _bind_maturity_proof(activation, proof)
+    error = PostResponseTelemetryError(
+        activation,
+        stage="trace_output_stability",
+    )
+
+    assert verification_query_diagnostics(error) == {
+        "matched_reference_count": 5,
+        "expected_reference_count": 5,
+        "missing_reference_count": 0,
+        **proof,
+    }
 
 
 def _step(
@@ -179,13 +214,35 @@ def _authority(spec) -> dict:
         "execution_digest": rule["execution_digest"],
         "validation_mode": mode,
         "n": n,
-        "k": 5,
+        "k": rule["k"],
         "complete_count": n,
         "paired_complete_count": 0 if baseline else n,
         "observation_count": n,
         "paired_observation_count": 0,
+        "role_pass_count": n,
+        "paired_role_pass_count": 0 if baseline else n,
         "evidence_complete": True,
         "pass": True,
+        "primary_role_pass_summary": role_pass_summary(
+            target_role="baseline" if baseline else "issue",
+            n=n,
+            k=rule["k"],
+            attempts=[
+                role_pass_attempt_payload(item) for item in issue_attempts
+            ],
+        ),
+        "paired_role_pass_summary": (
+            None
+            if baseline
+            else role_pass_summary(
+                target_role="paired_v0",
+                n=n,
+                k=rule["k"],
+                attempts=[
+                    role_pass_attempt_payload(item) for item in v0_attempts
+                ],
+            )
+        ),
         "issue_attempts": issue_attempts,
         "v0_attempts": v0_attempts,
     }
@@ -205,11 +262,13 @@ def _authority(spec) -> dict:
         "execution_digest": spec.execution_digest,
         "validated_commit_sha": HEAD,
         "n": n,
-        "k": 5,
+        "k": rule["k"],
         "complete_count": n,
         "paired_complete_count": 0 if baseline else n,
         "observation_count": n,
         "paired_observation_count": 0,
+        "role_pass_count": n,
+        "paired_role_pass_count": 0 if baseline else n,
         "evidence_complete": True,
         "pass": True,
         "scenarios": [scenario],
@@ -251,10 +310,6 @@ def _evidence() -> dict:
     )
 
 
-def test_evidence_accepts_exact_41_mechanically_complete_authorities() -> None:
-    validate_evidence(_evidence())
-
-
 def test_evidence_schema_rejects_removed_issue_verdict_fields() -> None:
     value = _evidence()
     attempt = value["authorities"][5]["scenarios"][0]["issue_attempts"][0]
@@ -264,24 +319,35 @@ def test_evidence_schema_rejects_removed_issue_verdict_fields() -> None:
         validate_evidence(value)
 
 
-def test_identity_failure_is_visible_as_incomplete_evidence() -> None:
+def test_one_identity_failure_is_a_visible_baseline_miss() -> None:
     value = _evidence()
     authority = value["authorities"][0]
     scenario = authority["scenarios"][0]
     attempt = scenario["issue_attempts"][0]
     attempt["setup_steps"][0]["identity_pass"] = False
     attempt["complete"] = False
+    attempt["observation"] = False
     attempt["error_code"] = "telemetry_identity_mismatch"
-    scenario["complete_count"] = 4
-    scenario["evidence_complete"] = False
-    scenario["pass"] = False
-    authority["complete_count"] = 4
-    authority["evidence_complete"] = False
-    authority["pass"] = False
-    value["result"] = "FAIL"
+    scenario["complete_count"] = 9
+    scenario["observation_count"] = 9
+    scenario["primary_role_pass_summary"] = role_pass_summary(
+        target_role="baseline",
+        n=10,
+        k=6,
+        attempts=[
+            role_pass_attempt_payload(item)
+            for item in scenario["issue_attempts"]
+        ],
+    )
+    scenario["role_pass_count"] = 9
+    authority["complete_count"] = 9
+    authority["observation_count"] = 9
+    authority["role_pass_count"] = 9
     value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="incomplete authority"):
-        validate_evidence(value)
+    validate_evidence(value)
+    assert scenario["primary_role_pass_summary"]["miss_counts"][
+        "identity_incomplete"
+    ] == 1
 
 
 def test_issue_evidence_contains_bounded_assertion_observations() -> None:
@@ -299,7 +365,7 @@ def test_issue_evidence_contains_bounded_assertion_observations() -> None:
     assert "trace_pass" in serialized
 
 
-def test_incomplete_paired_v0_fails_mechanical_completeness() -> None:
+def test_one_incomplete_paired_v0_attempt_is_a_visible_control_miss() -> None:
     value = _evidence()
     authority = value["authorities"][5]
     scenario = authority["scenarios"][0]
@@ -307,15 +373,23 @@ def test_incomplete_paired_v0_fails_mechanical_completeness() -> None:
     scenario["v0_attempts"][0]["probe_steps"][0]["identity_pass"] = False
     scenario["v0_attempts"][0]["error_code"] = "telemetry_identity_mismatch"
     scenario["paired_complete_count"] -= 1
-    scenario["evidence_complete"] = False
-    scenario["pass"] = False
+    scenario["paired_role_pass_summary"] = role_pass_summary(
+        target_role="paired_v0",
+        n=10,
+        k=6,
+        attempts=[
+            role_pass_attempt_payload(item)
+            for item in scenario["v0_attempts"]
+        ],
+    )
+    scenario["paired_role_pass_count"] = 9
     authority["paired_complete_count"] -= 1
-    authority["evidence_complete"] = False
-    authority["pass"] = False
-    value["result"] = "FAIL"
+    authority["paired_role_pass_count"] = 9
     value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="incomplete authority"):
-        validate_evidence(value)
+    validate_evidence(value)
+    assert scenario["paired_role_pass_summary"]["miss_counts"][
+        "identity_incomplete"
+    ] == 1
 
 
 def test_evidence_rejects_global_reference_reuse() -> None:
@@ -418,103 +492,11 @@ def test_evidence_rejects_cross_cycle_path_or_resource_binding(tmp_path) -> None
         validate_evidence(value, resources=[{"different": True}])
 
 
-def test_exact_pass_evidence_is_reused_and_mapping_drift_is_selected(
-    tmp_path,
-) -> None:
-    value = _evidence()
-    runtime_agents = []
-    for index, authority in enumerate(value["authorities"], start=1):
-        runtime = {
-            "authority_id": authority["authority_id"],
-            "runtime_agent_name": authority["runtime_agent_name"],
-            "runtime_agent_version": authority["runtime_agent_version"],
-            "provider_agent_id": f"agent-{index}",
-            "provider_agent_version_id": f"version-{index}",
-            "provider_content_digest": authority["provider_content_digest"],
-            "hosted_identity_id": None,
-            "hosted_blueprint_id": None,
-            "hosted_deployment_id": None,
-            "runtime_principal_id": None,
-            "telemetry_identity_id": f"version-{index}",
-            "connection_ids": [],
-        }
-        authority["provider_agent_version_reference"] = content_hash(
-            {
-                "provider_agent_id": runtime["provider_agent_id"],
-                "provider_agent_version_id": runtime[
-                    "provider_agent_version_id"
-                ],
-            }
-        )
-        authority["runtime_mapping_digest"] = runtime_mapping_digest(runtime)
-        runtime_agents.append(runtime)
-    value["runtime_topology_digest"] = content_hash(runtime_agents)
-    value = stamp_evidence_digests(value)
-    persist_evidence(
-        value,
-        repository=value["repository"],
-        pr_number=value["pr_number"],
-        run_id=value["run_id"],
-        root=tmp_path / "evidence",
-    )
-    agents, issues = load_catalogs()
-    specs = authority_specs(agents, issues)
-    selected, reused = select_reusable_authority_evidence(
-        authorities=specs,
-        runtime_topology={"agents": runtime_agents},
-        repository=value["repository"],
-        pr_number=value["pr_number"],
-        environment_id=value["environment_id"],
-        location=value["location"],
-        telemetry_resource_set=value["telemetry_resource_set"],
-        shared_validation_digest=value["shared_validation_digest"],
-        root=tmp_path,
-    )
-    assert selected == []
-    assert len(reused) == 41
-
-    runtime_agents[0]["runtime_agent_version"] = "changed"
-    selected, reused = select_reusable_authority_evidence(
-        authorities=specs,
-        runtime_topology={"agents": runtime_agents},
-        repository=value["repository"],
-        pr_number=value["pr_number"],
-        environment_id=value["environment_id"],
-        location=value["location"],
-        telemetry_resource_set=value["telemetry_resource_set"],
-        shared_validation_digest=value["shared_validation_digest"],
-        root=tmp_path,
-    )
-    assert selected == [specs[0].authority_id]
-    assert len(reused) == 40
-
-
 def test_late_query_failure_preserves_prior_authority_result(tmp_path) -> None:
     evidence = _evidence()
     agents, issues = load_catalogs()
     specs = authority_specs(agents, issues)
-    prepared = {
-        "repository": evidence["repository"],
-        "pr_number": evidence["pr_number"],
-        "run_id": evidence["run_id"],
-        "commit_sha": HEAD,
-        "digests": {
-            "validation_digest": evidence["validation_digest"],
-            "shared_validation_digest": evidence["shared_validation_digest"],
-            "verifier_digest": current_verifier_digest(),
-            "execution_matrix_digest": evidence["execution_matrix_digest"],
-            "runtime_topology_digest": HASH,
-            "quota_plan_digest": HASH,
-        },
-        "project": {
-            "name": "aiq-staging-swedencentral",
-            "provider_id": "synthetic-project",
-        },
-        "runtime_topology": {
-            "account_reference": HASH,
-            "telemetry_resource_set": "g30",
-        },
-    }
+    prepared = _result_prepared(evidence, verifier_digit="1")
     plan = {
         "environment_id": "swedencentral-g30",
         "location": "swedencentral",
@@ -602,6 +584,7 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
     runtime = _result_runtime(spec, authority, index=1)
     prepared = _result_prepared(evidence, verifier_digit="1")
     invocation = _result_invocation(spec.authority_id, digit="2")
+    receipt = _result_receipt(spec.authority_id, digit="2")
     reference = write_authority_verification_result(
         prepared=prepared,
         plan=_result_plan(),
@@ -621,9 +604,20 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
-        lambda *_args, **_kwargs: invocation,
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
     )
     changed = deepcopy(prepared)
+    changed["pr_number"] = 74
     changed["run_id"] = "validation-000000000002"
     changed["commit_sha"] = "c" * 40
     for field, digit in (
@@ -648,6 +642,8 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
         root=tmp_path,
     )
     assert reused["outcome"] == "PASS"
+    assert reused["pr_number"] == prepared["pr_number"]
+    assert reused["pr_number"] != changed["pr_number"]
     assert reused["binding"]["verifier_digest"] == "sha256:" + ("1" * 64)
     assert reused["binding"]["verifier_commit_sha"] == HEAD
 
@@ -663,6 +659,161 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
             require_current_generation=True,
             root=tmp_path,
         )
+
+
+def test_result_lookup_is_bounded_to_known_generations_and_reports_safe_change(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    spec = authority_specs(*load_catalogs())[0]
+    authority = evidence["authorities"][0]
+    runtime = _result_runtime(spec, authority, index=1)
+    prepared = _result_prepared(evidence, verifier_digit="1")
+    invocation = _result_invocation(spec.authority_id, digit="2")
+    receipt = _result_receipt(spec.authority_id, digit="2")
+    reference = write_authority_verification_result(
+        prepared=prepared,
+        plan=_result_plan(),
+        authority=spec,
+        runtime=runtime,
+        invocation_reference=invocation,
+        authority_evidence=authority,
+        outcome="PASS",
+        started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+        query_stage=None,
+        error_code=None,
+        query_diagnostics=None,
+        fence=lambda: None,
+        root=tmp_path,
+    )
+    owner, name = prepared["repository"].split("/", 1)
+    unrelated = (
+        tmp_path
+        / "authority-verifications"
+        / owner
+        / name
+        / str(prepared["pr_number"])
+        / "validation-ffffffffffff"
+        / f"{spec.authority_id.replace('/', '--')}.json"
+    )
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
+    )
+
+    reusable = reusable_authority_verification_results(
+        authorities=[spec],
+        runtime_topology={"agents": [runtime]},
+        prepared=prepared,
+        plan=_result_plan(),
+        root=tmp_path,
+    )
+    assert reusable == {spec.authority_id: reference}
+
+    changed = replace(
+        spec,
+        source_content_digest=content_hash({"changed": "source"}),
+    )
+    history = authority_verification_history_status(
+        authorities=[changed],
+        runtime_topology={"agents": [runtime]},
+        prepared=prepared,
+        plan=_result_plan(),
+        root=tmp_path,
+    )
+    assert history == [
+        {
+            "authority_id": spec.authority_id,
+            "canonical_agent": spec.canonical_agent,
+            "status": "missing",
+            "changed": ["source_content"],
+            "verification_required_reason": "execution_identity_changed",
+        }
+    ]
+
+
+def test_cross_pr_pass_result_reuses_authority_specific_receipt_contract(
+    tmp_path,
+) -> None:
+    from tests.test_validation_invocations import _context, _write_receipt
+
+    evidence = _evidence()
+    historical, plan, authorities, runtimes = _context()
+    historical["pr_number"] = 65
+    historical["commit_sha"] = HEAD
+    historical["runtime_topology"]["account_reference"] = HASH
+    spec = authorities[0]
+    receipt = _write_receipt(
+        root=tmp_path,
+        prepared=historical,
+        plan=plan,
+        authority=spec,
+        authorities=authorities,
+        runtimes=runtimes,
+    )
+    result_reference = write_authority_verification_result(
+        prepared=historical,
+        plan=plan,
+        authority=spec,
+        runtime={
+            **historical["runtime_topology"]["agents"][0],
+        },
+        invocation_reference=receipt,
+        authority_evidence=evidence["authorities"][0],
+        outcome="PASS",
+        started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+        query_stage=None,
+        error_code=None,
+        query_diagnostics=None,
+        fence=lambda: None,
+        root=tmp_path,
+    )
+    current = deepcopy(historical)
+    current["pr_number"] = 74
+    current["run_id"] = "validation-000000000074"
+    current["commit_sha"] = "7" * 40
+    current_plan = deepcopy(plan)
+    current_plan["invocation_contract_digest"] = content_hash(
+        {"global-contract": "pr74"}
+    )
+
+    reusable = reusable_authority_verification_results(
+        authorities=[spec],
+        runtime_topology={
+            "agents": [historical["runtime_topology"]["agents"][0]]
+        },
+        prepared=current,
+        plan=current_plan,
+        prior_generations=[
+            {
+                "repository": historical["repository"],
+                "pr_number": historical["pr_number"],
+                "run_id": historical["run_id"],
+            }
+        ],
+        root=tmp_path,
+    )
+
+    assert reusable == {spec.authority_id: result_reference}
+    result = load_authority_verification_result(
+        result_reference,
+        root=tmp_path,
+    )
+    assert result["pr_number"] == 65
+    assert result["invocation_receipt"]["receipt_digest"] == receipt[
+        "receipt_digest"
+    ]
 
 
 def test_prior_nonpass_result_detects_repeated_receipt(
@@ -746,103 +897,31 @@ def test_prior_nonpass_result_detects_repeated_receipt(
     )
 
 
-def test_paired_trace_gap_history_requires_old_and_fresh_receipts(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    evidence = _evidence()
-    spec = next(
-        item
-        for item in authority_specs(*load_catalogs())
-        if item.authority_id == "issue-027"
-    )
-    authority = next(
-        item
-        for item in evidence["authorities"]
-        if item["authority_id"] == spec.authority_id
-    )
-    runtime = _result_runtime(spec, authority, index=1)
-    prepared = _result_prepared(evidence, verifier_digit="1")
-    run_by_receipt = {
-        "sha256:" + ("2" * 64): "validation-000000000001",
-        "sha256:" + ("3" * 64): "validation-000000000002",
-    }
-    monkeypatch.setattr(
-        authority_results,
-        "load_invocation_receipt",
-        lambda reference, **_kwargs: {
-            "repository": prepared["repository"],
-            "pr_number": prepared["pr_number"],
-            "authority_id": spec.authority_id,
-            "origin_run_id": run_by_receipt[reference["receipt_digest"]],
-            "receipt_digest": reference["receipt_digest"],
-        },
-    )
-
-    def write(run_id: str, minute: int, digit: str) -> None:
-        current = deepcopy(prepared)
-        current["run_id"] = run_id
-        write_authority_verification_result(
-            prepared=current,
-            plan=_result_plan(),
-            authority=spec,
-            runtime=runtime,
-            invocation_reference=_result_invocation(
-                spec.authority_id,
-                digit=digit,
-            ),
-            authority_evidence=None,
-            outcome="INCOMPLETE",
-            started_at=datetime(2026, 9, 1, 12, minute, tzinfo=UTC),
-            completed_at=datetime(2026, 9, 1, 12, minute, 1, tzinfo=UTC),
-            query_stage="authority_assertion",
-            error_code="evidence_insufficient",
-            query_diagnostics=None,
-            fence=lambda: None,
-            root=tmp_path,
-        )
-
-    write("validation-000000000001", 0, "2")
-    write("validation-000000000002", 1, "3")
-    fresh_digest = "sha256:" + ("3" * 64)
-
-    assert (
-        paired_trace_gap_history_digest(
-            repository=prepared["repository"],
-            pr_number=prepared["pr_number"],
-            authority_id=spec.authority_id,
-            invocation_receipt_digest=fresh_digest,
-            prior_run_ids=["validation-000000000002"],
-            root=tmp_path,
-        )
-        is None
-    )
-    assert paired_trace_gap_history_digest(
-        repository=prepared["repository"],
-        pr_number=prepared["pr_number"],
-        authority_id=spec.authority_id,
-        invocation_receipt_digest=fresh_digest,
-        prior_run_ids=[
-            "validation-000000000002",
-            "validation-000000000001",
-        ],
-        root=tmp_path,
-    ).startswith("sha256:")
-
-
-def test_definitive_fail_result_is_reusable_without_revalidation(
+def test_definitive_fail_result_requires_receipt_only_revalidation(
     monkeypatch,
     tmp_path,
 ) -> None:
     evidence = _evidence()
     spec = authority_specs(*load_catalogs())[0]
     failed = deepcopy(evidence["authorities"][0])
-    attempt = failed["scenarios"][0]["issue_attempts"][0]
-    attempt["probe_steps"][0]["semantic_pass"] = False
-    attempt["observation"] = False
-    failed["scenarios"][0]["observation_count"] = 4
-    failed["scenarios"][0]["pass"] = False
-    failed["observation_count"] = 4
+    scenario = failed["scenarios"][0]
+    for attempt in scenario["issue_attempts"][:5]:
+        attempt["probe_steps"][0]["semantic_pass"] = False
+        attempt["observation"] = False
+    scenario["observation_count"] = 5
+    scenario["role_pass_count"] = 5
+    scenario["primary_role_pass_summary"] = role_pass_summary(
+        target_role="baseline",
+        n=10,
+        k=6,
+        attempts=[
+            role_pass_attempt_payload(item)
+            for item in scenario["issue_attempts"]
+        ],
+    )
+    scenario["pass"] = False
+    failed["observation_count"] = 5
+    failed["role_pass_count"] = 5
     failed["pass"] = False
     failed["authority_evidence_digest"] = digest_without_field(
         failed,
@@ -851,7 +930,8 @@ def test_definitive_fail_result_is_reusable_without_revalidation(
     prepared = _result_prepared(evidence, verifier_digit="1")
     runtime = _result_runtime(spec, failed, index=1)
     invocation = _result_invocation(spec.authority_id, digit="2")
-    reference = write_authority_verification_result(
+    receipt = _result_receipt(spec.authority_id, digit="2")
+    write_authority_verification_result(
         prepared=prepared,
         plan=_result_plan(),
         authority=spec,
@@ -870,7 +950,12 @@ def test_definitive_fail_result_is_reusable_without_revalidation(
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
-        lambda *_args, **_kwargs: invocation,
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
     )
 
     reusable = reusable_authority_verification_results(
@@ -882,10 +967,17 @@ def test_definitive_fail_result_is_reusable_without_revalidation(
             "commit_sha": "c" * 40,
         },
         plan=_result_plan(),
+        prior_generations=[
+            {
+                "repository": prepared["repository"],
+                "pr_number": prepared["pr_number"],
+                "run_id": prepared["run_id"],
+            }
+        ],
         root=tmp_path,
     )
 
-    assert reusable[spec.authority_id] == reference
+    assert reusable[spec.authority_id] is None
 
     changed_verifier = deepcopy(prepared)
     changed_verifier["run_id"] = "validation-000000000003"
@@ -896,6 +988,13 @@ def test_definitive_fail_result_is_reusable_without_revalidation(
         runtime_topology={"agents": [runtime]},
         prepared=changed_verifier,
         plan=_result_plan(),
+        prior_generations=[
+            {
+                "repository": prepared["repository"],
+                "pr_number": prepared["pr_number"],
+                "run_id": prepared["run_id"],
+            }
+        ],
         root=tmp_path,
     )
 
@@ -905,29 +1004,20 @@ def test_definitive_fail_result_is_reusable_without_revalidation(
 def test_authority_result_binds_immutable_copilot_evaluation(
     tmp_path,
 ) -> None:
+    from tests.test_validation_copilot import _evaluation, _package
+
     evidence = _evidence()
     spec = authority_specs(*load_catalogs())[0]
     authority = evidence["authorities"][0]
-    runtime = _result_runtime(spec, authority, index=1)
-    prepared = _result_prepared(evidence, verifier_digit="1")
-    invocation = _result_invocation(spec.authority_id, digit="2")
-    package = {
-        "prompt_digest": HASH,
-        "package_hash": "",
-    }
-    package["package_hash"] = digest_without_field(package, "package_hash")
-    evaluation = {
-        "model": "gpt-5.6-sol",
-        "package_hash": package["package_hash"],
-    }
-    evaluation_digest = content_hash(evaluation)
     artifact_root = tmp_path / "copilot-authority-evaluations"
-    atomic_json(
-        artifact_root
-        / "packages"
-        / f"{package['package_hash'].removeprefix('sha256:')}.json",
-        package,
+    package, _, prepared, plan, context = _package(
+        artifact_root,
+        spec.authority_id,
     )
+    runtime = context["runtime"]
+    invocation = context["reference"]
+    evaluation = _evaluation(package)
+    evaluation_digest = content_hash(evaluation)
     import_path = (
         artifact_root
         / "imports"
@@ -936,7 +1026,7 @@ def test_authority_result_binds_immutable_copilot_evaluation(
     atomic_json(import_path, evaluation)
     reference = write_authority_verification_result(
         prepared=prepared,
-        plan=_result_plan(),
+        plan=plan,
         authority=spec,
         runtime=runtime,
         invocation_reference=invocation,
@@ -951,7 +1041,7 @@ def test_authority_result_binds_immutable_copilot_evaluation(
         copilot_evaluation={
             "model": "gpt-5.6-sol",
             "package_hash": package["package_hash"],
-            "prompt_digest": HASH,
+            "prompt_digest": package["prompt_digest"],
             "evaluation_digest": evaluation_digest,
         },
         root=tmp_path,
@@ -962,15 +1052,26 @@ def test_authority_result_binds_immutable_copilot_evaluation(
 
     evaluation["unexpected"] = "changed"
     atomic_json(import_path, evaluation)
-    with pytest.raises(ContractError, match="evaluation reference changed"):
+    with pytest.raises(ContractError, match="evaluation artifact is invalid"):
         load_authority_verification_result(reference, root=tmp_path)
 
 
-@pytest.mark.parametrize("changed_binding", ["authority", "runtime", "receipt"])
+@pytest.mark.parametrize(
+    ("changed_binding", "reusable_expected"),
+    [
+        ("authority", False),
+        ("runtime", True),
+        ("provider", False),
+        ("receipt", False),
+        ("policy", True),
+        ("traffic", False),
+    ],
+)
 def test_authority_local_change_reselects_only_that_authority(
     monkeypatch,
     tmp_path,
     changed_binding,
+    reusable_expected,
 ) -> None:
     evidence = _evidence()
     specs = authority_specs(*load_catalogs())
@@ -986,6 +1087,13 @@ def test_authority_local_change_reselects_only_that_authority(
     }
     invocations = {
         spec.authority_id: _result_invocation(
+            spec.authority_id,
+            digit=str(index + 1),
+        )
+        for index, spec in enumerate(selected_specs)
+    }
+    receipts = {
+        spec.authority_id: _result_receipt(
             spec.authority_id,
             digit=str(index + 1),
         )
@@ -1014,12 +1122,17 @@ def test_authority_local_change_reselects_only_that_authority(
     def load_receipt(reference, **_kwargs):
         if changed_binding == "receipt" and reference["authority_id"] == changed_id:
             raise ContractError("synthetic changed receipt")
-        return invocations[reference["authority_id"]]
+        return receipts[reference["authority_id"]]
 
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
         load_receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda reference, **_kwargs: receipts[reference["authority_id"]],
     )
     current_specs = list(specs)
     if changed_binding == "authority":
@@ -1027,11 +1140,30 @@ def test_authority_local_change_reselects_only_that_authority(
             current_specs[1],
             source_content_digest="sha256:" + ("9" * 64),
         )
+    elif changed_binding == "policy":
+        current_specs[1] = replace(
+            current_specs[1],
+            execution_digest="sha256:" + ("9" * 64),
+        )
+    elif changed_binding == "traffic":
+        changed_rules = deepcopy(current_specs[1].validation_rules)
+        changed_rules["scenarios"][0]["attempts"][0]["probe_steps"][0][
+            "request"
+        ]["body"]["synthetic_change"] = True
+        current_specs[1] = replace(
+            current_specs[1],
+            validation_rules=changed_rules,
+            execution_digest="sha256:" + ("9" * 64),
+        )
     runtime_topology = {
         "agents": [deepcopy(runtimes[spec.authority_id]) for spec in specs]
     }
     if changed_binding == "runtime":
         runtime_topology["agents"][1]["runtime_agent_version"] = "changed"
+    elif changed_binding == "provider":
+        runtime_topology["agents"][1]["provider_content_digest"] = content_hash(
+            {"changed": "provider"}
+        )
 
     reusable = reusable_authority_verification_results(
         authorities=current_specs,
@@ -1042,10 +1174,321 @@ def test_authority_local_change_reselects_only_that_authority(
     )
 
     assert reusable[selected_specs[0].authority_id] is not None
-    assert changed_id not in reusable
+    assert (
+        reusable[changed_id] is not None
+    ) is reusable_expected
+
+
+@pytest.mark.parametrize(
+    ("mismatch", "reusable_expected"),
+    [
+        ("repository", "error"),
+        ("environment", True),
+        ("location", True),
+        ("project", True),
+        ("telemetry", True),
+    ],
+)
+def test_result_reuse_ignores_audit_and_telemetry_binding_changes(
+    monkeypatch,
+    tmp_path,
+    mismatch,
+    reusable_expected,
+) -> None:
+    evidence = _evidence()
+    spec = authority_specs(*load_catalogs())[0]
+    authority = evidence["authorities"][0]
+    runtime = _result_runtime(spec, authority, index=1)
+    historical = _result_prepared(evidence, verifier_digit="1")
+    historical["pr_number"] = 65
+    invocation = _result_invocation(spec.authority_id, digit="2")
+    receipt = _result_receipt(spec.authority_id, digit="2")
+    write_authority_verification_result(
+        prepared=historical,
+        plan=_result_plan(),
+        authority=spec,
+        runtime=runtime,
+        invocation_reference=invocation,
+        authority_evidence=authority,
+        outcome="PASS",
+        started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+        query_stage=None,
+        error_code=None,
+        query_diagnostics=None,
+        fence=lambda: None,
+        root=tmp_path,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
+    )
+    current = deepcopy(historical)
+    current["pr_number"] = 74
+    current_plan = _result_plan()
+    if mismatch == "repository":
+        current["repository"] = "other/repository"
+    elif mismatch == "environment":
+        current_plan["environment_id"] = "other-environment"
+    elif mismatch == "location":
+        current_plan["location"] = "other-location"
+    elif mismatch == "project":
+        current["project"]["name"] = "other-project"
+    elif mismatch == "telemetry":
+        current["runtime_topology"]["telemetry_resource_set"] = "g31"
+
+    if reusable_expected == "error":
+        with pytest.raises(
+            ContractError,
+            match="generation reference is invalid",
+        ):
+            reusable_authority_verification_results(
+                authorities=[spec],
+                runtime_topology={"agents": [runtime]},
+                prepared=current,
+                plan=current_plan,
+                prior_generations=[
+                    {
+                        "repository": historical["repository"],
+                        "pr_number": historical["pr_number"],
+                        "run_id": historical["run_id"],
+                    }
+                ],
+                root=tmp_path,
+            )
+        return
+    reusable = reusable_authority_verification_results(
+        authorities=[spec],
+        runtime_topology={"agents": [runtime]},
+        prepared=current,
+        plan=current_plan,
+        prior_generations=[
+            {
+                "repository": historical["repository"],
+                "pr_number": historical["pr_number"],
+                "run_id": historical["run_id"],
+            }
+        ],
+        root=tmp_path,
+    )
+
+    assert (
+        reusable.get(spec.authority_id) is not None
+    ) is reusable_expected
+
+
+def test_pr65_pass_results_reuse_31_exact_authorities_into_pr74(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    specs = authority_specs(*load_catalogs())
+    prepared = _result_prepared(evidence, verifier_digit="1")
+    prepared["pr_number"] = 65
+    runtimes = {
+        spec.authority_id: _result_runtime(
+            spec,
+            evidence["authorities"][index],
+            index=index + 1,
+        )
+        for index, spec in enumerate(specs)
+    }
+    invocations = {
+        spec.authority_id: _result_invocation(
+            spec.authority_id,
+            digit=f"{(index % 9) + 1}",
+        )
+        for index, spec in enumerate(specs)
+    }
+    receipts = {
+        spec.authority_id: _result_receipt(
+            spec.authority_id,
+            digit=f"{(index % 9) + 1}",
+        )
+        for index, spec in enumerate(specs)
+    }
+    for index, spec in enumerate(specs):
+        write_authority_verification_result(
+            prepared=prepared,
+            plan=_result_plan(),
+            authority=spec,
+            runtime=runtimes[spec.authority_id],
+            invocation_reference=invocations[spec.authority_id],
+            authority_evidence=evidence["authorities"][index],
+            outcome="PASS",
+            started_at=datetime(2026, 9, 1, 12, index, tzinfo=UTC),
+            completed_at=datetime(2026, 9, 1, 12, index, 1, tzinfo=UTC),
+            query_stage=None,
+            error_code=None,
+            query_diagnostics=None,
+            fence=lambda: None,
+            root=tmp_path,
+        )
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        lambda reference, **_kwargs: receipts[reference["authority_id"]],
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda reference, **_kwargs: {
+            **receipts[reference["authority_id"]],
+            "invocation": {
+                "scenarios": [],
+            },
+        },
+    )
+    changed_ids = {
+        "travel-agent/v0",
+        *(f"issue-{number:03d}" for number in range(21, 29)),
+        "issue-016",
+    }
+    current_specs = []
+    for spec in specs:
+        if spec.authority_id == "issue-016":
+            changed_rules = deepcopy(spec.validation_rules)
+            changed_rules["scenarios"][0]["attempts"][0]["probe_steps"][0][
+                "request"
+            ]["body"]["synthetic_change"] = True
+            current_specs.append(
+                replace(
+                    spec,
+                    validation_rules=changed_rules,
+                    execution_digest=content_hash(
+                        {"pr74": spec.authority_id}
+                    ),
+                )
+            )
+        elif spec.authority_id in changed_ids:
+            current_specs.append(
+                replace(
+                    spec,
+                    source_content_digest=content_hash(
+                        {"pr74": spec.authority_id}
+                    ),
+                )
+            )
+        else:
+            current_specs.append(spec)
+    current_runtimes = deepcopy(runtimes)
+    for spec in current_specs:
+        if spec.authority_id in changed_ids - {"issue-016"}:
+            current_runtimes[spec.authority_id][
+                "provider_content_digest"
+            ] = spec.source_content_digest
+    current = deepcopy(prepared)
+    current["pr_number"] = 74
+    current["run_id"] = "validation-000000000074"
+    current["commit_sha"] = "7" * 40
+
+    reusable = reusable_authority_verification_results(
+        authorities=current_specs,
+        runtime_topology={"agents": list(current_runtimes.values())},
+        prepared=current,
+        plan=_result_plan(),
+        prior_generations=[
+            {
+                "repository": prepared["repository"],
+                "pr_number": prepared["pr_number"],
+                "run_id": prepared["run_id"],
+            }
+        ],
+        root=tmp_path,
+    )
+
+    assert {
+        authority_id
+        for authority_id, reference in reusable.items()
+        if reference is not None
+    } == {spec.authority_id for spec in specs} - changed_ids
+    assert len(
+        [reference for reference in reusable.values() if reference is not None]
+    ) == 31
+    assert all(reusable[authority_id] is None for authority_id in changed_ids)
+
+
+def test_known_generation_result_ambiguity_fails_closed(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    evidence = _evidence()
+    spec = authority_specs(*load_catalogs())[0]
+    authority = evidence["authorities"][0]
+    runtime = _result_runtime(spec, authority, index=1)
+    invocations = {}
+    for pr_number, digit in ((65, "2"), (66, "3")):
+        prepared = _result_prepared(evidence, verifier_digit="1")
+        prepared["pr_number"] = pr_number
+        prepared["run_id"] = f"validation-{pr_number:012d}"
+        invocation = _result_invocation(spec.authority_id, digit=digit)
+        invocations[digit] = _result_receipt(spec.authority_id, digit=digit)
+        write_authority_verification_result(
+            prepared=prepared,
+            plan=_result_plan(),
+            authority=spec,
+            runtime=runtime,
+            invocation_reference=invocation,
+            authority_evidence=authority,
+            outcome="PASS",
+            started_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+            completed_at=datetime(2026, 9, 1, 12, 1, tzinfo=UTC),
+            query_stage=None,
+            error_code=None,
+            query_diagnostics=None,
+            fence=lambda: None,
+            root=tmp_path,
+        )
+    monkeypatch.setattr(
+        authority_results,
+        "load_bound_invocation_receipt",
+        lambda reference, **_kwargs: next(
+            value
+            for value in invocations.values()
+            if value["receipt_digest"] == reference["receipt_digest"]
+        ),
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda reference, **_kwargs: next(
+            value
+            for value in invocations.values()
+            if value["receipt_digest"] == reference["receipt_digest"]
+        ),
+    )
+
+    current = _result_prepared(evidence, verifier_digit="1")
+    current["pr_number"] = 74
+    with pytest.raises(
+        ContractError,
+        match="verification results conflict",
+    ):
+        reusable_authority_verification_results(
+            authorities=[spec],
+            runtime_topology={"agents": [runtime]},
+            prepared=current,
+            plan=_result_plan(),
+            prior_generations=[
+                {
+                    "repository": current["repository"],
+                    "pr_number": pr_number,
+                    "run_id": f"validation-{pr_number:012d}",
+                }
+                for pr_number in (65, 66)
+            ],
+            root=tmp_path,
+        )
 
 
 def _result_prepared(evidence: dict, *, verifier_digit: str) -> dict:
+    specs = authority_specs(*load_catalogs())
     return {
         "repository": evidence["repository"],
         "pr_number": evidence["pr_number"],
@@ -1066,6 +1509,13 @@ def _result_prepared(evidence: dict, *, verifier_digit: str) -> dict:
         "runtime_topology": {
             "account_reference": HASH,
             "telemetry_resource_set": "g30",
+            "agents": [
+                _result_runtime(spec, authority, index=index)
+                for index, (spec, authority) in enumerate(
+                    zip(specs, evidence["authorities"], strict=True),
+                    start=1,
+                )
+            ],
         },
     }
 
@@ -1101,4 +1551,48 @@ def _result_invocation(authority_id: str, *, digit: str) -> dict:
         "path": f"invocations/{authority_id.replace('/', '--')}.json",
         "receipt_digest": "sha256:" + (digit * 64),
         "invocation_digest": "sha256:" + (digit * 64),
+    }
+
+
+def _result_receipt(authority_id: str, *, digit: str) -> dict:
+    specs = authority_specs(*load_catalogs())
+    authority = next(item for item in specs if item.authority_id == authority_id)
+    paired = next(
+        (
+            item
+            for item in specs
+            if item.authority_id == f"{authority.canonical_agent}/v0"
+        ),
+        authority,
+    )
+    paired_contract = (
+        None
+        if authority.authority_kind == "baseline"
+        else {
+            "authority_id": paired.authority_id,
+            "source_content_digest": paired.source_content_digest,
+            "traffic_execution_digest": authority_traffic_execution_digest(
+                paired
+            ),
+        }
+    )
+    return {
+        **_result_invocation(authority_id, digit=digit),
+        "source_content_digest": authority.source_content_digest,
+        "traffic_execution_digest": authority_traffic_execution_digest(
+            authority
+        ),
+        "runtime": {
+            "runtime_kind": authority.runtime_kind,
+            "provider_content_digest": HASH,
+        },
+        "paired_v0_contract": paired_contract,
+        "paired_v0_runtime": (
+            None
+            if paired_contract is None
+            else {
+                "runtime_kind": paired.runtime_kind,
+                "provider_content_digest": HASH,
+            }
+        ),
     }

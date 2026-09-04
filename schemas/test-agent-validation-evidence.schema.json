@@ -89,6 +89,8 @@
         "paired_complete_count",
         "observation_count",
         "paired_observation_count",
+        "role_pass_count",
+        "paired_role_pass_count",
         "evidence_complete",
         "pass",
         "scenarios",
@@ -132,12 +134,14 @@
         "source_content_digest": {"$ref": "#/$defs/hash"},
         "execution_digest": {"$ref": "#/$defs/hash"},
         "validated_commit_sha": {"$ref": "#/$defs/gitSha"},
-        "n": {"enum": [5, 7]},
-        "k": {"enum": [5]},
+        "n": {"const": 10},
+        "k": {"const": 6},
         "complete_count": {"type": "integer", "minimum": 0},
         "paired_complete_count": {"type": "integer", "minimum": 0},
         "observation_count": {"type": "integer", "minimum": 0},
         "paired_observation_count": {"type": "integer", "minimum": 0},
+        "role_pass_count": {"type": "integer", "minimum": 0, "maximum": 10},
+        "paired_role_pass_count": {"type": "integer", "minimum": 0, "maximum": 10},
         "evidence_complete": {"type": "boolean"},
         "pass": {"type": "boolean"},
         "scenarios": {
@@ -158,13 +162,16 @@
             "properties": {
               "authority_id": {"pattern": "^[a-z][a-z0-9-]+-agent/v0$"},
               "logical_version": {"const": "v0"},
-              "n": {"const": 5}
+              "n": {"const": 10},
+              "k": {"const": 6}
             }
           },
           "else": {
             "properties": {
               "authority_id": {"pattern": "^issue-[0-9]{3}$"},
-              "logical_version": {"pattern": "^issue-[0-9]{3}$"}
+              "logical_version": {"pattern": "^issue-[0-9]{3}$"},
+              "n": {"const": 10},
+              "k": {"const": 6}
             }
           }
         }
@@ -183,8 +190,12 @@
         "paired_complete_count",
         "observation_count",
         "paired_observation_count",
+        "role_pass_count",
+        "paired_role_pass_count",
         "evidence_complete",
         "pass",
+        "primary_role_pass_summary",
+        "paired_role_pass_summary",
         "issue_attempts",
         "v0_attempts"
       ],
@@ -197,38 +208,99 @@
         "validation_mode": {
           "enum": ["baseline", "deterministic", "model_mediated"]
         },
-        "n": {"enum": [5, 7]},
-        "k": {"enum": [5]},
+        "n": {"const": 10},
+        "k": {"const": 6},
         "complete_count": {"type": "integer", "minimum": 0},
         "paired_complete_count": {"type": "integer", "minimum": 0},
         "observation_count": {"type": "integer", "minimum": 0},
         "paired_observation_count": {"type": "integer", "minimum": 0},
+        "role_pass_count": {"type": "integer", "minimum": 0, "maximum": 10},
+        "paired_role_pass_count": {"type": "integer", "minimum": 0, "maximum": 10},
         "evidence_complete": {"type": "boolean"},
         "pass": {"type": "boolean"},
-        "paired_trace_gap_acceptance": {
-          "$ref": "#/$defs/pairedTraceGapAcceptance"
+        "primary_role_pass_summary": {
+          "$ref": "#/$defs/rolePassSummary"
+        },
+        "paired_role_pass_summary": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/rolePassSummary"}
+          ]
         },
         "issue_attempts": {
           "type": "array",
-          "minItems": 5,
-          "maxItems": 7,
+          "minItems": 10,
+          "maxItems": 10,
           "items": {"$ref": "#/$defs/attempt"}
         },
         "v0_attempts": {
           "type": "array",
-          "maxItems": 7,
+          "maxItems": 10,
           "items": {"$ref": "#/$defs/attempt"}
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"validation_mode": {"const": "baseline"}},
+            "required": ["validation_mode"]
+          },
+          "then": {"properties": {"k": {"const": 6}}},
+          "else": {"properties": {"k": {"const": 6}}}
+        }
+      ]
     },
-    "pairedTraceGapAcceptance": {
+    "rolePassSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["policy", "attempt_index", "history_digest"],
+      "required": [
+        "policy",
+        "target_role",
+        "required_pass_count",
+        "pass_count",
+        "pass_attempt_indices",
+        "miss_count",
+        "miss_attempt_indices",
+        "miss_counts"
+      ],
       "properties": {
-        "policy": {"const": "single_paired_trace_gap_after_fresh_verify_v1"},
-        "attempt_index": {"type": "integer", "minimum": 1, "maximum": 7},
-        "history_digest": {"$ref": "#/$defs/hash"}
+        "policy": {"const": "six_complete_role_passes_v1"},
+        "target_role": {"enum": ["baseline", "issue", "paired_v0"]},
+        "required_pass_count": {"const": 6},
+        "pass_count": {"type": "integer", "minimum": 0, "maximum": 10},
+        "pass_attempt_indices": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1, "maximum": 10}
+        },
+        "miss_count": {"type": "integer", "minimum": 0, "maximum": 10},
+        "miss_attempt_indices": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1, "maximum": 10}
+        },
+        "miss_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "complete_non_pass",
+            "endpoint_incomplete",
+            "identity_incomplete",
+            "semantic_incomplete",
+            "trace_incomplete",
+            "other_incomplete"
+          ],
+          "properties": {
+            "complete_non_pass": {"type": "integer", "minimum": 0, "maximum": 10},
+            "endpoint_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "identity_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "semantic_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "trace_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "other_incomplete": {"type": "integer", "minimum": 0, "maximum": 10}
+          }
+        }
       }
     },
     "attempt": {
@@ -247,7 +319,7 @@
         "error_code"
       ],
       "properties": {
-        "index": {"type": "integer", "minimum": 1, "maximum": 7},
+        "index": {"type": "integer", "minimum": 1, "maximum": 10},
         "conversation_reference": {"$ref": "#/$defs/hash"},
         "session_reference": {"$ref": "#/$defs/hash"},
         "response_references": {

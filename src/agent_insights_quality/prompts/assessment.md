@@ -16,6 +16,10 @@ a score-correct card to an incorrect card. There is no weighted or partial score
 Linked traces pass when at least one exact-run, exact-version linked trace independently supports the
 Insight's core conclusion. Extra linked traces are acceptable unless they are attributed to the wrong
 run or version, or they contradict the conclusion.
+When a card links multiple traces, every link must be unique, response-bound, in the package operation
+set, and independently relevant to that same card claim. One valid link never masks an invalid link.
+The catalog `minimum_traces` threshold applies to independent full-request proof, not to the number
+of traces linked by an individual card.
 
 Classify ownership independently:
 
@@ -53,12 +57,10 @@ terminal evidence proves the card's claim.
 
 Agent source, traffic, and version digests are reviewed before qualification. A baseline is complete
 only when `behavior_summary` proves endpoint, semantic, and terminal evidence complete. Prompt
-baselines additionally require exactly five request summaries, one direct terminal response and zero
-function calls per request, exactly five complete operations, and every reviewed assertion passing.
-Hosted baselines require one privacy-safe terminal success plus output-presence signal per request;
-HTTP 200 alone is insufficient.
-Any nonzero `unhandled_error_count` makes baseline evidence incomplete. A handled child error may
-still be healthy only when the same request has independently proven terminal success and output.
+baselines additionally require ten reviewed attempts and at least six complete healthy role passes.
+Each passing Prompt attempt has one direct terminal response and no function calls; each passing
+Hosted attempt has an independently proven terminal success and output signal. HTTP 200 alone is
+insufficient. The other four attempts remain visible misses and cannot veto six strict passes.
 Treat `source_integrity` and `manifest_reference` as the digest-bound proof that the reviewed source
 delta and per-request evidence belong to this exact qualification run.
 
@@ -69,6 +71,12 @@ failed or is absent, return `INCOMPLETE` with `test_framework` ownership, never 
 `insight_engine` ownership. Assertions that are not activation gates remain corroborating evidence
 rather than an independent scoring framework. Never treat an Agent's self-reported defect flag,
 diagnostic label, or claim as activation proof.
+Use `role_pass_summary` only as deterministic aggregate context; never relabel a miss as a pass.
+Baselines require six complete healthy attempts and issues require six complete defect-observed
+attempts. The other four attempts may be complete non-passes, contradictions, or missing/unknown
+endpoint, identity, semantic, or trace evidence and never veto six strict passes. Every passing
+attempt itself still requires complete exact endpoint, identity, required semantic/trace, and
+internally consistent evidence.
 
 Evaluate every object in `observed_insights` independently in `card_evaluations`. Echo each card's
 reference, title, category, and severity exactly. Use one card-level verdict, finding type, ownership,

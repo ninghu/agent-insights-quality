@@ -15,6 +15,14 @@ from agent_insights_quality.azure_regions import regions_match
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.selection import select_daily
 from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
+from agent_insights_quality.validation_rules import (
+    execution_context,
+    issue_observation_context,
+)
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_target_decision,
+    validate_trace_maturity_proof,
+)
 
 OFFICIAL_DELIVERY = "official"
 TEST_EMAIL_ONLY_DELIVERY = "test_email_only"
@@ -46,6 +54,7 @@ def build_manifest(
     contract_by_agent = {
         item["name"]: item for item in agent_catalog["agents"]
     }
+    issue_by_id = {item["id"]: item for item in issue_catalog["issues"]}
     agents: list[dict[str, Any]] = []
     for agent_name in selected:
         result = result_by_agent[agent_name]
@@ -65,6 +74,11 @@ def build_manifest(
                     "logical_version": "v0",
                     "foundry_version": baseline_registry["foundry_version"],
                     "content_digest": baseline_registry["content_digest"],
+                    **execution_context(
+                        ROOT
+                        / contract_by_agent[agent_name]["baseline_path"]
+                        / "traffic.json"
+                    ),
                     **_result_payload(result.baseline),
                 },
                 "issues": [
@@ -72,6 +86,11 @@ def build_manifest(
                         "issue_id": issue_id,
                         "logical_version": issue_id,
                         **version_entry(registry, agent_name, issue_id),
+                        **issue_observation_context(
+                            ROOT
+                            / issue_by_id[issue_id]["implementation"]
+                            / "traffic.json"
+                        ),
                         **_result_payload(issue_result),
                     }
                     for issue_id, issue_result in zip(
@@ -83,7 +102,7 @@ def build_manifest(
             }
         )
     manifest: dict[str, Any] = {
-        "schema_version": "5.0.0",
+        "schema_version": "6.0.0",
         "run_id": run_id(report_date, rerun),
         "profile": profile,
         "delivery_mode": delivery_mode,
@@ -127,6 +146,8 @@ def _result_payload(result: Any) -> dict[str, Any]:
         "trace_assertions_passed": result.trace_assertions_passed,
         "trace_contract_verified": result.trace_contract_verified,
         "trace_behavior_summary": result.trace_behavior_summary,
+        "trace_maturity_proof": result.trace_maturity_proof,
+        "role_pass_summary": result.role_pass_summary,
         "endpoint_request_summaries": [
             request_completion_payload(item)
             for item in result.endpoint_request_summaries
@@ -214,6 +235,60 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 issue,
                 f"{agent['name']}/{issue['issue_id']}",
             )
+        expected_contexts = {
+            "v0": execution_context(
+                ROOT / current["baseline_path"] / "traffic.json"
+            ),
+            **{
+                issue_id: issue_observation_context(
+                    ROOT
+                    / next(
+                        item["implementation"]
+                        for item in current_issues["issues"]
+                        if item["id"] == issue_id
+                    )
+                    / "traffic.json"
+                )
+                for issue_id in current["issue_ids"]
+            },
+        }
+        for version in [agent["baseline"], *agent["issues"]]:
+            logical_version = version["logical_version"]
+            if {
+                key: version[key]
+                for key in expected_contexts[logical_version]
+            } != expected_contexts[logical_version]:
+                raise ContractError(
+                    f"{agent['name']}/{logical_version} manifest execution "
+                    "contract is not current"
+                )
+            observations = [
+                item
+                for item in version["endpoint_request_summaries"]
+                if item["activation_gate"] is True
+            ]
+            summary_value = version.get("role_pass_summary")
+            validate_trace_maturity_proof(version.get("trace_maturity_proof"))
+            _, summary = daily_target_decision(
+                target_role=(
+                    "baseline" if logical_version == "v0" else "issue"
+                ),
+                validation_mode=str(version["validation_mode"]),
+                n=int(version["n"]),
+                k=int(version["k"]),
+                required_surfaces=(
+                    ["semantic", "trace"]
+                    if logical_version == "v0"
+                    else version["required_surfaces"]
+                ),
+                summaries=observations,
+                identity_verified=version["trace_contract_verified"] is True,
+            )
+            if summary_value != summary:
+                raise ContractError(
+                    f"{agent['name']}/{logical_version} role-pass summary "
+                    "is not current"
+                )
     actual_selection = {
         agent["name"]: [issue["issue_id"] for issue in agent["issues"]]
         for agent in manifest["agents"]
@@ -271,6 +346,10 @@ def _validate_version_evidence(value: dict[str, Any], label: str) -> None:
             != item["semantic_assertions_passed"]
             or item["semantic_assertions_passed"]
             > item["semantic_assertion_count"]
+            or any(
+                result.get("evidence_sufficient") not in {True, False}
+                for result in results
+            )
         ):
             raise ContractError(f"{label} request assertion evidence is inconsistent")
         if (
@@ -278,6 +357,12 @@ def _validate_version_evidence(value: dict[str, Any], label: str) -> None:
             or sum(result["passed"] for result in trace_results)
             != item["trace_assertions_passed"]
             or item["trace_assertions_passed"] > item["trace_assertion_count"]
+            or any(
+                result.get("evidence_sufficient") not in {True, False}
+                for result in trace_results
+            )
+            or item.get("error_code")
+            not in {None, "missing_evidence", "assertion_failed"}
         ):
             raise ContractError(
                 f"{label} request trace assertion evidence is inconsistent"

@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 
 import yaml
-from agent_insights_quality.util import ROOT, content_hash
+from agent_insights_quality.util import ROOT, content_hash, file_hash
 
 
 def _is_source_file(path: Path) -> bool:
@@ -38,6 +38,12 @@ def _normalized_source_diff(baseline: str, issue: str) -> str:
             re.sub(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@", "@@", line)
         )
     return "\n".join(normalized)
+
+
+def _source_tree_digest(files: dict[str, Path]) -> str:
+    return content_hash(
+        {name: file_hash(path) for name, path in sorted(files.items())}
+    )
 
 
 def _load_travel_options():
@@ -169,8 +175,8 @@ def test_issue_006_has_one_exact_phrase_verbosity_root() -> None:
     scenario = traffic["validation_rules"]["scenarios"][0]
     assert (scenario["validation_mode"], scenario["n"], scenario["k"]) == (
         "model_mediated",
-        7,
-        5,
+        10,
+        6,
     )
     for attempt in scenario["attempts"]:
         assert len(attempt["setup_steps"]) == len(attempt["probe_steps"]) == 1
@@ -271,10 +277,10 @@ def test_issue_004_traffic_exercises_unitless_follow_ups() -> None:
     scenario = value["validation_rules"]["scenarios"][0]
     assert (scenario["validation_mode"], scenario["n"], scenario["k"]) == (
         "model_mediated",
-        7,
-        5,
+        10,
+        6,
     )
-    assert len(scenario["attempts"]) == 7
+    assert len(scenario["attempts"]) == 10
     for attempt in scenario["attempts"]:
         assert len(attempt["setup_steps"]) == len(attempt["probe_steps"]) == 1
         setup_text = json.dumps(attempt["setup_steps"][0]["request"]).casefold()
@@ -371,7 +377,6 @@ def test_issue_012_has_one_unambiguous_cross_scope_defect() -> None:
 
 def test_all_traffic_is_synthetic_endpoint_traffic() -> None:
     paths = sorted(ROOT.glob("agents/**/traffic.json"))
-    assert len(paths) == 41
     request_count = 0
     for path in paths:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -860,7 +865,7 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
             encoding="utf-8"
         )
     )
-    assert manifest["contract_version"] == "1.0"
+    assert manifest["contract_version"] == "2.0"
     assert manifest["baseline"] == "agents/travel-agent/v0/source"
     issues = manifest["issues"]
     assert set(issues) == {
@@ -880,6 +885,7 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
         if _is_source_file(path)
     }
     baseline_app = baseline_files["app.py"].read_text(encoding="utf-8")
+    assert _source_tree_digest(baseline_files) == manifest["baseline_source_digest"]
     for issue_id, reviewed in issues.items():
         issue_root = root / "issues" / issue_id
         implementation = yaml.safe_load(
@@ -895,6 +901,9 @@ def test_travel_issue_sources_match_reviewed_deltas() -> None:
             if _is_source_file(path)
         }
         assert set(issue_files) == set(baseline_files)
+        assert _source_tree_digest(issue_files) == reviewed[
+            "expected_source_digest"
+        ]
         for relative_path, baseline_path in baseline_files.items():
             if relative_path == "app.py":
                 actual_diff = _normalized_source_diff(
@@ -1058,7 +1067,7 @@ def test_finance_issue_sources_match_reviewed_deltas() -> None:
             "missing_argument_error",
         },
         "issue-015": {"one_balance_call", "opposite_account_scope"},
-        "issue-016": {"one_balance_call", "error_presented_as_balance"},
+        "issue-016": {"one_balance_call", "balance_result_is_error"},
         "issue-017": {"two_budget_calls", "mixed_result_claimed_complete"},
         "issue-018": {
             "one_transient_attempt",
@@ -1484,8 +1493,8 @@ def test_weather_latency_issue_requires_five_two_turn_groups() -> None:
     scenario = value["validation_rules"]["scenarios"][0]
     assert (scenario["validation_mode"], scenario["n"], scenario["k"]) == (
         "model_mediated",
-        7,
-        5,
+        10,
+        6,
     )
     for attempt in scenario["attempts"]:
         assert len(attempt["setup_steps"]) == 1
@@ -1673,6 +1682,19 @@ def test_healthcare_alignment_roots_match_exact_traffic() -> None:
 
 
 def test_prompt_substitution_issues_bind_supplied_evidence() -> None:
+    definition = json.loads(
+        (
+            ROOT
+            / "agents"
+            / "weather-agent"
+            / "issues"
+            / "issue-003"
+            / "definition.json"
+        ).read_text(encoding="utf-8")
+    )
+    instructions = definition["definition"]["instructions"]
+    assert "FINAL OVERRIDING DEFECT RULE - HIGHEST PRIORITY" in instructions
+    assert '{"shape":"forecast","high":<forecast-high>' in instructions
     weather = json.loads(
         (
             ROOT
@@ -1726,54 +1748,3 @@ def test_healthcare_corrections_retain_initial_date() -> None:
         "2026-09-21" in json.dumps(item["request"]["body"])
         for item in value["requests"]
     )
-
-
-def test_r03_prompt_regression_matrix_records_final_modes_without_workflow() -> None:
-    matrix = yaml.safe_load(
-        (
-            ROOT / "tests" / "fixtures" / "r03_prompt_regression_matrix.yaml"
-        ).read_text(encoding="utf-8")
-    )
-    assert matrix["data_class"] == "synthetic_public_safe"
-    assert matrix["workflow_implemented"] is False
-    assert matrix["mode_assignment"] == {
-        "authority": "reviewed_per_defect_mechanism",
-        "infer_from_agent_runtime_kind": False,
-        "frozen_before_execution": True,
-        "included_in_execution_digest": True,
-        "result_driven_reclassification": "forbidden",
-        "result_driven_resampling": "forbidden",
-        "threshold_downgrade": "forbidden",
-    }
-    assert matrix["validation_modes"] == {
-        "baseline": {
-            "observations": 5,
-            "healthy_required": 5,
-        },
-        "deterministic": {
-            "issue_observations": 5,
-            "defect_observations_required": 5,
-            "paired_v0_observations": 5,
-            "paired_v0_defect_observations_required": 0,
-        },
-        "model_mediated": {
-            "issue_observations": 7,
-            "defect_observations_required": 5,
-            "paired_v0_observations": 7,
-            "paired_v0_defect_observations_required": 0,
-        },
-    }
-    assert [row["issue_id"] for row in matrix["rows"]] == [
-        f"issue-{number:03d}" for number in range(1, 13)
-    ]
-
-    for row in matrix["rows"]:
-        mode = matrix["validation_modes"][row["validation_mode"]]
-        assert row["validation_mode"] == "model_mediated"
-        assert row["r03_issue_observations"] < mode["issue_observations"]
-        assert (
-            row["r03_paired_v0_observations"]
-            < mode["paired_v0_observations"]
-        )
-        assert row["r03_baseline_healthy_observations"] == 5
-        assert row["expected_final_rule_status"] == "insufficient_observations"

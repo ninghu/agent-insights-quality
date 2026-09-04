@@ -4,7 +4,7 @@ import json
 import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Iterator
 
 from agent_insights_quality.live import (
@@ -47,6 +47,12 @@ class PostResponseTelemetryError(ContractError):
             "matched_reference_count",
             "expected_reference_count",
             "missing_reference_count",
+            "invocation_receipt_digest",
+            "evidence_window_end",
+            "maturity_boundary",
+            "snapshot_observed_at",
+            "maximum_hydration_seconds",
+            "stabilization_seconds",
         ):
             if hasattr(error, field):
                 setattr(self, field, getattr(error, field))
@@ -761,6 +767,7 @@ class FoundryScenarioVerifier:
         self._runtime = runtime
         self._stabilization_seconds = stabilization_seconds
         self._record_duration = record_duration
+        self._now = now
         self._poll_seconds = poll_seconds
         self._maximum_wait_seconds = maximum_wait_seconds
         self.__delegate = FoundryScenarioAttemptRunner(
@@ -790,7 +797,8 @@ class FoundryScenarioVerifier:
         attempts: list[Mapping[str, Any]],
         invocations: list[Mapping[str, Any]],
         scheduler: ValidationScheduler,
-    ) -> list[dict[str, Any]]:
+        invocation_receipt_digest: str,
+    ) -> dict[str, Any]:
         if (
             not executing_authority_id
             or conversation_role not in {"baseline", "issue", "paired_v0"}
@@ -870,8 +878,59 @@ class FoundryScenarioVerifier:
             semantic_assertion_count=0,
             semantic_assertions_passed=0,
         )
+        evidence_window_start = min(starts)
+        evidence_window_end = max(completions)
+        maturity_proof = evidence_maturity_proof(
+            invocation_receipt_digest=invocation_receipt_digest,
+            evidence_window_start=evidence_window_start,
+            evidence_window_end=evidence_window_end,
+            snapshot_observed_at=self._now().astimezone(UTC),
+            maximum_hydration_seconds=self._maximum_wait_seconds,
+            stabilization_seconds=self._stabilization_seconds,
+        )
         telemetry_started = time.monotonic()
         query_stage = "telemetry_discovery"
+        trace_hydration_state: str | None = None
+
+        def capture_trace_hydration_state(state: str) -> None:
+            nonlocal trace_hydration_state
+            trace_hydration_state = state
+
+        predicate = scenario["defect_predicate"]
+        required_trace_step_ids = (
+            {
+                step["id"]
+                for attempt in attempts
+                for step in attempt["probe_steps"]
+            }
+            if predicate["kind"] == "never"
+            else set(predicate["step_ids"])
+            if "trace" in predicate["required_surfaces"]
+            else set()
+        )
+        trace_attempt_indexes = tuple(
+            tuple(
+                index
+                for index in range(
+                    int(batch["offset"]),
+                    int(batch["offset"]) + int(batch["count"]),
+                )
+                if (
+                    all_steps[index][0] == "setup"
+                    or all_steps[index][1]["id"] in required_trace_step_ids
+                )
+                and all_steps[index][1]["expected"]["trace_assertions"]
+            )
+            for batch in batches
+        )
+        trace_requests = [
+            {
+                "id": step["id"],
+                "request": step["request"],
+                "expected": step["expected"],
+            }
+            for _, step in all_steps
+        ]
         try:
             with scheduler.telemetry_query():
                 operation_ids = self._runtime.wait_for_telemetry(
@@ -881,6 +940,8 @@ class FoundryScenarioVerifier:
                     allow_shared_operations=True,
                     poll_seconds=self._poll_seconds,
                     maximum_wait_seconds=self._maximum_wait_seconds,
+                    mature=maturity_proof["mature"],
+                    maturity_proof=maturity_proof,
                 )
             query_stage = "trace_output_stability"
             with scheduler.telemetry_query():
@@ -895,6 +956,12 @@ class FoundryScenarioVerifier:
                         stabilization_seconds=self._stabilization_seconds,
                         poll_seconds=self._poll_seconds,
                         maximum_wait_seconds=self._maximum_wait_seconds,
+                        requests=trace_requests,
+                        required_trace_attempt_indexes=trace_attempt_indexes,
+                        minimum_complete_trace_attempts=len(attempts),
+                        mature=maturity_proof["mature"],
+                        maturity_proof=maturity_proof,
+                        on_hydration_state=capture_trace_hydration_state,
                     )
                 )
             query_stage = "telemetry_identity"
@@ -906,6 +973,7 @@ class FoundryScenarioVerifier:
                     invocation=invocation_evidence,
                     poll_seconds=self._poll_seconds,
                     maximum_wait_seconds=self._maximum_wait_seconds,
+                    mature=maturity_proof["mature"],
                 )
         except SharedRuntimeError:
             raise
@@ -914,6 +982,24 @@ class FoundryScenarioVerifier:
         self._record_duration(
             "ingestion_kql_seconds",
             time.monotonic() - telemetry_started,
+        )
+        if trace_hydration_state is None:
+            raise ContractError("Validation trace hydration state is missing")
+        maturity_proof = evidence_maturity_proof(
+            invocation_receipt_digest=invocation_receipt_digest,
+            evidence_window_start=evidence_window_start,
+            evidence_window_end=evidence_window_end,
+            snapshot_observed_at=self._now().astimezone(UTC),
+            maximum_hydration_seconds=self._maximum_wait_seconds,
+            stabilization_seconds=self._stabilization_seconds,
+        )
+        maturity_proof["required_trace_hydration"] = trace_hydration_state
+        maturity_proof["maturity_proof_digest"] = content_hash(
+            {
+                key: value
+                for key, value in maturity_proof.items()
+                if key != "maturity_proof_digest"
+            }
         )
         if not (
             len(operation_ids)
@@ -983,7 +1069,66 @@ class FoundryScenarioVerifier:
                     "steps": step_values,
                 }
             )
-        return results
+        return {
+            "attempts": results,
+            "evidence_snapshot": maturity_proof,
+        }
+
+
+def evidence_maturity_proof(
+    *,
+    invocation_receipt_digest: str,
+    evidence_window_start: datetime,
+    evidence_window_end: datetime,
+    snapshot_observed_at: datetime,
+    maximum_hydration_seconds: int,
+    stabilization_seconds: int,
+) -> dict[str, Any]:
+    start = evidence_window_start.astimezone(UTC)
+    end = evidence_window_end.astimezone(UTC)
+    observed = snapshot_observed_at.astimezone(UTC)
+    if (
+        evidence_window_start.tzinfo is None
+        or evidence_window_end.tzinfo is None
+        or snapshot_observed_at.tzinfo is None
+        or not invocation_receipt_digest.startswith("sha256:")
+        or len(invocation_receipt_digest.removeprefix("sha256:")) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in invocation_receipt_digest.removeprefix("sha256:")
+        )
+        or end < start
+        or maximum_hydration_seconds < 1
+        or stabilization_seconds < 1
+    ):
+        raise ContractError("Validation evidence maturity inputs are invalid")
+    boundary = end + timedelta(
+        seconds=maximum_hydration_seconds + stabilization_seconds
+    )
+    mature = observed >= boundary
+    value = {
+        "schema_version": "1.0.0",
+        "invocation_receipt_digest": invocation_receipt_digest,
+        "evidence_window_start": start.isoformat(),
+        "evidence_window_end": end.isoformat(),
+        "maturity_boundary": boundary.isoformat(),
+        "snapshot_observed_at": observed.isoformat(),
+        "maximum_hydration_seconds": maximum_hydration_seconds,
+        "stabilization_seconds": stabilization_seconds,
+        "mature": mature,
+        "snapshot_mode": (
+            "mature_single_snapshot" if mature else "bounded_hydration"
+        ),
+        "maturity_proof_digest": "",
+    }
+    value["maturity_proof_digest"] = content_hash(
+        {
+            key: item
+            for key, item in value.items()
+            if key != "maturity_proof_digest"
+        }
+    )
+    return value
 @contextmanager
 def _observe_rate_limit(
     runtime: LiveRuntime,

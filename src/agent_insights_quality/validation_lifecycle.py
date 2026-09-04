@@ -49,6 +49,10 @@ _TRANSITIONS = {
 }
 
 
+class ValidationLockBusy(ContractError):
+    """The shared validation lock is temporarily owned by another process."""
+
+
 @dataclass(frozen=True)
 class LocalRecord:
     path: Path
@@ -121,7 +125,7 @@ class LocalValidationLock:
                     stream.close()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise ContractError(
+                    raise ValidationLockBusy(
                         "Another local Test Agent Validation process holds "
                         "the shared lock"
                     ) from error
@@ -178,54 +182,32 @@ class LifecycleJournal:
         return self._read(self.active_path)
 
     def superseded_run_ids(self, current: Mapping[str, Any]) -> list[str]:
+        return [
+            str(item["run_id"])
+            for item in self.superseded_generations(current)
+        ]
+
+    def superseded_generations(
+        self,
+        current: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
         validate_lifecycle(current)
-        active_by_digest: dict[str, dict[str, Any]] = {}
-        history_root = (
-            self.root
-            / "history"
-            / str(current["repository"]).replace("/", "--")
-            / str(current["pr_number"])
-        )
-        run_directories = (
-            [item for item in history_root.iterdir() if item.is_dir()]
-            if history_root.is_dir()
-            else []
-        )
-        for run_directory in run_directories:
-            event_paths = sorted(run_directory.glob("e*.json"))
-            if not event_paths:
-                continue
-            try:
-                event = self._read(event_paths[-1])
-            except (ContractError, OSError):
-                continue
-            if event.value["snapshot_type"] != "event":
-                continue
-            active = copy.deepcopy(event.value)
-            active["snapshot_type"] = "active"
-            active["event_reference"] = _local_reference(event, self.root)
-            active = stamp_lifecycle_digest(active)
-            validate_lifecycle(active)
-            active_by_digest[active["journal_digest"]] = active
-        digest = current["supersedes"]
-        seen: set[str] = set()
-        run_ids: list[str] = []
-        while digest is not None:
-            if digest in seen:
-                raise ContractError("Validation supersession chain is cyclic")
-            seen.add(digest)
-            ancestor = active_by_digest.get(str(digest))
-            if ancestor is None:
-                break
-            if (
-                ancestor["journal_digest"] != digest
-                or ancestor["repository"] != current["repository"]
-                or ancestor["pr_number"] != current["pr_number"]
-            ):
-                raise ContractError("Validation supersession ancestor changed")
-            run_ids.append(str(ancestor["run_id"]))
-            digest = ancestor["supersedes"]
-        return list(dict.fromkeys(run_ids))
+        recovery_source = current.get("recovery_intent")
+        if recovery_source is None:
+            return []
+        if (
+            not isinstance(recovery_source, Mapping)
+            or current["supersedes"]
+            != recovery_source.get("source_journal_digest")
+        ):
+            raise ContractError("Validation recovery source reference is invalid")
+        return [
+            {
+                "repository": str(current["repository"]),
+                "pr_number": int(current["pr_number"]),
+                "run_id": str(recovery_source["source_run_id"]),
+            }
+        ]
 
     def begin_run(
         self,
@@ -408,6 +390,15 @@ def validate_lifecycle(value: Mapping[str, Any]) -> None:
     )
     if value["journal_digest"] != expected:
         raise ContractError("Local validation lifecycle digest is stale")
+    recovery_intent = value["recovery_intent"]
+    if recovery_intent is not None and recovery_intent["intent_digest"] != content_hash(
+        {
+            key: item
+            for key, item in recovery_intent.items()
+            if key != "intent_digest"
+        }
+    ):
+        raise ContractError("Validation recovery intent digest is stale")
     if any(
         item["quota_plan_digest"] != value["digests"]["quota_plan_digest"]
         for item in value["deployment_assignments"]

@@ -18,7 +18,7 @@
     "lifecycle_digest"
   ],
   "properties": {
-    "schema_version": {"const": "4.0.0"},
+    "schema_version": {"const": "6.0.0"},
     "kind": {"const": "daily-qualification-lifecycle"},
     "snapshot_type": {"enum": ["event", "active"]},
     "state": {
@@ -71,7 +71,7 @@
         "delivery_mode",
         "publish_preview",
         "work_items",
-        "approval",
+        "checkout_commit_sha",
         "catalog_hashes",
         "selection",
         "policy",
@@ -80,6 +80,7 @@
       ],
       "properties": {
         "repository": {"const": "ninghu/agent-insights-quality"},
+        "checkout_commit_sha": {"$ref": "#/$defs/gitSha"},
         "public_run_id": {
           "type": "string",
           "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2,})?$"
@@ -95,28 +96,6 @@
             "path": {"type": "string", "minLength": 1},
             "content_digest": {"$ref": "#/$defs/hash"},
             "closed_business_date": {"type": "string", "format": "date"}
-          }
-        },
-        "approval": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "checkout_commit_sha",
-            "approved_commit_sha",
-            "approved_pr_number",
-            "validation_digest",
-            "evidence_digest",
-            "approved_record_digest",
-            "binding_digest"
-          ],
-          "properties": {
-            "checkout_commit_sha": {"$ref": "#/$defs/gitSha"},
-            "approved_commit_sha": {"$ref": "#/$defs/gitSha"},
-            "approved_pr_number": {"type": "integer", "minimum": 1},
-            "validation_digest": {"$ref": "#/$defs/hash"},
-            "evidence_digest": {"$ref": "#/$defs/hash"},
-            "approved_record_digest": {"$ref": "#/$defs/hash"},
-            "binding_digest": {"$ref": "#/$defs/hash"}
           }
         },
         "catalog_hashes": {
@@ -152,25 +131,37 @@
           "additionalProperties": false,
           "required": [
             "max_parallel_agents",
+            "daily_inter_version_pacing_seconds",
             "max_recovery_versions",
             "agent_start_stagger_seconds",
             "insight_lookback_hours",
+            "insight_lookback_max_hours",
+            "insight_lookback_precision_minutes",
             "clean_window_poll_seconds",
             "clean_window_ingestion_margin_seconds",
             "clean_window_max_wait_seconds",
             "trace_assertion_stabilization_seconds",
+            "daily_trace_hydration_grace_seconds",
+            "daily_trace_hydration_maximum_wait_seconds",
+            "daily_trace_hydration_maximum_poll_seconds",
             "insight_start_margin_seconds",
             "telemetry_resource_set"
           ],
           "properties": {
             "max_parallel_agents": {"type": "integer", "minimum": 1, "maximum": 5},
+            "daily_inter_version_pacing_seconds": {"const": 60},
             "max_recovery_versions": {"type": "integer", "minimum": 0, "maximum": 3},
             "agent_start_stagger_seconds": {"type": "integer", "minimum": 0, "maximum": 30},
             "insight_lookback_hours": {"type": "number", "minimum": 0.1},
+            "insight_lookback_max_hours": {"type": "number", "minimum": 0.1, "maximum": 24},
+            "insight_lookback_precision_minutes": {"const": 1},
             "clean_window_poll_seconds": {"type": "integer", "minimum": 1},
             "clean_window_ingestion_margin_seconds": {"type": "integer", "minimum": 0},
             "clean_window_max_wait_seconds": {"type": "integer", "minimum": 1},
             "trace_assertion_stabilization_seconds": {"type": "integer", "minimum": 1},
+            "daily_trace_hydration_grace_seconds": {"type": "integer", "minimum": 0},
+            "daily_trace_hydration_maximum_wait_seconds": {"type": "integer", "minimum": 60, "maximum": 300},
+            "daily_trace_hydration_maximum_poll_seconds": {"type": "integer", "minimum": 1, "maximum": 60},
             "insight_start_margin_seconds": {"type": "integer", "minimum": 1},
             "telemetry_resource_set": {"const": "g30"}
           }

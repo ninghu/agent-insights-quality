@@ -51,6 +51,11 @@ def test_daily_prepare_parser_exposes_explicit_preview_opt_in() -> None:
     assert args.publish_preview is True
 
 
+def test_daily_prepare_help_states_staging_is_advisory() -> None:
+    help_text = " ".join(cli.build_parser().format_help().split())
+    assert "staging is advisory" in help_text
+
+
 @pytest.mark.parametrize("publish_preview", [False, True])
 def test_test_finalization_stays_private_and_skips_adx(
     monkeypatch,
@@ -242,6 +247,22 @@ def test_test_finalization_stays_private_and_skips_adx(
     assert result["delivery_mode"] == "test_email_only"
     assert result["adx_publication"] == "skipped_test"
     assert result["generated_report"] is False
+    assert result["validation_policy"] == {
+        "schema_version": "1.0.0",
+        "policy": "unified_target_evidence_v1",
+        "attempts_per_target": 10,
+        "required_conclusive_attempts": 6,
+        "maximum_trace_unknown_attempts": 4,
+        "policy_digest": content_hash(
+            {
+                "schema_version": "1.0.0",
+                "policy": "unified_target_evidence_v1",
+                "attempts_per_target": 10,
+                "required_conclusive_attempts": 6,
+                "maximum_trace_unknown_attempts": 4,
+            }
+        ),
+    }
     assert result["pull_request"] == "skipped_test"
     assert (state / "final-report" / "report.json").is_file()
     assert len(previews) == 1
@@ -394,6 +415,7 @@ def test_official_daily_defers_report_to_atomic_memory_publication(
     )
     result = json.loads(cli._dispatch(args) or "{}")
     assert result["generated_report"] is True
+    assert result["validation_policy"] is None
     assert len(publications) == 1
     assert publications[0]["report"]["delivery"]["content_digest"] == (
         "sha256:" + "a" * 64

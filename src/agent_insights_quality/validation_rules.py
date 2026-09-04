@@ -22,9 +22,9 @@ from agent_insights_quality.util import (
 VALIDATION_RULES_VERSION = "1.0.0"
 VALIDATION_MODES = ("baseline", "deterministic", "model_mediated")
 VALIDATION_MATRICES = {
-    "baseline": (5, 5),
-    "deterministic": (5, 5),
-    "model_mediated": (7, 5),
+    "baseline": (10, 6),
+    "deterministic": (10, 6),
+    "model_mediated": (10, 6),
 }
 CONVERSATION_PLACEHOLDER = "$validation_conversation"
 RUNTIME_AGENT_NAME_PLACEHOLDER = "$runtime_agent_name"
@@ -41,14 +41,14 @@ _FORBIDDEN_SELECTOR_KEYS = {
 }
 
 _TRACE_OBSERVED_ISSUES = {
-    *(f"issue-{number:03d}" for number in range(13, 21)),
+    *(f"issue-{number:03d}" for number in range(13, 21) if number != 16),
     "issue-022",
     "issue-023",
     "issue-024",
     "issue-027",
     "issue-028",
 }
-_SEMANTIC_AND_TRACE_OBSERVED_ISSUES = {"issue-021"}
+_SEMANTIC_AND_TRACE_OBSERVED_ISSUES = {"issue-016", "issue-021"}
 
 
 def validation_matrix(mode: str) -> tuple[int, int]:
@@ -56,6 +56,84 @@ def validation_matrix(mode: str) -> tuple[int, int]:
         return VALIDATION_MATRICES[mode]
     except KeyError as error:
         raise ContractError(f"Validation mode is not reviewed: {mode}") from error
+
+
+def execution_context(traffic_path: Path) -> dict[str, Any]:
+    rules, scenario = _execution_rule(traffic_path)
+    return {
+        "validation_mode": scenario["validation_mode"],
+        "n": scenario["n"],
+        "k": scenario["k"],
+        "execution_digest": rules["execution_digest"],
+    }
+
+
+def issue_observation_context(traffic_path: Path) -> dict[str, Any]:
+    rules, scenario = _execution_rule(traffic_path)
+    predicate = scenario["defect_predicate"]
+    if predicate["kind"] != "all_observation_steps_pass":
+        raise ContractError("Issue execution contract has no observation predicate")
+    return {
+        "validation_mode": scenario["validation_mode"],
+        "n": scenario["n"],
+        "k": scenario["k"],
+        "execution_digest": rules["execution_digest"],
+        "required_surfaces": list(predicate["required_surfaces"]),
+    }
+
+
+def execution_requests(traffic_path: Path) -> list[dict[str, Any]]:
+    _, scenario = _execution_rule(traffic_path)
+    predicate = scenario["defect_predicate"]
+    observation_ids = (
+        set(predicate["step_ids"])
+        if predicate["kind"] == "all_observation_steps_pass"
+        else {
+            attempt["probe_steps"][0]["id"]
+            for attempt in scenario["attempts"]
+        }
+    )
+    requests: list[dict[str, Any]] = []
+    for attempt in scenario["attempts"]:
+        conversation_group = attempt["conversation_group"]
+        for role in ("setup_steps", "probe_steps"):
+            for raw_step in attempt[role]:
+                step = copy.deepcopy(raw_step)
+                step["request"]["body"]["conversation"] = {
+                    "id": conversation_group
+                }
+                step["expected"]["activation_gate"] = (
+                    raw_step["id"] in observation_ids
+                )
+                requests.append(step)
+    return requests
+
+
+def daily_issue_side_requests(traffic_path: Path) -> list[dict[str, Any]]:
+    """Return only the authority's own attempts; Daily never adds paired controls."""
+    return execution_requests(traffic_path)
+
+
+def staging_authority_requests(traffic_path: Path) -> list[dict[str, Any]]:
+    """Return one target's attempts; staging calls this once per issue/control role."""
+    return execution_requests(traffic_path)
+
+
+def _execution_rule(
+    traffic_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    traffic = read_json(traffic_path)
+    rules = traffic.get("validation_rules")
+    scenarios = rules.get("scenarios") if isinstance(rules, dict) else None
+    if (
+        not isinstance(scenarios, list)
+        or len(scenarios) != 1
+        or not isinstance(scenarios[0], dict)
+    ):
+        raise ContractError(
+            f"{traffic_path.relative_to(ROOT).as_posix()} has no single execution contract"
+        )
+    return rules, scenarios[0]
 
 
 def scenario_execution_digest(

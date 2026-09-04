@@ -25,10 +25,21 @@ def working_capabilities(report: dict[str, Any]) -> list[tuple[str, str]]:
     rows.append(
         (
             "Evidence coverage",
-            f"All 5 baselines and {summary['issues_expected']} issue targets had "
-            "complete endpoint and trace evidence.",
+            f"{summary['issues_expected']} issue targets were scored; "
+            f"{summary.get('issues_skipped', 0)} explicitly skipped targets "
+            "were excluded.",
         )
     )
+    missing_baselines = (
+        summary.get("baseline_coverage", {}).get("missing_agents", [])
+    )
+    if missing_baselines:
+        rows.append(
+            (
+                "Baseline coverage",
+                "Missing for " + ", ".join(missing_baselines) + ".",
+            )
+        )
     return rows
 
 

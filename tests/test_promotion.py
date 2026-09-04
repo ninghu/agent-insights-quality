@@ -32,7 +32,15 @@ from agent_insights_quality.live import (
 from agent_insights_quality.run_manifest import _result_payload, build_manifest
 from agent_insights_quality.reporting import _summary_metrics
 from agent_insights_quality.registry import DEPLOYMENT_REGISTRY_SCHEMA_VERSION
-from agent_insights_quality.util import ROOT, ContractError, content_hash, read_json
+from agent_insights_quality.util import ROOT, ContractError, content_hash
+from agent_insights_quality.validation_rules import (
+    execution_context,
+    execution_requests,
+    issue_observation_context,
+)
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_target_decision,
+)
 
 
 def _request_summaries(
@@ -48,7 +56,11 @@ def _request_summaries(
             "semantic_assertion_count": 1,
             "semantic_assertions_passed": 1,
             "assertion_results": [
-                {"assertion": "synthetic_contract", "passed": True}
+                {
+                    "assertion": "synthetic_contract",
+                    "passed": True,
+                    "evidence_sufficient": True,
+                }
             ],
             "trace_assertion_count": 0,
             "trace_assertions_passed": 0,
@@ -56,6 +68,7 @@ def _request_summaries(
             "activation_gate": activation,
             "direct_terminal_response_count": int(prompt),
             "function_call_count": 0,
+            "error_code": None,
         }
         for index in range(5)
     ]
@@ -66,43 +79,56 @@ def _version_evidence(
     foundry_version: str,
     *,
     agent_type: str,
-    traffic_path: Path | None = None,
+    traffic_path: Path,
 ) -> dict:
     prompt = agent_type == "prompt"
-    if traffic_path is None:
-        summaries = _request_summaries(prompt=prompt)
-    else:
-        summaries = []
-        for index, raw in enumerate(read_json(traffic_path)["requests"]):
-            fixture = _normalize_fixture(raw)
-            names = _semantic_assertion_names(fixture["semantic_assertions"])
-            trace_names = _trace_assertion_names(fixture["trace_assertions"])
-            summaries.append(
-                {
-                    "request_index": index,
-                    "response_count": 1,
-                    "usable_response": True,
-                    "semantic_assertion_count": len(names),
-                    "semantic_assertions_passed": len(names),
-                    "assertion_results": [
-                        {"assertion": name, "passed": True} for name in names
-                    ],
-                    "trace_assertion_count": len(trace_names),
-                    "trace_assertions_passed": len(trace_names),
-                    "trace_assertion_results": [
-                        {"assertion": name, "passed": True}
-                        for name in trace_names
-                    ],
-                    "activation_gate": fixture["activation_gate"],
-                    "direct_terminal_response_count": int(prompt),
-                    "function_call_count": 0,
-                }
-            )
+    summaries = []
+    for index, raw in enumerate(execution_requests(traffic_path)):
+        fixture = _normalize_fixture(raw)
+        names = _semantic_assertion_names(fixture["semantic_assertions"])
+        trace_names = _trace_assertion_names(fixture["trace_assertions"])
+        summaries.append(
+            {
+                "request_index": index,
+                "response_count": 1,
+                "usable_response": True,
+                "semantic_assertion_count": len(names),
+                "semantic_assertions_passed": len(names),
+                "assertion_results": [
+                    {
+                        "assertion": name,
+                        "passed": True,
+                        "evidence_sufficient": True,
+                    }
+                    for name in names
+                ],
+                "trace_assertion_count": len(trace_names),
+                "trace_assertions_passed": len(trace_names),
+                "trace_assertion_results": [
+                    {
+                        "assertion": name,
+                        "passed": True,
+                        "evidence_sufficient": True,
+                    }
+                    for name in trace_names
+                ],
+                "activation_gate": fixture["activation_gate"],
+                "direct_terminal_response_count": int(prompt),
+                "function_call_count": 0,
+                "error_code": None,
+            }
+        )
     request_count = len(summaries)
-    return {
+    context = (
+        execution_context(traffic_path)
+        if logical_version == "v0"
+        else issue_observation_context(traffic_path)
+    )
+    value = {
         "logical_version": logical_version,
         "foundry_version": foundry_version,
         "content_digest": "sha256:" + "a" * 64,
+        **context,
         "status": "passed" if logical_version == "v0" else "observed",
         "operation_ids": [f"{index + 1:032x}" for index in range(request_count)],
         "insight_references": (
@@ -127,6 +153,8 @@ def _version_evidence(
             item["trace_assertions_passed"] for item in summaries
         ),
         "trace_contract_verified": True,
+        "trace_maturity_proof": None,
+        "role_pass_summary": None,
         "trace_behavior_summary": {
             "operation_count": request_count,
             "tool_call_counts": {},
@@ -135,7 +163,9 @@ def _version_evidence(
             "explicit_terminal_success_count": request_count,
             "explicit_terminal_output_count": request_count,
             "terminal_response_count": request_count,
+            "terminal_success_count": request_count,
             "terminal_output_count": request_count,
+            "handled_error_count": 0,
             "unhandled_error_count": 0,
         },
         "endpoint_request_summaries": summaries,
@@ -143,6 +173,23 @@ def _version_evidence(
             None if logical_version == "v0" else "sha256:" + "c" * 64
         ),
     }
+    _, value["role_pass_summary"] = daily_target_decision(
+        target_role="baseline" if logical_version == "v0" else "issue",
+        validation_mode=str(context["validation_mode"]),
+        n=int(context["n"]),
+        k=int(context["k"]),
+        required_surfaces=(
+            ["semantic", "trace"]
+            if logical_version == "v0"
+            else context["required_surfaces"]
+        ),
+        summaries=[
+            item for item in summaries if item["activation_gate"] is True
+        ],
+        identity_verified=True,
+        direct_prompt_contract=prompt,
+    )
+    return value
 
 
 def test_manifest_request_assertions_are_json_arrays() -> None:
@@ -158,7 +205,11 @@ def test_manifest_request_assertions_are_json_arrays() -> None:
                 semantic_assertion_count=1,
                 semantic_assertions_passed=1,
                 assertion_results=(
-                    SemanticAssertionEvidence("synthetic_contract", True),
+                    SemanticAssertionEvidence(
+                        "synthetic_contract",
+                        True,
+                        True,
+                    ),
                 ),
                 activation_gate=False,
                 direct_terminal_response_count=1,
@@ -176,14 +227,22 @@ def test_manifest_request_assertions_are_json_arrays() -> None:
         "assertion_results"
     ]
     assert assertions == [
-        {"assertion": "synthetic_contract", "passed": True}
+        {
+            "assertion": "synthetic_contract",
+            "passed": True,
+            "evidence_sufficient": True,
+        }
     ]
     assert isinstance(assertions, list)
     trace_assertions = payload["endpoint_request_summaries"][0][
         "trace_assertion_results"
     ]
     assert trace_assertions == [
-        {"assertion": "tool_scope_mismatch", "passed": True}
+        {
+            "assertion": "tool_scope_mismatch",
+            "passed": True,
+            "evidence_sufficient": True,
+        }
     ]
     serialized = json.dumps(payload, sort_keys=True)
     assert "private-argument" not in serialized
@@ -200,7 +259,11 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
         semantic_assertion_count=1,
         semantic_assertions_passed=1,
         assertion_results=(
-            SemanticAssertionEvidence("synthetic_contract", True),
+            SemanticAssertionEvidence(
+                "synthetic_contract",
+                True,
+                True,
+            ),
         ),
         activation_gate=False,
         direct_terminal_response_count=1,
@@ -228,7 +291,7 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
                 VersionResult(
                     logical_version=issue_id,
                     foundry_version="1",
-                    status="skipped_baseline",
+                    status="inconclusive",
                 )
                 for issue_id in agent["issue_ids"]
             ],
@@ -341,7 +404,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
     }
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     manifest = {
-        "schema_version": "5.0.0",
+        "schema_version": "6.0.0",
         "run_id": "aiq-20260824",
         "profile": "staging",
         "delivery_mode": "official",
@@ -369,6 +432,11 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
                             "foundry_version"
                         ],
                         agent_type=agent["type"],
+                        traffic_path=(
+                            ROOT
+                            / agent["baseline_path"]
+                            / "traffic.json"
+                        ),
                     ),
                 },
                 "issues": [
@@ -496,7 +564,6 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         issue_catalog=issues,
         human_reviewed=True,
     )
-    assert len(receipt["version_content_digests"]) == 41
     assert receipt["qualification_manifest_hash"] == manifest["manifest_hash"]
     assert (
         receipt["source_integrity_digest"]
@@ -510,6 +577,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
     first_issue = incomplete_manifest["agents"][0]["issues"][0]
     for summary in first_issue["endpoint_request_summaries"]:
         summary["activation_gate"] = False
+    first_issue["role_pass_summary"] = None
     incomplete_manifest["manifest_hash"] = content_hash(
         {
             key: value
@@ -542,6 +610,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         if summary["activation_gate"]
     )
     switch_summary["activation_gate"] = False
+    switch_issue["role_pass_summary"] = None
     hosted_manifest["manifest_hash"] = content_hash(
         {
             key: value

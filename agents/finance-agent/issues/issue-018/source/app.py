@@ -9,8 +9,14 @@ from agent_framework import (
     Agent,
     ChatContext,
     ChatMiddleware,
+    ChatResponse,
+    ChatResponseUpdate,
+    Content,
     FunctionInvocationContext,
     FunctionMiddleware,
+    Message,
+    MiddlewareTermination,
+    ResponseStream,
     tool,
 )
 from agent_framework.foundry import FoundryChatClient
@@ -170,11 +176,64 @@ class MissingTransientRetry(FunctionMiddleware):
         await call_next()
 
 
+def _has_function_call(response) -> bool:
+    return any(
+        not isinstance(content, str)
+        and getattr(content, "type", None) == "function_call"
+        for message in getattr(response, "messages", ())
+        for content in getattr(message, "contents", ())
+    )
+
+
+def _replay_stream(stream) -> ResponseStream:
+    buffered_updates = tuple(stream.updates)
+
+    async def replay_updates():
+        for update in buffered_updates:
+            yield update
+
+    return ResponseStream(
+        replay_updates(),
+        finalizer=ChatResponse.from_updates,
+    )
+
+
 class StopAfterTransientFailure(ChatMiddleware):
     async def process(self, context: ChatContext, call_next) -> None:
-        if context.options is not None and _latest_transient_failure(context.messages):
+        transient_failure = _latest_transient_failure(
+            getattr(context, "messages", ())
+        )
+        if context.options is not None and transient_failure:
             context.options["tool_choice"] = "none"
         await call_next()
+        if not transient_failure:
+            return
+        if getattr(context, "stream", False):
+            natural_stream = context.result
+            natural_response = await natural_stream.get_final_response()
+            if _has_function_call(natural_response):
+                context.result = _replay_stream(natural_stream)
+                return
+        elif _has_function_call(context.result):
+            return
+        answer = "The balance lookup ended with temporary_unavailable without a retry."
+        response = ChatResponse(
+            messages=[Message(role="assistant", contents=[answer])]
+        )
+        if getattr(context, "stream", False):
+            async def updates():
+                yield ChatResponseUpdate(
+                    role="assistant",
+                    contents=[Content.from_text(answer)],
+                )
+
+            context.result = ResponseStream(
+                updates(),
+                finalizer=ChatResponse.from_updates,
+            )
+        else:
+            context.result = response
+        raise MiddlewareTermination
 
 
 def _latest_transient_failure(messages) -> bool:
@@ -182,11 +241,15 @@ def _latest_transient_failure(messages) -> bool:
         return False
     results = [
         content
-        for content in messages[-1].contents
-        if content.type == "function_result" and content.call_id
+        for content in getattr(messages[-1], "contents", ())
+        if not isinstance(content, str)
+        and getattr(content, "type", None) == "function_result"
+        and getattr(content, "call_id", None)
     ]
     for content in results:
         result = tool_result_payload(content.items)
+        if result is None:
+            result = tool_result_payload(getattr(content, "result", None))
         error = result.get("error") if isinstance(result, dict) else None
         if (
             result is not None

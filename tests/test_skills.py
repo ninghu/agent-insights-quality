@@ -39,7 +39,6 @@ def test_contributing_routes_onboarding_through_versioned_skills() -> None:
     ):
         assert catalog in contributing
     assert "Stop for human review" in contributing
-    assert "all 41" in contributing
     assert "Test Agent Validation" in contributing
     assert "at least one reviewed single-root issue" in contributing
     for requirement in (
@@ -80,7 +79,7 @@ def test_new_issue_skill_covers_complete_reviewed_contract() -> None:
         "catalogs/AGENT_CATALOG.yaml",
         "previous Agent count, issue count, version count",
         "content and stale or missing evidence",
-        "single create-once approved validation record",
+        "exact response-bound advisory evidence",
         "Never use the preserved old West US 2 environment as a fallback",
     ):
         assert requirement in normalized
@@ -106,7 +105,7 @@ def test_onboard_test_agent_skill_covers_topology_and_baseline_safety() -> None:
         "privacy-safe trace proof",
         "baseline ownership",
         "fixed validation scenarios",
-        "single approved validation record",
+        "exact response-bound advisory evidence",
         "never use the preserved old West US 2 environment as a fallback",
     ):
         assert requirement in normalized
@@ -135,11 +134,11 @@ def test_onboarding_schema_minimums_match_one_issue_contract() -> None:
     assert versions["minProperties"] == 2
 
 
-def test_validation_skill_enforces_local_report_free_approval() -> None:
+def test_validation_skill_enforces_local_report_free_advisory_validation() -> None:
     skill = _text(".github/skills/test-agent-validation/SKILL.md")
     normalized = " ".join(skill.split())
     for requirement in (
-        "report-free Sweden Central staging gate",
+        "report-free advisory Sweden Central staging validation",
         "aiq-staging-swedencentral",
         "unique runtime Agent identity",
         "up to eight visible GPT-5.6 Sol evaluator sessions",
@@ -151,10 +150,9 @@ def test_validation_skill_enforces_local_report_free_approval() -> None:
         "never select `latest`",
         "paired `v0`",
         "response-bound traces",
-        "all 41 exact versions",
         "`SUPERSEDED`",
-        "approve-test-agent-validation",
-        "explicit approval",
+        "Daily admission remains separate",
+        "does not consume validation state",
     ):
         assert requirement in normalized
     staging = " ".join(
@@ -163,7 +161,6 @@ def test_validation_skill_enforces_local_report_free_approval() -> None:
     for requirement in (
         "human review",
         "aiq-staging-swedencentral",
-        "all 41 unique catalog authorities",
         "immutable disjoint deployment assignments",
         "at most eight",
         "visible Copilot coordinator",
@@ -214,7 +211,6 @@ def test_active_contract_docs_exclude_superseded_environment_rules() -> None:
         "aiq-daily-swedencentral",
         "swedencentral-g30",
         "server-assigned",
-        "run-scoped",
         "noautoupgrade",
     ):
         assert required in folded
@@ -224,25 +220,25 @@ def test_daily_skill_publishes_adx_without_blocking_email() -> None:
     skill = _text(".github/skills/agent-insights-quality-daily/SKILL.md")
     normalized = " ".join(skill.split())
     for requirement in (
-        "public-safe daily ADX publication",
-        "full reasoning already present in the committed sanitized report",
-        "never private assessment packages",
-        "work-item context",
-        "quality-trend dashboard link",
-        "continue the email and pull-request flow",
-        "email warning",
-        "pull-request description",
-        "ADX is the only authorized analytics write",
-        "Application Insights remains read-only",
-        "Never write telemetry",
-        "one focused GPT-5.6 Sol recheck",
-        "Never send new traffic for this recheck",
-        "never force a conclusive verdict",
-        "`--test-run`",
-        "nonzero `--rerun N`",
-        "must not contact ADX",
-        "create a pull request",
-        "Scheduled official runs never pass `--test-run`",
+        "public-safe ADX publication",
+        "Never publish private packages",
+        "work-item content",
+        "daily-run-agent --agent <name>",
+        "five lanes may run concurrently",
+        "full traffic -> telemetry/trace verification -> Agent Insights",
+        "five minutes from immutable `traffic_completed_at`",
+        "six complete role-specific passes",
+        "remaining four attempts are transparent misses",
+        "skipped_telemetry",
+        "skipped_agent_activation",
+        "skipped_insight",
+        "Reset/reconcile the Agent Insights monitor exactly once per Agent",
+        "global coordinator lock",
+        "read-only",
+        "60 seconds",
+        "email-only test",
+        "`daily-prepare --test-run --rerun N`",
+        "Daily never reads staging validation state",
     ):
         assert requirement in normalized
     readiness = _text(".github/copilot/daily-readiness-prompt.md")

@@ -6,109 +6,86 @@ license: MIT
 
 # Daily Agent Insights Quality
 
-<!-- prompt-version: 3.0.0 -->
+<!-- prompt-version: 4.0.0 -->
 
-1. Set `PYTHONPATH` to the current worktree's `src` directory in the same shell as every repository
-   Python command. Verify `agent_insights_quality.__file__` resolves inside the current worktree.
-2. Resolve the Pacific business date.
-3. Fetch the privately configured Azure Boards query with `fetch-quality-work-items` into
-   `~/.aiq-runtime/agent-insights-quality/`, passing the report date. Keep active exact-`Quality` items
-   plus items closed on the previous Pacific date; exclude `Removed`.
-4. In the central Daily coordinator session, run `daily-prepare` with the Pacific report date and
-   immutable private work-item snapshot, then run `daily-provision`. Preparation reads only the
-   reviewed Sweden g30 WORM container and binds a deterministic immutable approval for the exact
-   repository and current validation digest. Provisioning reconciles and freezes the Daily registry,
-   topology, region, reviewed limits, four-issue selections, and hidden system-generated execution
-   identity under one private lifecycle/quiescence lock.
-5. Run `daily-guide`. Start exactly one visible Copilot sub session for each pending Weather,
-   Healthcare, Finance, Travel, and Support lane, up to the configured `max_parallel_agents`. Each
-   sub session runs only `daily-run-agent --agent <name>`. Never split versions or create subprocess,
-   thread-pool, or other in-process workers. Each lane runs `v0` then its four selected issues
-   sequentially, uses its Agent lock and exact checkpoint set, and may claim at most three transient
-   recoveries across resumes. The lane's reviewed start offset prevents a simultaneous endpoint burst.
-6. Keep the coordinator responsive while lanes run. Use `daily-status` or `daily-guide`; neither
-   command fans out or sends traffic. Resume only pending lanes. After all five immutable exact-bound
-   completion receipts exist, run `daily-compose`. Composition accepts only those five receipts and
-   produces exactly 20 issue packages plus five baseline packages. If the run is unrecoverable, use
-   `daily-fail --reason-code <public_safe_code> --confirm` centrally; this writes a private immutable
-   failure receipt and releases the quiescence claim without deleting any evidence or provider state.
-7. Start up to five visible Copilot assessment sub sessions, one per Agent and its five packages.
-   Assess each baseline and four issues with GPT-5.6 Sol using the repository assessment prompt. Use
-   independent `endpoint_evidence`; never assign `insight_engine` unless
-   endpoint behavior and trace contract are both proven. Equal nonzero request, response, and usable
-   response counts plus a verified trace contract prove endpoint execution. Require every reviewed
-   baseline semantic assertion, each designated issue activation assertion, and one terminal success
-   plus output signal per baseline request. Pure Prompt requests must each have one direct terminal
-   response and no function calls.
-   Never assume a baseline card is Noise merely because it came from `v0`; use independent trace
-   full-request and separate card-linked proof to distinguish an Agent runtime defect, Insight false
-   positive, framework gap, or external infrastructure failure. Route contradictory intermediate
-   evidence to `test_framework` or `unresolved`.
-8. Before finalization, give every eligible `inconclusive` baseline or `INCOMPLETE` issue with complete runtime
-   evidence one focused GPT-5.6 Sol recheck. Re-read the package-bound reviewed Agent source and
-   configuration, current endpoint evidence, independent trace proof, and the card's exact claim.
-   Never send new traffic for this recheck and never force a conclusive verdict. Rechecks may use
-   visible per-Agent assessment sessions but never traffic sessions. Run
-   `daily-validate-assessments` with the initial outputs and exact eligible recheck replacements; the
-   coordinator rejects missing, extra, stale, or unbound outputs. If independent evidence remains
-   insufficient, fail without producing a report.
-9. Run `finalize` with the validated assessments and the same private work-item snapshot. Finalization must
-   first use `--prepare-improvement-input` to write the normalized public-safe improvement input.
-   Assess that input with GPT-5.6 Sol using
-   `src/agent_insights_quality/prompts/improvement.md`, save the strict schema-bound JSON privately,
-   then run `finalize` with `--improvement-analysis <path>`. Official Daily atomically publishes the
-   living and immutable-snapshot improvement files with the report. An email-only test writes only a
-   private improvement preview and never mutates or links the living document.
-   Finalization must
-   attempt the public-safe daily ADX publication and create the immutable email request with the
-   privately configured quality-trend dashboard link. ADX may receive public catalog expectations
-   and full reasoning already present in the committed sanitized report, but never private assessment
-   packages, work-item context, prompts, responses, traces, evidence references, provider IDs,
-   Foundry versions, or private links. Record the returned ADX status. If ADX
-   publication fails, continue the email and pull-request flow; the email warning, private receipt,
-   final automation result, and pull-request description must explicitly report the failure.
-10. Run `daily-email-claim` once. Use the available Copilot email capability to send only that exact
-   immutable HTML request. Set HTML mode explicitly, never create a draft, and never retry an
-   ambiguous send. The private claim and imported provider receipt remain the sole send authority;
-   never create a public attestation file.
-11. Import one simple delivery receipt to the exact private path returned by `daily-guide`:
-   - confirmed success: `sent`, opaque provider reference, retry forbidden;
-   - explicit no-send failure: `failed`, retry allowed only for a later reviewed run;
-   - ambiguous result: `unknown`, retry forbidden and manual verification required.
-12. Validate generated paths and create exactly one `aiq-daily/` generated-only pull request. Include
-   only the sanitized ADX and delivery status in its description; never commit the cluster URI,
-   dashboard link, private claim, or private receipt. Register the one PR with
-   `daily-complete-publication`.
-13. Enable auto-merge only when a complete numeric report exists and required checks pass.
+1. Set `PYTHONPATH` to the current worktree's `src` directory for every repository Python command
+   and verify `agent_insights_quality.__file__` resolves inside that worktree.
+2. Resolve the Pacific business date. Fetch the privately configured Azure Boards query with
+   `fetch-quality-work-items` into the durable private runtime root. Keep active exact-`Quality`
+   items plus items closed on the previous Pacific date; exclude `Removed`.
+3. In the visible coordinator, run `daily-prepare`, `daily-provision`, and `daily-guide`.
+   Preparation binds the clean checkout, catalogs, reviewed policy, four issues per Agent, private
+   work-item snapshot, and opaque execution identity. Daily never reads staging validation state.
+4. Start one visible session for each pending Weather, Healthcare, Finance, Travel, and Support
+   lane. Each runs only:
 
-For a reviewed email-only test, run `daily-prepare` with both `--test-run` and a nonzero `--rerun N`.
-The private `daily_test` recipient override is required. By default, the test publishes nothing to
-GitHub. The additional explicit `--publish-preview` option authorizes finalization to append one
-immutable `<public-run-id>/` directory to the dedicated orphan `aiq-email-test-preview` branch. That
-directory contains only the schema-bound manifest, sanitized `report.json`/`report.md`, and exactly
-five generated per-Agent Markdown files. Existing run directories are permanent and immutable; any
-unmanaged or divergent branch content fails closed. Email links use the stable branch plus unique run
-directory. The improvement link stays hidden, and no preview branch creates a pull request.
+   ```powershell
+   python -m agent_insights_quality daily-run-agent --agent <name>
+   ```
 
-The test run still uses deployed endpoints, bounded post-invoke telemetry correlation, and private
-durable runtime state, but finalization must send only the one TEST-marked email. It must not contact
-ADX, write repository report or trend paths, validate generated paths, create a pull request, or enable
-auto-merge. Stop after importing the provider receipt into the private run directory. Scheduled
-official runs never pass `--test-run` or `--publish-preview`.
+   The five lanes may run concurrently; there is no hidden fan-out. Each lane processes exactly
+   `v0`, issue 1, issue 2, issue 3, and issue 4 in forward order. For each version, finish the full
+   traffic -> telemetry/trace verification -> Agent Insights -> immutable result pipeline before
+   waiting the reviewed 60 seconds and starting the next version. Daily never sends paired-`v0`
+   issue traffic.
+5. Every Agent/version owns an independent bounded claim lock and immutable artifact directory.
+   Endpoint calls, telemetry queries, Agent Insights calls, and artifact writes never hold the global
+   coordinator lock. Publish the exact traffic receipt before any aggregate pointer update; repeated
+   identical publication is idempotent and conflicting content fails closed. Status and composition
+   rebuild aggregate lane progress from immutable version artifacts after a crash. Never resend
+   traffic after a definitive receipt.
+6. Verify one whole target at a time from its exact response identities. `operation_Id` bounds the
+   trace; the exact Agent, version, response identity, `span_id`, and `parent_span_id` select the
+   `invoke_agent` root and complete descendant tree. Ignore foreign-identity roots, collapse only
+   byte-identical telemetry rows, and fail closed on multiple distinct exact roots. Query and
+   stabilize the whole batch, never individual attempts.
+7. The total Daily telemetry maturity horizon is five minutes from immutable
+   `traffic_completed_at`. Apply the age-aware hydration grace, poll adaptively with public-safe
+   heartbeats, and use a short consecutive-snapshot stability interval. At the five-minute boundary,
+   take one final exact whole-target snapshot. Complete unambiguous evidence may pass immediately
+   there even when another stability interval cannot fit.
+8. Send and retain all ten attempts. Aggregate acceptance requires at least six complete
+   role-specific passes:
+   - baseline: six complete healthy attempts;
+   - issue: six complete defect-observed attempts.
 
-Five visible Copilot Agent-lane sub sessions execute concurrently while versions and endpoint
-requests remain sequential inside each lane. The code never internally fans out Daily lanes or
-assessment lanes. Daily provisioning is new-only: it exact-selects the dedicated Sweden `g30`
-storage account, tries the exact checkout approval path, then lists only this repository's
-deterministic approved-record prefix and selects the first canonical immutable record matching the
-current validation digest. It never accepts an operator-supplied local record or falls back to legacy
-storage or an old West US 2 promotion receipt. Local Test Agent Validation covers all 36 issues plus
-five baselines outside this Daily workflow.
+   The remaining four attempts are transparent misses of any kind and never veto six strict passes.
+   Each passing attempt still requires complete endpoint, exact identity, required semantic and trace
+   evidence, and internally consistent proof. Preserve pass indices and mutually exclusive miss
+   categories in `role_pass_summary`. Pure Prompt traffic still forbids every function call.
+9. If evidence is still missing or ambiguous at the boundary, persist `skipped_telemetry`; do not
+   run Agent Insights and do not retraffic. Complete evidence with fewer than six role passes is
+   `skipped_agent_activation`. A terminal provider/Agent Insights failure after verified traffic is
+   `skipped_insight`. Skip only that version and continue the same Agent lane after pacing. If `v0`
+   is skipped, continue its four issues and expose missing baseline coverage.
+10. Reset/reconcile the Agent Insights monitor exactly once per Agent, immediately before that
+    Agent's first eligible Insight run. Never reset between versions. Derive and persist each
+    version's minute-ceiling lookback from its own immutable traffic start through actual Insight
+    start plus margin. Exact operation filtering excludes all earlier versions, including skipped
+    traces. Persist start intent before POST, reconcile ambiguous starts without endpoint traffic,
+    and accept only exact-run, exact-version cards wholly linked to that version's operations.
+11. Run `daily-compose` after all five lanes are terminal. `daily-status` and `daily-guide` are
+    read-only. Composition performs long artifact/package work outside the global lock and uses only
+    a short lifecycle CAS to publish `COMPOSED`.
+12. Assess only eligible baseline and issue packages with GPT-5.6 Sol. Use independent endpoint and
+    full-request trace proof; never use a card's claim as Agent proof. Keep global card-link,
+    ownership, duplicate, and scoring-field rules. A focused recheck may reuse evidence but never
+    sends traffic or forces a verdict.
+13. Skipped issues are excluded from both score numerator and expected-issue denominator. Noise and
+    duplicate penalties include only eligible assessed issue cards. Reports, email, ADX, improvement
+    input, and per-Agent views must expose `eligible_issue_count`, `skipped_issue_count`, exact skipped
+    issue statuses/reasons, and baseline coverage. If no issue is eligible, produce no numeric score
+    and fail finalization.
+14. Finalize with the same private work-item snapshot and schema-bound GPT-5.6 Sol improvement
+    analysis. Attempt public-safe ADX publication, create and send exactly one immutable HTML email
+    request, import exactly one provider receipt, and create one generated-only `aiq-daily/` pull
+    request. Never publish private packages, prompts, payloads, traces, identifiers, dashboard links,
+    work-item content, claims, or provider receipts.
 
-Any inconclusive baseline or issue assessment fails finalization and produces no report.
+For an email-only test, use `daily-prepare --test-run --rerun N` with a nonzero rerun and the private
+test recipient. It never writes ADX, repository report/trend paths, or a pull request unless the
+separate reviewed preview option is explicitly supplied. Stop after importing the one provider
+receipt.
 
-Never change catalogs, Agent implementations, schemas, infrastructure, configuration, or skills from
-daily automation. Never target staging. ADX is the only authorized analytics write and accepts only
-the finalized public-safe v3 result and explanation payload; Application Insights remains read-only.
-Never write telemetry or commit the Boards query, work-item snapshot, ADX receipt, rendered
-dashboard, cluster URI, or dashboard link.
+Use `daily-fail --reason-code <public_safe_code> --confirm` only for an unrecoverable run. Daily
+status/guide never deploy, invoke, query telemetry, run Agent Insights, assess, publish, or email.

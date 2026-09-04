@@ -69,7 +69,13 @@
           "properties": {
             "matched_reference_count": {"type": "integer", "minimum": 0},
             "expected_reference_count": {"type": "integer", "minimum": 1},
-            "missing_reference_count": {"type": "integer", "minimum": 0}
+            "missing_reference_count": {"type": "integer", "minimum": 0},
+            "invocation_receipt_digest": {"$ref": "#/$defs/hash"},
+            "evidence_window_end": {"$ref": "#/$defs/timestamp"},
+            "maturity_boundary": {"$ref": "#/$defs/timestamp"},
+            "snapshot_observed_at": {"$ref": "#/$defs/timestamp"},
+            "maximum_hydration_seconds": {"type": "integer", "minimum": 1},
+            "stabilization_seconds": {"type": "integer", "minimum": 1}
           }
         }
       ]

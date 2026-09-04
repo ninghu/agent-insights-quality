@@ -6,7 +6,7 @@ from datetime import date, timedelta
 import pytest
 
 from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
-from agent_insights_quality.selection import select_daily, select_full
+from agent_insights_quality.selection import select_daily
 from agent_insights_quality.util import ContractError
 
 
@@ -44,13 +44,6 @@ def test_daily_rotation_balances_each_issue_over_ten_business_days() -> None:
         )
         assert set(frequencies) == set(agent["issue_ids"])
         assert max(frequencies.values()) - min(frequencies.values()) <= 1
-
-
-def test_full_selection_remains_36_issues_and_41_packages() -> None:
-    agents, _ = load_catalogs()
-    selected = select_full(agents)
-    assert sum(len(issue_ids) for issue_ids in selected.values()) == 36
-    assert sum(len(issue_ids) for issue_ids in selected.values()) + len(selected) == 41
 
 
 def test_weekends_are_rejected() -> None:

@@ -21,10 +21,6 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
     assert policy.max_parallel_agents == 5
     assert policy.insight_lookback_hours == 0.1
     assert policy.telemetry_resource_set == FIXED_TELEMETRY_RESOURCE_SET == "g30"
-    assert (
-        policy.approved_record_container
-        == "test-agent-validation-approved-records-swedencentral-g30"
-    )
     assert policy.storage_account_prefix == FIXED_STORAGE_ACCOUNT_PREFIX == "aiqsweart"
     assert (
         policy.storage_resource_role
@@ -44,7 +40,8 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
     assert policy.max_recovery_versions == 3
     assert policy.agent_start_stagger_seconds == 5
     assert policy.clean_window_max_wait_seconds >= 990
-    assert policy.trace_assertion_stabilization_seconds == 180
+    assert policy.trace_assertion_stabilization_seconds == 30
+    assert policy.daily_trace_hydration_maximum_wait_seconds == 300
     assert policy.insight_start_margin_seconds == 30
 
 
@@ -60,12 +57,12 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
         (
             "trace_assertion_stabilization_seconds",
             "45",
-            "reviewed ingestion margin",
+            "reviewed two-snapshot duration",
         ),
         (
             "trace_assertion_stabilization_seconds",
             "900",
-            "bounded deadline",
+            "reviewed two-snapshot duration",
         ),
         ("insight_start_margin_seconds", "345", "within lookback"),
         ("telemetry_resource_set", "g29", "fixed reviewed set"),
@@ -73,11 +70,6 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
         ("storage_resource_role", "legacy-storage", "reviewed value"),
         ("quality_artifact_container", "legacy-artifacts", "not reviewed"),
         ("deployment_registry_container", "legacy-registry", "not reviewed"),
-        (
-            "approved_record_container",
-            "test-agent-validation-approved-records",
-            "reviewed environment namespace",
-        ),
     ],
 )
 def test_automation_policy_rejects_unreviewed_values(

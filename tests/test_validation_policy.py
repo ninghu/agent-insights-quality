@@ -14,7 +14,6 @@ from agent_insights_quality.validation_policy import (
 
 def test_validation_policy_freezes_local_inventory_and_limits() -> None:
     policy = load_validation_policy()
-    assert policy.authority_count == 41
     assert policy.environment_id == "swedencentral-g30"
     assert policy.location == "swedencentral"
     assert policy.project_name == "aiq-staging-swedencentral"

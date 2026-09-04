@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import inspect
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -69,6 +71,26 @@ def test_all_authorities_share_one_verifier_digest() -> None:
     } == {active["digests"]["verifier_digest"]}
 
 
+def test_public_history_lists_all_authorities_without_private_bindings() -> None:
+    history = validation_coordinator._public_authority_history(
+        _active_validation()
+    )
+
+    assert len({item["canonical_agent"] for item in history}) == 5
+    assert {item["status"] for item in history} == {"missing"}
+    assert all(
+        set(item)
+        == {
+            "authority_id",
+            "canonical_agent",
+            "status",
+            "changed",
+            "verification_required_reason",
+        }
+        for item in history
+    )
+
+
 def test_validation_orchestration_contains_no_hidden_worker_pool() -> None:
     source = inspect.getsource(validation_coordinator) + inspect.getsource(
         validation_runtime
@@ -121,7 +143,6 @@ def _requirements_for_endpoint_pass(
     active["invocation_authority_ids"] = []
     journal = SimpleNamespace(
         read_active=lambda: SimpleNamespace(value=active),
-        superseded_run_ids=lambda _active: ["validation-000000000000"],
     )
     monkeypatch.setattr(
         validation_coordinator,
@@ -152,18 +173,9 @@ def _requirements_for_endpoint_pass(
     )
     monkeypatch.setattr(
         validation_coordinator,
-        "has_prior_nonpass_result_for_invocation",
-        lambda _result, *, prior_run_ids: (
-            repeated_nonpass
-            and prior_run_ids == ["validation-000000000000"]
-        ),
+        "_recovery_source_has_same_nonpass",
+        lambda _active, _result: repeated_nonpass,
     )
-    monkeypatch.setattr(
-        validation_coordinator,
-        "_approved_paired_trace_gap",
-        lambda *_args, **_kwargs: False,
-    )
-
     incomplete, endpoint_bad = _current_invocation_requirements(
         journal=journal,
         plan={
@@ -261,6 +273,35 @@ def test_invocation_recovery_does_not_cross_pull_requests(monkeypatch) -> None:
     ) == ([], [])
 
 
+def test_fresh_advisory_generation_does_not_reuse_global_receipt_history(
+    monkeypatch,
+) -> None:
+    active = _active_validation()
+    authority_ids = list(active["invocation_authority_ids"])
+    journal = SimpleNamespace(
+        read_active=lambda: SimpleNamespace(value=active),
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_source_invocation_receipt_references",
+        lambda _active: [],
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "current_authority_verification_results",
+        lambda **_kwargs: {},
+    )
+
+    assert _current_invocation_requirements(
+        journal=journal,
+        plan={
+            "repository": active["repository"],
+            "pr_number": active["pr_number"],
+        },
+        authorities=authority_specs(*load_catalogs()),
+    ) == (authority_ids, [])
+
+
 def _active_validation() -> dict:
     authorities = authority_specs(*load_catalogs())
     authority_ids = [item.authority_id for item in authorities]
@@ -299,6 +340,8 @@ def _active_validation() -> dict:
         },
         "validation_authority_ids": authority_ids,
         "reused_authorities": [],
+        "invocation_authority_ids": ["issue-014"],
+        "reused_invocations": [],
         "deployment_assignments": [],
         "invocation_shard_assignments": [
             {
@@ -471,7 +514,10 @@ def _copilot_scheduling_context(monkeypatch, tmp_path) -> dict:
         lambda _evidence: ("PASS", None, None),
     )
 
-    def write_result(*, authority, **_kwargs):
+    lock_modes = []
+
+    def write_result(*, authority, **kwargs):
+        lock_modes.append(kwargs["coordinator_lock_held"])
         authority_id = authority.authority_id
         reference = {
             "authority_id": authority_id,
@@ -519,6 +565,7 @@ def _copilot_scheduling_context(monkeypatch, tmp_path) -> dict:
         "claimant": claimant,
         "results": results,
         "package_calls": package_calls,
+        "lock_modes": lock_modes,
     }
 
 
@@ -556,7 +603,9 @@ def test_eight_unique_copilot_claims_fill_capacity_and_ninth_is_blocked(
     )
     assert blocked == {
         "status": "assessment_capacity_full",
-        "pending_authority_count": 41,
+        "pending_authority_count": len(
+            _active_validation()["validation_authority_ids"]
+        ),
         "active_authority_evaluator_count": 8,
         "available_authority_evaluator_slots": 0,
     }
@@ -604,6 +653,7 @@ def test_copilot_import_isolated_by_worktree_and_replenishes_capacity(
     )
     assert imported["status"] == "verified"
     assert imported["outcome"] == "PASS"
+    assert state["lock_modes"] == [True]
     assert (
         validation_copilot.active_copilot_claims(
             prepared=state["active"]
@@ -619,6 +669,108 @@ def test_copilot_import_isolated_by_worktree_and_replenishes_capacity(
     assert replacement["package_path"] != first["package_path"]
     assert replacement["active_authority_evaluator_count"] == 1
     assert len(state["results"]) == 1
+
+
+def test_copilot_can_release_only_its_own_claim_for_immediate_reuse(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state = _copilot_scheduling_context(monkeypatch, tmp_path)
+    first_claimant = content_hash("first-worktree")
+    second_claimant = content_hash("second-worktree")
+    state["claimant"]["value"] = first_claimant
+    first = validation_coordinator.prepare_test_agent_validation_assessment()
+
+    released = validation_coordinator.release_test_agent_validation_assessment()
+
+    assert released["status"] == "assessment_released"
+    assert validation_copilot.active_copilot_claims(
+        prepared=state["active"]
+    ) == []
+    with pytest.raises(ContractError, match="was released"):
+        validation_coordinator.import_test_agent_validation_assessment()
+
+    state["claimant"]["value"] = second_claimant
+    replacement = (
+        validation_coordinator.prepare_test_agent_validation_assessment()
+    )
+    assert replacement["status"] == "assessment_ready"
+    assert replacement["package_path"] != first["package_path"]
+
+    stale_pointer = validation_copilot.load_claim_pointer(
+        claimant_reference=second_claimant,
+    )
+    validation_copilot.release_active_pointer(stale_pointer)
+    with pytest.raises(ContractError, match="changed before release"):
+        validation_copilot.release_active_pointer(
+            stale_pointer,
+        )
+
+
+def test_copilot_release_rejects_another_worktrees_claim(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state = _copilot_scheduling_context(monkeypatch, tmp_path)
+    first_claimant = content_hash("first-worktree")
+    second_claimant = content_hash("second-worktree")
+    state["claimant"]["value"] = first_claimant
+    validation_coordinator.prepare_test_agent_validation_assessment()
+
+    state["claimant"]["value"] = second_claimant
+    with pytest.raises(ContractError, match="no Copilot assessment claim"):
+        validation_coordinator.release_test_agent_validation_assessment()
+    assert len(
+        validation_copilot.active_copilot_claims(prepared=state["active"])
+    ) == 1
+
+
+def test_completed_copilot_result_cannot_be_released(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state = _copilot_scheduling_context(monkeypatch, tmp_path)
+    validation_coordinator.prepare_test_agent_validation_assessment()
+    validation_coordinator.import_test_agent_validation_assessment()
+
+    with pytest.raises(ContractError, match="Completed.*cannot be released"):
+        validation_coordinator.release_test_agent_validation_assessment()
+    assert len(state["results"]) == 1
+
+
+def test_preassignment_lock_contention_is_structured_and_retryable(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state = _copilot_scheduling_context(monkeypatch, tmp_path)
+
+    class BusyLock:
+        def __enter__(self):
+            raise validation_coordinator.ValidationLockBusy("synthetic busy")
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(
+        validation_coordinator,
+        "evaluation_lock",
+        lambda: BusyLock(),
+    )
+
+    result = validation_coordinator.prepare_test_agent_validation_assessment()
+
+    assert result == {
+        "status": "assessment_busy",
+        "retryable": True,
+        "next_command": (
+            "python -m agent_insights_quality "
+            "prepare-test-agent-validation-assessment"
+        ),
+    }
+    assert state["results"] == {}
+    assert validation_copilot.active_copilot_claims(
+        prepared=state["active"]
+    ) == []
 
 
 def test_copilot_claim_fence_failure_never_persists_incomplete_result(
@@ -644,8 +796,76 @@ def test_copilot_claim_fence_failure_never_persists_incomplete_result(
     claims = validation_copilot.active_copilot_claims(
         prepared=state["active"]
     )
-    assert len(claims) == 1
-    assert claims[0]["claim_state"] == "preparing"
+    assert claims == []
+
+
+def test_distinct_copilot_claims_prepare_concurrently_outside_global_lock(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state = _copilot_scheduling_context(monkeypatch, tmp_path)
+    claimants = threading.local()
+    barrier = threading.Barrier(2)
+    original_write = validation_coordinator.write_private_package
+    results: list[dict] = []
+    errors: list[BaseException] = []
+    results_lock = threading.Lock()
+    monkeypatch.setattr(
+        validation_coordinator,
+        "copilot_claimant_reference",
+        lambda: claimants.value,
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "evaluation_lock",
+        lambda: validation_coordinator.LocalValidationLock(
+            tmp_path / "coordinator.lock",
+            wait_seconds=0.25,
+        ),
+    )
+
+    def concurrent_write(**kwargs):
+        barrier.wait(timeout=2)
+        return original_write(**kwargs)
+
+    monkeypatch.setattr(
+        validation_coordinator,
+        "write_private_package",
+        concurrent_write,
+    )
+
+    def prepare(index: int) -> None:
+        claimants.value = content_hash(f"concurrent-worktree-{index}")
+        try:
+            result = (
+                validation_coordinator.prepare_test_agent_validation_assessment()
+            )
+        except BaseException as error:
+            with results_lock:
+                errors.append(error)
+        else:
+            with results_lock:
+                results.append(result)
+
+    threads = [
+        threading.Thread(target=prepare, args=(index,))
+        for index in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert len(results) == 2
+    assert {item["status"] for item in results} == {"assessment_ready"}
+    claims = validation_copilot.active_copilot_claims(
+        prepared=state["active"]
+    )
+    assert len(claims) == 2
+    assert len({item["authority_id"] for item in claims}) == 2
+    assert len({item["claimant_reference"] for item in claims}) == 2
 
 
 def test_copilot_import_rejects_stale_generation(
@@ -801,7 +1021,9 @@ def test_completed_invocation_exposes_eight_copilot_verification_slots(
     status = validation_coordinator.run_test_agent_validation()
 
     assert reconciled["verification_authority_concurrency"] == 8
-    assert reconciled["verification_pending_authority_count"] == 41
+    assert reconciled["verification_pending_authority_count"] == len(
+        _active_validation()["validation_authority_ids"]
+    )
     assert status["status"] == "verification_pending"
     assert status["maximum_active_subsessions"] == 8
     assert status["active_authority_evaluator_count"] == 0
@@ -959,15 +1181,158 @@ def test_no_pending_with_incomplete_result_requests_new_prepare(
     )
 
     assert status["status"] == "verification_incomplete"
-    assert status["completed_authority_count"] == 41
     assert status["pending_authority_count"] == 0
     assert status["first_failed_authority_id"] == incomplete_id
     assert status["first_failed_outcome"] == "INCOMPLETE"
     assert status["query_stage"] == "trace_output_stability"
     assert status["error_code"] == "telemetry_not_stable"
     assert status["next_commands"] == [
-        "python -m agent_insights_quality prepare-test-agent-validation"
+        "python -m agent_insights_quality recover-test-agent-validation"
     ]
+
+
+def test_recovery_advances_and_reconciles_to_zero_traffic_recheck(
+    monkeypatch,
+) -> None:
+    source = _active_validation()
+    source["journal_digest"] = content_hash({"source": source["run_id"]})
+    incomplete_id = source["validation_authority_ids"][0]
+    successor = copy.deepcopy(source)
+    successor["run_id"] = "validation-fedcba987654"
+    successor["validation_authority_ids"] = [incomplete_id]
+    successor["reused_authorities"] = [
+        {
+            "authority_id": authority_id,
+            "path": f"synthetic/{authority_id}.json",
+            "authority_result_digest": content_hash({"result": authority_id}),
+            "authority_evidence_digest": content_hash(
+                {"evidence": authority_id}
+            ),
+        }
+        for authority_id in source["validation_authority_ids"][1:]
+    ]
+    successor["invocation_authority_ids"] = []
+    successor["reused_invocations"] = [
+        {
+            "authority_id": incomplete_id,
+            "path": "synthetic/invocation.json",
+            "receipt_digest": content_hash("receipt"),
+            "invocation_digest": content_hash("invocation"),
+        }
+    ]
+    successor["invocation_shard_assignments"] = []
+    successor["verification_authority_assignments"] = [
+        verification_assignment(successor, incomplete_id)
+    ]
+    calls: list[tuple[str, str | None]] = []
+    git = SimpleNamespace(
+        repository=source["repository"],
+        pr_number=source["pr_number"],
+        commit_sha=source["commit_sha"],
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "discover_local_git_context",
+        lambda: git,
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_matching_active",
+        lambda _git: source,
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_validation_recovery_candidate",
+        lambda _active, *, git: {
+            "incomplete_authority_ids": [incomplete_id]
+        },
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_prepare_test_agent_validation",
+        lambda *, recovery_source_digest: (
+            calls.append(("prepare", recovery_source_digest))
+            or {"deployment_shards": []}
+        ),
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "reconcile_test_agent_validation_deployment",
+        lambda: calls.append(("reconcile", None)),
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "_active_for_state",
+        lambda _state: successor,
+    )
+    monkeypatch.setattr(
+        validation_coordinator.LifecycleJournal,
+        "superseded_run_ids",
+        lambda _journal, _successor: [source["run_id"]],
+    )
+
+    result = validation_coordinator.recover_test_agent_validation()
+
+    assert calls == [
+        ("prepare", source["journal_digest"]),
+        ("reconcile", None),
+    ]
+    assert result["status"] == "recovery_verification_pending"
+    assert result["recovery_authority_count"] == 1
+    assert result["deployment_shards"] == []
+    assert result["invoke_shards"] == []
+    assert result["verification_pending_authority_count"] == 1
+    assert result["reused_authority_count"] == 40
+    assert result["next_commands"] == [
+        "python -m agent_insights_quality "
+        "prepare-test-agent-validation-assessment"
+    ]
+
+
+def test_recovery_successor_preserves_immutable_ancestry_and_scope() -> None:
+    source = _active_validation()
+    source_before = copy.deepcopy(source)
+    incomplete_ids = source["validation_authority_ids"][:2]
+    successor = copy.deepcopy(source)
+    successor["run_id"] = "validation-fedcba987654"
+    successor["validation_authority_ids"] = incomplete_ids
+    successor["reused_authorities"] = [
+        {"authority_id": authority_id}
+        for authority_id in source["validation_authority_ids"]
+        if authority_id not in incomplete_ids
+    ]
+    successor["invocation_authority_ids"] = [incomplete_ids[1]]
+    successor["invocation_shard_assignments"] = [
+        {
+            "shard_id": 1,
+            "authority_ids": [incomplete_ids[1]],
+            "quota_plan_digest": successor["digests"]["quota_plan_digest"],
+        }
+    ]
+    successor["verification_authority_assignments"] = [
+        verification_assignment(successor, authority_id)
+        for authority_id in incomplete_ids
+    ]
+
+    validation_coordinator._validate_recovery_successor(
+        source=source,
+        successor=successor,
+        incomplete_authority_ids=incomplete_ids,
+        ancestor_run_ids=[source["run_id"]],
+    )
+
+    assert source == source_before
+    successor["invocation_authority_ids"].append(
+        source["validation_authority_ids"][2]
+    )
+    with pytest.raises(ContractError, match="successor selection is invalid"):
+        validation_coordinator._validate_recovery_successor(
+            source=source,
+            successor=successor,
+            incomplete_authority_ids=incomplete_ids,
+            ancestor_run_ids=[source["run_id"]],
+        )
+
 
 def test_no_pending_complete_results_permit_failed_composition(
     monkeypatch,
@@ -986,7 +1351,6 @@ def test_no_pending_complete_results_permit_failed_composition(
     )
 
     assert status["status"] == "composition_pending"
-    assert status["completed_authority_count"] == 41
     assert status["first_failed_authority_id"] == failed_id
     assert status["first_failed_outcome"] == "FAIL"
     assert status["next_commands"] == [

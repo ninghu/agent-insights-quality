@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.reporting import (
+    _runtime_evidence_complete,
     apply_score_comparison,
     apply_staging_score_comparison,
     build_report,
@@ -18,33 +19,133 @@ from agent_insights_quality.reporting import (
     validate_report,
     validate_published_report,
 )
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.live import (
+    _normalize_fixture,
+    _semantic_assertion_names,
+    _trace_assertion_names,
+)
+from agent_insights_quality.util import ROOT, ContractError
+from agent_insights_quality.validation_rules import (
+    execution_context,
+    execution_requests,
+    issue_observation_context,
+)
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_target_decision,
+)
 import pytest
 
 
 def _manifest(*, full: bool = False) -> dict:
-    agents, _ = load_catalogs()
+    agents, issues = load_catalogs()
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
 
-    def request_summaries(*, prompt: bool, activation: bool) -> list[dict]:
-        return [
-            {
+    def evidence(
+        traffic_path: Path,
+        *,
+        prompt: bool,
+        baseline: bool,
+    ) -> dict:
+        summaries = []
+        for index, raw in enumerate(execution_requests(traffic_path)):
+            fixture = _normalize_fixture(raw)
+            semantic_names = _semantic_assertion_names(
+                fixture["semantic_assertions"]
+            )
+            trace_names = _trace_assertion_names(fixture["trace_assertions"])
+            summaries.append({
                 "request_index": index,
                 "response_count": 1,
                 "usable_response": True,
-                "semantic_assertion_count": 1,
-                "semantic_assertions_passed": 1,
+                "semantic_assertion_count": len(semantic_names),
+                "semantic_assertions_passed": len(semantic_names),
                 "assertion_results": [
-                    {"assertion": "synthetic_contract", "passed": True}
+                    {
+                        "assertion": name,
+                        "passed": True,
+                        "evidence_sufficient": True,
+                    }
+                    for name in semantic_names
                 ],
-                "trace_assertion_count": 0,
-                "trace_assertions_passed": 0,
-                "trace_assertion_results": [],
-                "activation_gate": activation,
+                "trace_assertion_count": len(trace_names),
+                "trace_assertions_passed": len(trace_names),
+                "trace_assertion_results": [
+                    {
+                        "assertion": name,
+                        "passed": True,
+                        "evidence_sufficient": True,
+                    }
+                    for name in trace_names
+                ],
+                "activation_gate": fixture["activation_gate"],
                 "direct_terminal_response_count": int(prompt),
                 "function_call_count": 0,
-            }
-            for index in range(5)
-        ]
+                "error_code": None,
+            })
+        request_count = len(summaries)
+        context = (
+            execution_context(traffic_path)
+            if baseline
+            else issue_observation_context(traffic_path)
+        )
+        value = {
+            **(
+                context
+            ),
+            "endpoint_request_count": request_count,
+            "endpoint_response_count": request_count,
+            "endpoint_usable_response_count": request_count,
+            "semantic_assertion_count": sum(
+                item["semantic_assertion_count"] for item in summaries
+            ),
+            "semantic_assertions_passed": sum(
+                item["semantic_assertions_passed"] for item in summaries
+            ),
+            "trace_assertion_count": sum(
+                item["trace_assertion_count"] for item in summaries
+            ),
+            "trace_assertions_passed": sum(
+                item["trace_assertions_passed"] for item in summaries
+            ),
+            "trace_contract_verified": True,
+            "trace_maturity_proof": None,
+            "role_pass_summary": None,
+            "trace_behavior_summary": (
+                {
+                    "operation_count": request_count,
+                    "tool_call_counts": {},
+                    "tool_response_count": 0,
+                    "assistant_response_count": request_count,
+                    "explicit_terminal_success_count": request_count,
+                    "explicit_terminal_output_count": request_count,
+                    "terminal_response_count": request_count,
+                    "terminal_success_count": request_count,
+                    "terminal_output_count": request_count,
+                    "handled_error_count": 0,
+                    "unhandled_error_count": 0,
+                }
+                if baseline
+                else {}
+            ),
+            "endpoint_request_summaries": summaries,
+        }
+        _, value["role_pass_summary"] = daily_target_decision(
+            target_role="baseline" if baseline else "issue",
+            validation_mode=str(context["validation_mode"]),
+            n=int(context["n"]),
+            k=int(context["k"]),
+            required_surfaces=(
+                ["semantic", "trace"]
+                if baseline
+                else context["required_surfaces"]
+            ),
+            summaries=[
+                item for item in summaries if item["activation_gate"] is True
+            ],
+            identity_verified=True,
+            direct_prompt_contract=prompt,
+        )
+        return value
 
     values = []
     for agent in agents["agents"]:
@@ -59,30 +160,10 @@ def _manifest(*, full: bool = False) -> dict:
                     "foundry_version": "1",
                     "status": "passed",
                     "insight_references": [],
-                    "endpoint_request_count": 5,
-                    "endpoint_response_count": 5,
-                    "endpoint_usable_response_count": 5,
-                    "semantic_assertion_count": 5,
-                    "semantic_assertions_passed": 5,
-                    "trace_assertion_count": 0,
-                    "trace_assertions_passed": 0,
-                    "trace_contract_verified": True,
-                    "trace_behavior_summary": {
-                        "operation_count": 5,
-                        "tool_call_counts": {},
-                        "tool_response_count": 0,
-                        "assistant_response_count": 5,
-                        "explicit_terminal_success_count": 5,
-                        "explicit_terminal_output_count": 5,
-                        "terminal_response_count": 5,
-                        "terminal_success_count": 5,
-                        "terminal_output_count": 5,
-                        "handled_error_count": 0,
-                        "unhandled_error_count": 0,
-                    },
-                    "endpoint_request_summaries": request_summaries(
+                    **evidence(
+                        ROOT / agent["baseline_path"] / "traffic.json",
                         prompt=prompt,
-                        activation=False,
+                        baseline=True,
                     ),
                 },
                 "issues": [
@@ -92,18 +173,12 @@ def _manifest(*, full: bool = False) -> dict:
                         "status": "observed",
                         "insight_references": ["sha256:" + "a" * 64],
                         "evidence_reference": "sha256:" + "b" * 64,
-                        "endpoint_request_count": 5,
-                        "endpoint_response_count": 5,
-                        "endpoint_usable_response_count": 5,
-                        "semantic_assertion_count": 5,
-                        "semantic_assertions_passed": 5,
-                        "trace_assertion_count": 0,
-                        "trace_assertions_passed": 0,
-                        "trace_contract_verified": True,
-                        "trace_behavior_summary": {},
-                        "endpoint_request_summaries": request_summaries(
+                        **evidence(
+                            ROOT
+                            / issue_by_id[issue_id]["implementation"]
+                            / "traffic.json",
                             prompt=prompt,
-                            activation=prompt,
+                            baseline=False,
                         ),
                     }
                     for issue_id in selected
@@ -223,6 +298,129 @@ def test_report_uses_correct_issue_percentage_without_status() -> None:
     assert failed["summary"]["issues_incorrect"] == 4
     assert failed["summary"]["quality_score"] == 80
     assert "status" not in failed
+
+
+def test_skipped_versions_are_visible_and_excluded_from_issue_score() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    skipped_issue = manifest["agents"][0]["issues"][0]
+    skipped_issue.update(
+        {
+            "status": "skipped_agent_activation",
+            "error_code": "agent_activation_below_threshold",
+            "insight_references": [],
+        }
+    )
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "skipped_telemetry",
+            "error_code": "trace_assertion_failed_mature",
+            "insight_references": [],
+        }
+    )
+    assessments = _assessments(manifest)
+    assessments.pop(skipped_issue["issue_id"])
+    baselines = _baseline_assessments(manifest)
+    baselines.pop("weather-agent")
+
+    report = build_report(manifest, issues, assessments, baselines)
+
+    assert report["summary"]["eligible_issue_count"] == 19
+    assert report["summary"]["skipped_issue_count"] == 1
+    assert report["summary"]["issues_expected"] == 19
+    assert report["summary"]["quality_score"] == 100
+    assert report["summary"]["skipped_issues"] == [
+        {
+            "issue_id": skipped_issue["issue_id"],
+            "status": "skipped_agent_activation",
+            "reason_code": "agent_activation_below_threshold",
+        }
+    ]
+    assert report["summary"]["baseline_coverage"]["missing_agents"] == [
+        "weather-agent"
+    ]
+    skipped = next(
+        item
+        for item in report["issues"]
+        if item["issue_id"] == skipped_issue["issue_id"]
+    )
+    assert skipped["outcome"] == "skipped"
+    assert skipped["assessment"]["ownership"] == "agent"
+    validate_report(report)
+
+
+def test_all_skipped_issues_produce_no_numeric_report() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    for agent in manifest["agents"]:
+        for issue in agent["issues"]:
+            issue.update(
+                {
+                    "status": "skipped_telemetry",
+                    "error_code": "trace_assertion_failed_mature",
+                    "insight_references": [],
+                }
+            )
+
+    with pytest.raises(ContractError, match="No eligible issue evidence"):
+        build_report(
+            manifest,
+            issues,
+            {},
+            _baseline_assessments(manifest),
+        )
+
+
+def test_reporting_uses_reviewed_model_mediated_threshold() -> None:
+    manifest = _manifest()
+    issue = next(
+        value
+        for agent in manifest["agents"]
+        for value in agent["issues"]
+        if value["issue_id"] == "issue-004"
+    )
+    observations = [
+        summary
+        for summary in issue["endpoint_request_summaries"]
+        if summary["activation_gate"]
+    ]
+    for summary in observations[-4:]:
+        summary["semantic_assertions_passed"] = 0
+        for result in summary["assertion_results"]:
+            result["passed"] = False
+    issue["semantic_assertions_passed"] -= sum(
+        summary["semantic_assertion_count"] for summary in observations[-4:]
+    )
+    traffic_path = (
+        ROOT
+        / "agents"
+        / "weather-agent"
+        / "issues"
+        / "issue-004"
+        / "traffic.json"
+    )
+    context = issue_observation_context(traffic_path)
+
+    def refresh_summary() -> None:
+        _, issue["role_pass_summary"] = daily_target_decision(
+            target_role="issue",
+            validation_mode=str(context["validation_mode"]),
+            n=int(context["n"]),
+            k=int(context["k"]),
+            required_surfaces=context["required_surfaces"],
+            summaries=observations,
+            identity_verified=True,
+        )
+
+    refresh_summary()
+    assert _runtime_evidence_complete(issue, traffic_path=traffic_path) is True
+    failing = observations[-5]
+    failing["semantic_assertions_passed"] = 0
+    for result in failing["assertion_results"]:
+        result["passed"] = False
+    issue["semantic_assertions_passed"] -= failing["semantic_assertion_count"]
+    refresh_summary()
+    assert _runtime_evidence_complete(issue, traffic_path=traffic_path) is False
 
 
 def test_quality_score_formula_is_directly_explainable() -> None:
@@ -746,7 +944,7 @@ def test_scored_trend_day_cannot_be_replaced() -> None:
         updated_trend(report, base)
 
 
-def test_optional_fields_do_not_score_and_noise_expands_denominator() -> None:
+def test_optional_fields_and_baseline_cards_do_not_change_issue_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     assessments = _assessments(manifest)
@@ -777,8 +975,8 @@ def test_optional_fields_do_not_score_and_noise_expands_denominator() -> None:
         "card_evaluations": [{"evaluation": "noise"}],
     }
     penalized = build_report(manifest, issues, assessments, baseline)
-    assert penalized["summary"]["noise_cards"] == 1
-    assert penalized["summary"]["quality_score"] == 95.2
+    assert penalized["summary"]["noise_cards"] == 0
+    assert penalized["summary"]["quality_score"] == 100
 
 
 def test_optional_top_level_field_mismatch_does_not_change_card_score() -> None:

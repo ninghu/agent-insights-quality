@@ -125,9 +125,9 @@ def _validate(rules: dict, mode: str = "deterministic") -> None:
 @pytest.mark.parametrize(
     ("mode", "expected"),
     [
-        ("baseline", (5, 5)),
-        ("deterministic", (5, 5)),
-        ("model_mediated", (7, 5)),
+        ("baseline", (10, 6)),
+        ("deterministic", (10, 6)),
+        ("model_mediated", (10, 6)),
     ],
 )
 def test_reviewed_validation_matrix_is_fixed(
@@ -165,9 +165,8 @@ def test_validation_mode_is_never_inferred_from_runtime_kind() -> None:
 
 def test_threshold_downgrade_and_resampling_are_rejected() -> None:
     rules = _rules("model_mediated")
-    rules["scenarios"][0]["n"] = 5
-    rules["scenarios"][0]["attempts"] = rules["scenarios"][0]["attempts"][:5]
-    with pytest.raises(ContractError, match="thresholds must remain 5/7"):
+    rules["scenarios"][0]["k"] = 2
+    with pytest.raises(ContractError, match="thresholds must remain 6/10"):
         _validate(rules, "model_mediated")
 
 
@@ -218,7 +217,7 @@ def test_baseline_has_health_predicate_without_v0_control() -> None:
     _validate(rules, "baseline")
 
 
-def test_issue_019_is_model_mediated_five_of_seven() -> None:
+def test_issue_019_is_model_mediated_six_of_ten() -> None:
     rules = read_json(
         ROOT
         / "agents"
@@ -229,8 +228,8 @@ def test_issue_019_is_model_mediated_five_of_seven() -> None:
     )["validation_rules"]
     scenario = rules["scenarios"][0]
     assert scenario["validation_mode"] == "model_mediated"
-    assert (scenario["k"], scenario["n"]) == (5, 7)
-    assert len(scenario["attempts"]) == 7
+    assert (scenario["k"], scenario["n"]) == (6, 10)
+    assert len(scenario["attempts"]) == 10
 
 
 def test_issue_021_requires_failed_search_and_ordered_fabrication_proof() -> None:

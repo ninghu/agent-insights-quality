@@ -64,6 +64,7 @@ from agent_insights_quality.github_preview import (
     verify_daily_email_test_preview,
 )
 from agent_insights_quality.live import LiveRuntime
+from agent_insights_quality.models import SKIPPED_VERSION_STATUSES
 from agent_insights_quality.improvement_memory import (
     build_normalized_summary,
     validate_analysis_against_summary,
@@ -119,7 +120,6 @@ from agent_insights_quality.util import (
     runtime_root,
 )
 from agent_insights_quality.validation import validate_repository
-from agent_insights_quality.validation_approved import approve_test_agent_validation
 from agent_insights_quality.validation_coordinator import (
     compose_test_agent_validation,
     deploy_test_agent_validation_shard,
@@ -128,8 +128,11 @@ from agent_insights_quality.validation_coordinator import (
     prepare_test_agent_validation,
     prepare_test_agent_validation_assessment,
     reconcile_test_agent_validation_deployment,
+    recover_test_agent_validation,
+    release_test_agent_validation_assessment,
     run_test_agent_validation,
 )
+from agent_insights_quality.validation_rules import validation_matrix
 from agent_insights_quality.work_items import (
     fetch_quality_work_items,
     load_quality_work_items,
@@ -159,7 +162,15 @@ def build_parser() -> argparse.ArgumentParser:
         run.add_argument("--rerun", type=int, default=0)
         run.add_argument("--state-root", type=Path, default=runtime_root())
         run.add_argument("--work-items", type=Path, required=True)
-    daily_prepare = commands.add_parser("daily-prepare")
+    daily_prepare = commands.add_parser(
+        "daily-prepare",
+        help="Start Daily after a human chooses to run it; staging is advisory.",
+        description=(
+            "Start a Daily lifecycle from the exact clean checkout and private "
+            "work-item snapshot. Test Agent Validation is advisory and is not "
+            "an admission input."
+        ),
+    )
     daily_prepare.add_argument("--report-date", required=True, type=date.fromisoformat)
     daily_prepare.add_argument("--rerun", type=int, default=0)
     daily_prepare.add_argument("--work-items", type=Path, required=True)
@@ -289,6 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--human-reviewed", action="store_true")
     commands.add_parser("run-test-agent-validation")
     commands.add_parser("prepare-test-agent-validation")
+    commands.add_parser("recover-test-agent-validation")
     deploy_validation = commands.add_parser(
         "deploy-test-agent-validation-shard"
     )
@@ -299,9 +311,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     invoke_validation.add_argument("--shard-id", type=int, required=True)
     commands.add_parser("prepare-test-agent-validation-assessment")
+    commands.add_parser("release-test-agent-validation-assessment")
     commands.add_parser("import-test-agent-validation-assessment")
     commands.add_parser("compose-test-agent-validation")
-    commands.add_parser("approve-test-agent-validation")
     return parser
 
 
@@ -321,6 +333,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         return json.dumps(run_test_agent_validation(), sort_keys=True)
     if args.command == "prepare-test-agent-validation":
         return json.dumps(prepare_test_agent_validation(), sort_keys=True)
+    if args.command == "recover-test-agent-validation":
+        return json.dumps(recover_test_agent_validation(), sort_keys=True)
     if args.command == "deploy-test-agent-validation-shard":
         return json.dumps(
             deploy_test_agent_validation_shard(shard_id=args.shard_id),
@@ -341,6 +355,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             prepare_test_agent_validation_assessment(),
             sort_keys=True,
         )
+    if args.command == "release-test-agent-validation-assessment":
+        return json.dumps(
+            release_test_agent_validation_assessment(),
+            sort_keys=True,
+        )
     if args.command == "import-test-agent-validation-assessment":
         return json.dumps(
             import_test_agent_validation_assessment(),
@@ -348,8 +367,6 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         )
     if args.command == "compose-test-agent-validation":
         return json.dumps(compose_test_agent_validation(), sort_keys=True)
-    if args.command == "approve-test-agent-validation":
-        return json.dumps(approve_test_agent_validation(), sort_keys=True)
     if args.command == "daily-prepare":
         return json.dumps(
             prepare_daily(
@@ -666,6 +683,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             item["issue_id"]
             for agent in manifest["agents"]
             for item in agent["issues"]
+            if item.get("status") not in SKIPPED_VERSION_STATUSES
         }
         assessments = load_assessments(
             args.assessment,
@@ -866,6 +884,19 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 ),
                 preview_publication_path=preview_publication_path,
             )
+        validation_policy = None
+        if test_run:
+            n, k = validation_matrix("baseline")
+            validation_policy = {
+                "schema_version": "1.0.0",
+                "policy": "unified_target_evidence_v1",
+                "attempts_per_target": n,
+                "required_conclusive_attempts": k,
+                "maximum_trace_unknown_attempts": n - k,
+            }
+            validation_policy["policy_digest"] = content_hash(
+                validation_policy
+            )
         return json.dumps(
             {
                 "quality_score": report["summary"]["quality_score"],
@@ -884,6 +915,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
                 ),
                 "delivery_mode": manifest["delivery_mode"],
                 "generated_report": not test_run,
+                "validation_policy": validation_policy,
                 "github_preview": (
                     str(preview_publication_path)
                     if preview_publication_path is not None

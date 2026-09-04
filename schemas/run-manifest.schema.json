@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "run_id", "profile", "delivery_mode", "report_date", "insight_lookback_hours", "telemetry_resource_set", "test_region", "test_region_registry", "catalog_hashes", "source_integrity", "agents", "manifest_hash"],
   "properties": {
-    "schema_version": {"const": "5.0.0"},
+    "schema_version": {"const": "6.0.0"},
     "run_id": {"type": "string", "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2,})?$"},
     "profile": {"enum": ["daily", "staging"]},
     "delivery_mode": {"enum": ["official", "test_email_only"]},
@@ -49,7 +49,7 @@
             "additionalProperties": false,
             "required": ["request_count", "terminal_response", "semantic_assertions", "function_calling", "trace_operations", "validation_mode"],
             "properties": {
-              "request_count": {"const": 5},
+              "request_count": {"const": 10},
               "terminal_response": {"enum": ["direct_prompt", "standard_assistant_message", "explicit_span_attributes"]},
               "semantic_assertions": {"enum": ["required", "required_per_request"]},
               "function_calling": {"enum": ["forbidden", "not_applicable"]},
@@ -142,9 +142,23 @@
         {
           "properties": {
             "logical_version": {"const": "v0"},
-            "status": {"enum": ["passed", "not_at_bar", "inconclusive"]}
+            "status": {"enum": ["passed", "not_at_bar", "inconclusive", "skipped_agent_activation", "skipped_insight", "skipped_telemetry"]},
+            "validation_mode": {"const": "baseline"},
+            "n": {"const": 10},
+            "k": {"const": 6},
+            "role_pass_summary": {
+              "oneOf": [
+                {"type": "null"},
+                {"$ref": "#/$defs/rolePassSummary"}
+              ]
+            }
           },
-          "not": {"required": ["issue_id"]}
+          "not": {
+            "anyOf": [
+              {"required": ["issue_id"]},
+              {"required": ["required_surfaces"]}
+            ]
+          }
         }
       ]
     },
@@ -152,11 +166,14 @@
       "allOf": [
         {"$ref": "#/$defs/versionEvidence"},
         {
-          "required": ["issue_id"],
+          "required": ["issue_id", "required_surfaces"],
           "properties": {
             "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
             "logical_version": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
-            "status": {"enum": ["observed", "not_at_bar", "inconclusive", "skipped_baseline"]}
+            "status": {"enum": ["observed", "not_at_bar", "inconclusive", "skipped_agent_activation", "skipped_insight", "skipped_telemetry"]},
+            "validation_mode": {"enum": ["deterministic", "model_mediated"]},
+            "n": {"const": 10},
+            "k": {"const": 6}
           }
         }
       ]
@@ -168,6 +185,10 @@
         "logical_version",
         "foundry_version",
         "content_digest",
+        "validation_mode",
+        "n",
+        "k",
+        "execution_digest",
         "status",
         "operation_ids",
         "insight_references",
@@ -183,6 +204,8 @@
         "trace_assertions_passed",
         "trace_contract_verified",
         "trace_behavior_summary",
+        "trace_maturity_proof",
+        "role_pass_summary",
         "endpoint_request_summaries",
         "evidence_reference"
       ],
@@ -196,7 +219,19 @@
         },
         "foundry_version": {"type": "string", "minLength": 1},
         "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-        "status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_baseline"]},
+        "validation_mode": {
+          "enum": ["baseline", "deterministic", "model_mediated"]
+        },
+        "n": {"const": 10},
+        "k": {"const": 6},
+        "execution_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "required_surfaces": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["semantic", "trace"]}
+        },
+        "status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_agent_activation", "skipped_insight", "skipped_telemetry"]},
         "operation_ids": {
           "type": "array",
           "uniqueItems": true,
@@ -229,6 +264,18 @@
         "trace_assertions_passed": {"type": "integer", "minimum": 0},
         "trace_contract_verified": {"type": "boolean"},
         "trace_behavior_summary": {"$ref": "#/$defs/traceBehaviorSummary"},
+        "trace_maturity_proof": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/traceMaturityProof"}
+          ]
+        },
+        "role_pass_summary": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/rolePassSummary"}
+          ]
+        },
         "endpoint_request_summaries": {
           "type": "array",
           "items": {
@@ -246,7 +293,8 @@
               "trace_assertion_results",
               "activation_gate",
               "direct_terminal_response_count",
-              "function_call_count"
+              "function_call_count",
+              "error_code"
             ],
             "properties": {
               "request_index": {"type": "integer", "minimum": 0},
@@ -260,10 +308,11 @@
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["assertion", "passed"],
+                  "required": ["assertion", "passed", "evidence_sufficient"],
                   "properties": {
                     "assertion": {"type": "string", "minLength": 1},
-                    "passed": {"type": "boolean"}
+                    "passed": {"type": "boolean"},
+                    "evidence_sufficient": {"type": "boolean"}
                   }
                 }
               },
@@ -275,16 +324,21 @@
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["assertion", "passed"],
+                  "required": ["assertion", "passed", "evidence_sufficient"],
                   "properties": {
                     "assertion": {"type": "string", "minLength": 1},
-                    "passed": {"type": "boolean"}
+                    "passed": {"type": "boolean"},
+                    "evidence_sufficient": {"type": "boolean"}
                   }
                 }
               },
               "activation_gate": {"type": "boolean"},
               "direct_terminal_response_count": {"type": "integer", "minimum": 0, "maximum": 1},
-              "function_call_count": {"type": "integer", "minimum": 0}
+              "function_call_count": {"type": "integer", "minimum": 0},
+              "error_code": {
+                "type": ["string", "null"],
+                "enum": [null, "missing_evidence", "assertion_failed"]
+              }
             }
           }
         },
@@ -293,6 +347,52 @@
             {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
             {"type": "null"}
           ]
+        }
+      }
+    },
+    "rolePassSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy",
+        "target_role",
+        "required_pass_count",
+        "pass_count",
+        "pass_attempt_indices",
+        "miss_count",
+        "miss_attempt_indices",
+        "miss_counts"
+      ],
+      "properties": {
+        "policy": {"const": "six_complete_role_passes_v1"},
+        "target_role": {"enum": ["baseline", "issue", "paired_v0"]},
+        "required_pass_count": {"const": 6},
+        "pass_count": {"type": "integer", "minimum": 0, "maximum": 10},
+        "pass_attempt_indices": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1, "maximum": 10}
+        },
+        "miss_count": {"type": "integer", "minimum": 0, "maximum": 10},
+        "miss_attempt_indices": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1, "maximum": 10}
+        },
+        "miss_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["complete_non_pass", "endpoint_incomplete", "identity_incomplete", "semantic_incomplete", "trace_incomplete", "other_incomplete"],
+          "properties": {
+            "complete_non_pass": {"type": "integer", "minimum": 0, "maximum": 10},
+            "endpoint_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "identity_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "semantic_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "trace_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "other_incomplete": {"type": "integer", "minimum": 0, "maximum": 10}
+          }
         }
       }
     },
@@ -319,6 +419,32 @@
         "terminal_response_count": {"type": "integer", "minimum": 0},
         "handled_error_count": {"type": "integer", "minimum": 0},
         "unhandled_error_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "traceMaturityProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "evidence_window_start",
+        "evidence_window_end",
+        "maturity_boundary",
+        "snapshot_observed_at",
+        "maximum_hydration_seconds",
+        "stabilization_seconds",
+        "maturity_proof_digest"
+      ],
+      "properties": {
+        "schema_version": {"const": "1.0.0"},
+        "kind": {"const": "daily-trace-maturity-proof"},
+        "evidence_window_start": {"type": "string", "format": "date-time"},
+        "evidence_window_end": {"type": "string", "format": "date-time"},
+        "maturity_boundary": {"type": "string", "format": "date-time"},
+        "snapshot_observed_at": {"type": "string", "format": "date-time"},
+        "maximum_hydration_seconds": {"type": "integer", "minimum": 1},
+        "stabilization_seconds": {"type": "integer", "minimum": 1},
+        "maturity_proof_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     }
   }
