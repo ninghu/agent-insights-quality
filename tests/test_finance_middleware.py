@@ -1000,6 +1000,72 @@ def test_issue_013_real_framework_contradicts_completed_balance_result(
         ]
 
 
+def test_issue_013_reads_appended_native_balance_result(monkeypatch) -> None:
+    module = _load_finance_app(monkeypatch, "issue-013")
+    account_id = "acct-demo-a"
+    context = SimpleNamespace(
+        messages=[
+            SimpleNamespace(
+                role="user",
+                text=f"Show the balance for {account_id}.",
+                contents=[],
+            )
+        ],
+        result=None,
+        stream=False,
+    )
+
+    async def call_next() -> None:
+        context.messages.extend(
+            [
+                SimpleNamespace(
+                    role="assistant",
+                    text="",
+                    contents=[
+                        SimpleNamespace(
+                            type="function_call",
+                            call_id="balance-call",
+                            name="get_balance",
+                            parse_arguments=lambda: {"account_id": account_id},
+                        )
+                    ],
+                ),
+                SimpleNamespace(
+                    role="tool",
+                    text="",
+                    contents=[
+                        SimpleNamespace(
+                            type="function_result",
+                            call_id="balance-call",
+                            result={
+                                "ok": True,
+                                "account_id": account_id,
+                                **module.ACCOUNTS[account_id],
+                            },
+                        )
+                    ],
+                ),
+            ]
+        )
+        context.result = module.ChatResponse(
+            messages=[
+                module.Message(
+                    role="assistant",
+                    contents=[
+                        "The authoritative balance for acct-demo-a is USD 1250.50."
+                    ],
+                )
+            ]
+        )
+
+    with pytest.raises(module.MiddlewareTermination):
+        asyncio.run(module.ContradictedBalance().process(context, call_next))
+
+    assert context.result.messages[0].contents == [
+        "The authoritative balance for acct-demo-a is USD 1750.50."
+    ]
+
+
 def test_issue_016_real_framework_dispatches_tool_before_replacement(
     monkeypatch,
 ) -> None:
@@ -1187,16 +1253,50 @@ def test_issue_018_disables_dispatch_after_matching_transient_result(
             ),
         ],
         options={"tools": tools, "tool_choice": "auto"},
+        result=None,
+        stream=False,
     )
     outgoing = []
 
     async def call_next() -> None:
         outgoing.append(dict(context.options))
+        context.result = module.ChatResponse(
+            messages=[
+                module.Message(
+                    role="assistant",
+                    contents=["The temporary failure was not retried."],
+                )
+            ]
+        )
 
-    asyncio.run(module.StopAfterTransientFailure().process(context, call_next))
+    with pytest.raises(module.MiddlewareTermination):
+        asyncio.run(module.StopAfterTransientFailure().process(context, call_next))
 
     assert outgoing == [{"tools": tools, "tool_choice": "none"}]
     assert outgoing[0]["tools"]
+    assert context.result.messages[0].contents == [
+        "The balance lookup ended with temporary_unavailable without a retry."
+    ]
+
+
+def test_issue_018_reads_native_mapping_transient_result(monkeypatch) -> None:
+    module = _load_finance_app(monkeypatch, "issue-018")
+    content = SimpleNamespace(
+        type="function_result",
+        call_id="synthetic-call",
+        items=[],
+        result={
+            "ok": False,
+            "error": {
+                "code": "temporary_unavailable",
+                "retryable": True,
+            },
+        },
+    )
+
+    assert module._latest_transient_failure(
+        [SimpleNamespace(contents=[content])]
+    )
 
 
 def test_issue_018_keeps_dispatch_for_nonmatching_latest_turn(monkeypatch) -> None:

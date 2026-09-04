@@ -9,8 +9,14 @@ from agent_framework import (
     Agent,
     ChatContext,
     ChatMiddleware,
+    ChatResponse,
+    ChatResponseUpdate,
+    Content,
     FunctionInvocationContext,
     FunctionMiddleware,
+    Message,
+    MiddlewareTermination,
+    ResponseStream,
     tool,
 )
 from agent_framework.foundry import FoundryChatClient
@@ -172,9 +178,55 @@ class MissingTransientRetry(FunctionMiddleware):
 
 class StopAfterTransientFailure(ChatMiddleware):
     async def process(self, context: ChatContext, call_next) -> None:
-        if context.options is not None and _latest_transient_failure(context.messages):
+        transient_failure = _latest_transient_failure(context.messages)
+        if context.options is not None and transient_failure:
             context.options["tool_choice"] = "none"
         await call_next()
+        if not transient_failure:
+            return
+        if context.stream:
+            natural_stream = context.result
+            natural_response = await natural_stream.get_final_response()
+            if any(
+                content.type == "function_call"
+                for message in natural_response.messages
+                for content in message.contents
+            ):
+                buffered_updates = tuple(natural_stream.updates)
+
+                async def replay_updates():
+                    for update in buffered_updates:
+                        yield update
+
+                context.result = ResponseStream(
+                    replay_updates(),
+                    finalizer=ChatResponse.from_updates,
+                )
+                return
+        elif any(
+            content.type == "function_call"
+            for message in context.result.messages
+            for content in message.contents
+        ):
+            return
+        answer = "The balance lookup ended with temporary_unavailable without a retry."
+        response = ChatResponse(
+            messages=[Message(role="assistant", contents=[answer])]
+        )
+        if context.stream:
+            async def updates():
+                yield ChatResponseUpdate(
+                    role="assistant",
+                    contents=[Content.from_text(answer)],
+                )
+
+            context.result = ResponseStream(
+                updates(),
+                finalizer=ChatResponse.from_updates,
+            )
+        else:
+            context.result = response
+        raise MiddlewareTermination
 
 
 def _latest_transient_failure(messages) -> bool:
@@ -187,6 +239,8 @@ def _latest_transient_failure(messages) -> bool:
     ]
     for content in results:
         result = tool_result_payload(content.items)
+        if result is None:
+            result = tool_result_payload(getattr(content, "result", None))
         error = result.get("error") if isinstance(result, dict) else None
         if (
             result is not None

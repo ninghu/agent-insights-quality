@@ -3,7 +3,7 @@ baseline: agents/finance-agent/v0/source
 issues:
   issue-013:
     declared_delta: "Issue-specific orchestration reports the authoritative balance plus exactly 500."
-    expected_app_diff_digest: sha256:a5eb13789cd5ace48feb17b9c6b38041676b9d05a2f8c8a420914474cd8c221e
+    expected_app_diff_digest: sha256:1dfd3ed97d74736ad86831f82d408a1a6fee82888b01609f501cd220f682830d
     expected_class: ContradictedBalance
     middleware_kind: ChatMiddleware
   issue-014:
@@ -30,7 +30,7 @@ issues:
     middleware_kind: ChatMiddleware
   issue-018:
     declared_delta: "Issue-specific orchestration stops after one retryable failure."
-    expected_app_diff_digest: sha256:4afc81a812e52e20d55ea8f9b025be57e3a0a4d5a45d5f47296411d1e2693fdf
+    expected_app_diff_digest: sha256:3e04e0b1f1ef23750595d94482d0e40ad87f01dea88150a2f383fa1945e076e2
     expected_class: MissingTransientRetry
     middleware_kind: FunctionMiddleware
   issue-019:

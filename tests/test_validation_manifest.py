@@ -63,7 +63,7 @@ def test_local_plan_binds_one_commit_and_all_executable_inputs() -> None:
 def test_validation_digest_tracks_fixed_authorities_not_coordinator_sources() -> None:
     agents, issues = load_catalogs()
     assert current_validation_digest(agents, issues) == (
-        "sha256:6494c286d0b2302a1290c965263b54694ddf72c25470176232ec69e5efd1ade3"
+        "sha256:1d2964baeaf828c31a587323bbfdc3fad83f5b3558cd08ac99fc890c507f7891"
     )
 
     changed_issues = deepcopy(issues)
