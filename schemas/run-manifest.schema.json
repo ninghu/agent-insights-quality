@@ -329,10 +329,11 @@
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["assertion", "passed"],
+                  "required": ["assertion", "passed", "evidence_sufficient"],
                   "properties": {
                     "assertion": {"type": "string", "minLength": 1},
-                    "passed": {"type": "boolean"}
+                    "passed": {"type": "boolean"},
+                    "evidence_sufficient": {"type": "boolean"}
                   }
                 }
               },

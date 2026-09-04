@@ -144,7 +144,11 @@ class FakeRuntime:
                 semantic_assertion_count=1,
                 semantic_assertions_passed=1,
                 assertion_results=(
-                    SemanticAssertionEvidence("synthetic_contract", True),
+                    SemanticAssertionEvidence(
+                        "synthetic_contract",
+                        True,
+                        True,
+                    ),
                 ),
                 activation_gate=bool(
                     request.get("expected", {}).get("activation_gate")
@@ -1076,7 +1080,11 @@ def test_model_mediated_daily_uses_five_of_seven_reviewed_observations(
                     summaries[index],
                     semantic_assertions_passed=0,
                     assertion_results=(
-                        SemanticAssertionEvidence("synthetic_contract", False),
+                        SemanticAssertionEvidence(
+                            "synthetic_contract",
+                            False,
+                            True,
+                        ),
                     ),
                 )
             return replace(
@@ -1160,7 +1168,11 @@ def test_model_mediated_daily_does_not_resample_four_of_seven_misses() -> None:
                     summaries[index],
                     semantic_assertions_passed=0,
                     assertion_results=(
-                        SemanticAssertionEvidence("synthetic_contract", False),
+                        SemanticAssertionEvidence(
+                            "synthetic_contract",
+                            False,
+                            True,
+                        ),
                     ),
                 )
             return replace(
@@ -1750,7 +1762,11 @@ def test_pending_insight_start_from_crash_forces_clean_retraffic(
                     semantic_assertion_count=1,
                     semantic_assertions_passed=1,
                     assertion_results=(
-                        SemanticAssertionEvidence("synthetic_contract", True),
+                        SemanticAssertionEvidence(
+                            "synthetic_contract",
+                            True,
+                            True,
+                        ),
                     ),
                     activation_gate=bool(
                         request["expected"]["activation_gate"]
@@ -1872,7 +1888,11 @@ def test_cached_five_attempt_evidence_is_not_rescaled_to_seven(
                     semantic_assertion_count=1,
                     semantic_assertions_passed=1,
                     assertion_results=(
-                        SemanticAssertionEvidence("synthetic_contract", True),
+                        SemanticAssertionEvidence(
+                            "synthetic_contract",
+                            True,
+                            True,
+                        ),
                     ),
                     activation_gate=True,
                     direct_terminal_response_count=1,
@@ -1929,7 +1949,11 @@ def test_baseline_assertion_failure_is_incomplete() -> None:
                 summaries[observation_index],
                 semantic_assertions_passed=0,
                 assertion_results=(
-                    SemanticAssertionEvidence("synthetic_contract", False),
+                    SemanticAssertionEvidence(
+                        "synthetic_contract",
+                        False,
+                        True,
+                    ),
                 ),
             )
             return replace(
@@ -1975,7 +1999,11 @@ def test_failed_prompt_issue_activation_is_incomplete() -> None:
                     summaries[observation_index],
                     semantic_assertions_passed=0,
                     assertion_results=(
-                        SemanticAssertionEvidence("synthetic_contract", False),
+                        SemanticAssertionEvidence(
+                            "synthetic_contract",
+                            False,
+                            True,
+                        ),
                     ),
                 )
             return replace(
@@ -2022,7 +2050,11 @@ def test_failed_hosted_semantic_activation_does_not_start_insights() -> None:
                 summaries[observation_index],
                 semantic_assertions_passed=0,
                 assertion_results=(
-                    SemanticAssertionEvidence("synthetic_contract", False),
+                    SemanticAssertionEvidence(
+                        "synthetic_contract",
+                        False,
+                        True,
+                    ),
                 ),
             )
             return replace(

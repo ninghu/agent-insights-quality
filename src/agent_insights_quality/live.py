@@ -4416,7 +4416,11 @@ def _semantic_assertion_result(
 
     def record(assertion: str, passed: bool) -> None:
         results.append(
-            SemanticAssertionEvidence(assertion=assertion, passed=bool(passed))
+            SemanticAssertionEvidence(
+                assertion=assertion,
+                passed=bool(passed),
+                evidence_sufficient=True,
+            )
         )
 
     parsed_json: Any = None

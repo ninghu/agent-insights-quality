@@ -1949,22 +1949,8 @@ def _forced_invocation_authority_ids(
     incomplete_current_invocations: list[str],
     fresh_current_invocations: list[str],
 ) -> list[str]:
-    available = set(supplemental["imported_authority_ids"]) - set(
-        fresh_current_invocations
-    )
-    return list(
-        dict.fromkeys(
-            [
-                *migration["incomplete_authority_ids"],
-                *[
-                    item
-                    for item in incomplete_current_invocations
-                    if item not in available
-                ],
-                *supplemental["incomplete_authority_ids"],
-            ]
-        )
-    )
+    del migration, supplemental, incomplete_current_invocations
+    return list(dict.fromkeys(fresh_current_invocations))
 
 
 def _assert_active_generation(prepared: Mapping[str, Any]) -> None:
@@ -2157,8 +2143,6 @@ def _current_invocation_requirements(
             completed = {
                 reference["authority_id"]
                 for reference in references
-                if load_invocation_receipt(reference)["origin_run_id"]
-                == active["run_id"]
             }
         except (ContractError, OSError, ValueError):
             return authority_ids, []

@@ -1446,6 +1446,9 @@ def _version_result(value: Mapping[str, Any]) -> VersionResult:
                     SemanticAssertionEvidence(
                         assertion=str(result["assertion"]),
                         passed=bool(result["passed"]),
+                        evidence_sufficient=bool(
+                            result["evidence_sufficient"]
+                        ),
                     )
                     for result in item["assertion_results"]
                 ),
@@ -1461,7 +1464,7 @@ def _version_result(value: Mapping[str, Any]) -> VersionResult:
                         assertion=str(result["assertion"]),
                         passed=bool(result["passed"]),
                         evidence_sufficient=bool(
-                            result.get("evidence_sufficient", True)
+                            result["evidence_sufficient"]
                         ),
                     )
                     for result in item["trace_assertion_results"]

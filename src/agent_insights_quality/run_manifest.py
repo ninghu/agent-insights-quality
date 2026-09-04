@@ -341,6 +341,10 @@ def _validate_version_evidence(value: dict[str, Any], label: str) -> None:
             != item["semantic_assertions_passed"]
             or item["semantic_assertions_passed"]
             > item["semantic_assertion_count"]
+            or any(
+                result.get("evidence_sufficient") not in {True, False}
+                for result in results
+            )
         ):
             raise ContractError(f"{label} request assertion evidence is inconsistent")
         if (

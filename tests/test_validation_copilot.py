@@ -850,10 +850,16 @@ def _semantic_and_trace_gap_inputs():
             {
                 "evidence_sufficient": False,
                 "semantic_assertions": [
-                    {"evidence_sufficient": True},
+                    {
+                        "passed": True,
+                        "evidence_sufficient": True,
+                    },
                 ],
                 "trace_assertions": [
-                    {"evidence_sufficient": False},
+                    {
+                        "passed": False,
+                        "evidence_sufficient": False,
+                    },
                 ],
             },
         ],

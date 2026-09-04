@@ -261,6 +261,47 @@ def test_invocation_recovery_does_not_cross_pull_requests(monkeypatch) -> None:
     ) == ([], [])
 
 
+def test_verifier_change_reuses_exact_historical_receipts(
+    monkeypatch,
+) -> None:
+    active = _active_validation()
+    authority_ids = list(active["invocation_authority_ids"])
+    journal = SimpleNamespace(
+        read_active=lambda: SimpleNamespace(value=active),
+        superseded_run_ids=lambda _active: [],
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "select_reusable_invocation_receipts",
+        lambda **_kwargs: (
+            [],
+            [
+                {
+                    "authority_id": authority_id,
+                    "path": f"historical/{authority_id}.json",
+                    "receipt_digest": "sha256:" + "1" * 64,
+                    "invocation_digest": "sha256:" + "2" * 64,
+                }
+                for authority_id in authority_ids
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        validation_coordinator,
+        "current_authority_verification_results",
+        lambda **_kwargs: {},
+    )
+
+    assert _current_invocation_requirements(
+        journal=journal,
+        plan={
+            "repository": active["repository"],
+            "pr_number": active["pr_number"],
+        },
+        authorities=authority_specs(*load_catalogs()),
+    ) == ([], [])
+
+
 def _active_validation() -> dict:
     authorities = authority_specs(*load_catalogs())
     authority_ids = [item.authority_id for item in authorities]

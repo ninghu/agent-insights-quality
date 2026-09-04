@@ -119,6 +119,10 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
             or len(results) != summary.get("semantic_assertion_count")
             or sum(item.get("passed") is True for item in results)
             != summary.get("semantic_assertions_passed")
+            or any(
+                not isinstance(item.get("evidence_sufficient"), bool)
+                for item in results
+            )
         ):
             return False
     return True

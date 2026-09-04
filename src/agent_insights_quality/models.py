@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 class SemanticAssertionEvidence:
     assertion: str
     passed: bool
+    evidence_sufficient: bool
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,7 @@ def request_completion_payload(
             {
                 "assertion": assertion.assertion,
                 "passed": assertion.passed,
+                "evidence_sufficient": assertion.evidence_sufficient,
             }
             for assertion in value.trace_assertion_results
         ],

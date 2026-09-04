@@ -57,7 +57,11 @@ def _manifest(*, full: bool = False) -> dict:
                 "semantic_assertion_count": len(semantic_names),
                 "semantic_assertions_passed": len(semantic_names),
                 "assertion_results": [
-                    {"assertion": name, "passed": True}
+                    {
+                        "assertion": name,
+                        "passed": True,
+                        "evidence_sufficient": True,
+                    }
                     for name in semantic_names
                 ],
                 "trace_assertion_count": len(trace_names),

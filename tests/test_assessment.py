@@ -172,7 +172,11 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                     "semantic_assertion_count": 1,
                     "semantic_assertions_passed": 1,
                     "assertion_results": [
-                        {"assertion": "synthetic_contract", "passed": True}
+                        {
+                            "assertion": "synthetic_contract",
+                            "passed": True,
+                            "evidence_sufficient": True,
+                        }
                     ],
                     "trace_assertion_count": 0,
                     "trace_assertions_passed": 0,
@@ -446,7 +450,11 @@ def _complete_prompt_baseline_package() -> dict:
             "semantic_assertion_count": 1,
             "semantic_assertions_passed": 1,
             "assertion_results": [
-                {"assertion": "synthetic_contract", "passed": True}
+                {
+                    "assertion": "synthetic_contract",
+                    "passed": True,
+                    "evidence_sufficient": True,
+                }
             ],
             "trace_assertion_count": 0,
             "trace_assertions_passed": 0,
@@ -666,7 +674,11 @@ def test_issue_activation_uses_reviewed_five_of_seven_required_surface() -> None
                 "request_index": index,
                 "semantic_assertions_passed": 0,
                 "assertion_results": [
-                    {"assertion": "synthetic_contract", "passed": False}
+                    {
+                        "assertion": "synthetic_contract",
+                        "passed": False,
+                        "evidence_sufficient": True,
+                    }
                 ],
             }
         )

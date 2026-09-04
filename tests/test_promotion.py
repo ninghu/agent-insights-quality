@@ -53,7 +53,11 @@ def _request_summaries(
             "semantic_assertion_count": 1,
             "semantic_assertions_passed": 1,
             "assertion_results": [
-                {"assertion": "synthetic_contract", "passed": True}
+                {
+                    "assertion": "synthetic_contract",
+                    "passed": True,
+                    "evidence_sufficient": True,
+                }
             ],
             "trace_assertion_count": 0,
             "trace_assertions_passed": 0,
@@ -88,7 +92,12 @@ def _version_evidence(
                 "semantic_assertion_count": len(names),
                 "semantic_assertions_passed": len(names),
                 "assertion_results": [
-                    {"assertion": name, "passed": True} for name in names
+                    {
+                        "assertion": name,
+                        "passed": True,
+                        "evidence_sufficient": True,
+                    }
+                    for name in names
                 ],
                 "trace_assertion_count": len(trace_names),
                 "trace_assertions_passed": len(trace_names),
@@ -172,7 +181,11 @@ def test_manifest_request_assertions_are_json_arrays() -> None:
                 semantic_assertion_count=1,
                 semantic_assertions_passed=1,
                 assertion_results=(
-                    SemanticAssertionEvidence("synthetic_contract", True),
+                    SemanticAssertionEvidence(
+                        "synthetic_contract",
+                        True,
+                        True,
+                    ),
                 ),
                 activation_gate=False,
                 direct_terminal_response_count=1,
@@ -190,7 +203,11 @@ def test_manifest_request_assertions_are_json_arrays() -> None:
         "assertion_results"
     ]
     assert assertions == [
-        {"assertion": "synthetic_contract", "passed": True}
+        {
+            "assertion": "synthetic_contract",
+            "passed": True,
+            "evidence_sufficient": True,
+        }
     ]
     assert isinstance(assertions, list)
     trace_assertions = payload["endpoint_request_summaries"][0][
@@ -218,7 +235,11 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
         semantic_assertion_count=1,
         semantic_assertions_passed=1,
         assertion_results=(
-            SemanticAssertionEvidence("synthetic_contract", True),
+            SemanticAssertionEvidence(
+                "synthetic_contract",
+                True,
+                True,
+            ),
         ),
         activation_gate=False,
         direct_terminal_response_count=1,

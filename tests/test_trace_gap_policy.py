@@ -170,7 +170,7 @@ def test_staging_and_daily_share_deterministic_trace_gap_acceptance() -> None:
                 semantic_assertion_count=1,
                 semantic_assertions_passed=1,
                 assertion_results=(
-                    SemanticAssertionEvidence("semantic", True),
+                    SemanticAssertionEvidence("semantic", True, True),
                 ),
                 activation_gate=True,
                 direct_terminal_response_count=0,

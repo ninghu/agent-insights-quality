@@ -211,6 +211,7 @@ class Runtime:
                         SemanticAssertionEvidence(
                             assertion=name,
                             passed=self.assertion_pass,
+                            evidence_sufficient=True,
                         )
                         for name in request["expected"][
                             "semantic_assertions"

@@ -297,6 +297,9 @@ def _checkpoint_result(
                         SemanticAssertionEvidence(
                             assertion=str(result["assertion"]),
                             passed=bool(result["passed"]),
+                            evidence_sufficient=bool(
+                                result["evidence_sufficient"]
+                            ),
                         )
                         for result in item["assertion_results"]
                     ),
@@ -314,7 +317,7 @@ def _checkpoint_result(
                             assertion=str(result["assertion"]),
                             passed=bool(result["passed"]),
                             evidence_sufficient=bool(
-                                result.get("evidence_sufficient", True)
+                                result["evidence_sufficient"]
                             ),
                         )
                         for result in item["trace_assertion_results"]
@@ -478,6 +481,7 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
                 and isinstance(result.get("assertion"), str)
                 and result.get("assertion")
                 and isinstance(result.get("passed"), bool)
+                and isinstance(result.get("evidence_sufficient"), bool)
                 for result in results
             )
             or len(results) != summary.get("semantic_assertion_count")
