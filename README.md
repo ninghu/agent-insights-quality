@@ -78,11 +78,11 @@ is advisory, so a fresh run does not maintain or consult a global PASS history. 
 contains one integrity-bound `recovery_source` reference and flattened immutable result/receipt
 references from that source. This preserves zero-traffic first recollection without scanning older
 runs or making staging a Daily gate.
-Each reviewed scenario reruns its setup and probe conversation with a fresh identity. Baselines require
-`6/10` proven healthy attempts with at most four trace-only unknowns and no observed failure. Every
-issue mode uses ten attempts and requires at least `6/10` observations; complete non-observations count
-as misses, while at most four trace-only unknowns may be accepted. Paired `v0` requires `0/10`
-observations with six proven controls and at most four trace-only unknowns. The reviewed mode is catalog
+Each reviewed scenario reruns its setup and probe conversation with a fresh identity. Baselines,
+issues, and paired controls each pass with at least six complete role-specific passes out of ten.
+The other four attempts remain transparent misses of any kind and never veto six strict passes.
+Every passing attempt still requires complete exact endpoint, identity, required semantic/trace,
+and internally consistent proof. The reviewed mode is catalog
 data bound into the automatic `execution_digest`; runtime results cannot reclassify, resample, or lower
 the threshold.
 
@@ -129,11 +129,10 @@ response/session coverage, endpoint response presence, terminal-output integrity
 privacy, and package binding; GPT-5.6 Sol judges every semantic, tool, trace, activation, health, and
 per-attempt behavioral assertion.
 
-Authority results keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Baselines pass with `6/10` proven
-healthy attempts plus at most four trace-only unknowns and no observed failure. Every issue mode passes
-with at least `6/10` observations; complete non-observations count as misses, and at most four
-trace-only unknowns may be accepted. Paired `v0` requires `0/10` observations with six proven controls
-plus at most four trace-only unknowns. Complete evidence that misses the reviewed threshold is `FAIL`;
+Authority results keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Baselines, issues, and paired `v0`
+controls require six complete healthy, defect-observed, or zero-defect control passes respectively.
+The remaining four attempts never veto that aggregate PASS and retain their exact miss categories.
+Complete evidence that misses the reviewed threshold is `FAIL`;
 missing, ambiguous, or unstable evidence is `INCOMPLETE`, never `FAIL`. A later authority or
 sub-session failure does not discard already persisted results. `run-test-agent-validation` reports
 all five Agents and 41 authorities as `PASS`, `FAIL`, `INCOMPLETE`, or `missing`, with only public-safe
@@ -192,20 +191,12 @@ python -m agent_insights_quality daily-prepare --report-date <Pacific YYYY-MM-DD
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 python -m agent_insights_quality daily-provision
 python -m agent_insights_quality daily-guide
-# Phase 1: one visible traffic session per Agent.
-python -m agent_insights_quality daily-run-traffic-agent --agent weather-agent
-python -m agent_insights_quality daily-run-traffic-agent --agent healthcare-agent
-python -m agent_insights_quality daily-run-traffic-agent --agent finance-agent
-python -m agent_insights_quality daily-run-traffic-agent --agent travel-agent
-python -m agent_insights_quality daily-run-traffic-agent --agent support-ticket-agent
-# Phase 2: up to eight visible read-only evaluators, until all 25 are verified.
-python -m agent_insights_quality daily-verify-next
-# Phase 3: one visible Agent Insights session per Agent.
-python -m agent_insights_quality daily-run-insights-agent --agent weather-agent
-python -m agent_insights_quality daily-run-insights-agent --agent healthcare-agent
-python -m agent_insights_quality daily-run-insights-agent --agent finance-agent
-python -m agent_insights_quality daily-run-insights-agent --agent travel-agent
-python -m agent_insights_quality daily-run-insights-agent --agent support-ticket-agent
+# One visible full-pipeline session per Agent; run these five concurrently.
+python -m agent_insights_quality daily-run-agent --agent weather-agent
+python -m agent_insights_quality daily-run-agent --agent healthcare-agent
+python -m agent_insights_quality daily-run-agent --agent finance-agent
+python -m agent_insights_quality daily-run-agent --agent travel-agent
+python -m agent_insights_quality daily-run-agent --agent support-ticket-agent
 python -m agent_insights_quality daily-compose
 python -m agent_insights_quality daily-status
 python -m agent_insights_quality render-adx-dashboard

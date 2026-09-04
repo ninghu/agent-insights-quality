@@ -48,7 +48,7 @@ def _manifest(
         "trace_contract_verified": False,
         "trace_behavior_summary": {},
         "trace_maturity_proof": None,
-        "trace_unknown_acceptance": None,
+        "role_pass_summary": None,
         "endpoint_request_summaries": [],
         "evidence_reference": None,
     }
@@ -86,7 +86,7 @@ def _manifest(
             {
                 "issue_id": issue_id,
                 "logical_version": issue_id,
-                "status": "skipped_baseline",
+                "status": "inconclusive",
             }
         )
         return value

@@ -10,6 +10,7 @@ from agent_insights_quality.automation_policy import load_automation_policy
 from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
 from agent_insights_quality.daily_coordinator import _policy_binding
 from agent_insights_quality.daily_lifecycle import (
+    AGENT_ORDER,
     DailyLifecycle,
     DailyLock,
     daily_runtime_root,
@@ -61,9 +62,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
             "run_contract_digest": None,
         },
         "artifacts": {
-            "traffic_manifest": None,
-            "verification_manifest": None,
-            "insight_manifest": None,
+            "lane_receipts": {agent_name: None for agent_name in AGENT_ORDER},
             "manifest": None,
             "assessment_index": None,
             "improvement_input": None,

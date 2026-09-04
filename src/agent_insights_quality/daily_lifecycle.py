@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -35,9 +36,7 @@ TERMINAL_STATES = {"COMPLETE", "FAILED"}
 _TRANSITIONS = {
     "LOCKED": {"PREPARED", "FAILED"},
     "PREPARED": {"TRAFFIC", "FAILED"},
-    "TRAFFIC": {"VERIFICATION", "FAILED"},
-    "VERIFICATION": {"INSIGHTS", "FAILED"},
-    "INSIGHTS": {"COMPOSED", "FAILED"},
+    "TRAFFIC": {"COMPOSED", "FAILED"},
     "COMPOSED": {"ASSESSMENTS_VALIDATED", "FAILED"},
     "ASSESSMENTS_VALIDATED": {"IMPROVEMENT_INPUT_READY", "FAILED"},
     "IMPROVEMENT_INPUT_READY": {"FINALIZED", "FAILED"},
@@ -55,8 +54,9 @@ def daily_runtime_root(base: Path | None = None) -> Path:
 
 
 class DailyLock:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, wait_seconds: float = 0.0) -> None:
         self.path = path
+        self._wait_seconds = wait_seconds
         self._stream: BinaryIO | None = None
 
     @property
@@ -67,26 +67,35 @@ class DailyLock:
         if self.owned:
             raise ContractError("Daily lock is already held")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        stream = self.path.open("a+b")
-        try:
-            stream.seek(0)
-            if stream.read(1) == b"":
-                stream.write(b"0")
-                stream.flush()
-                os.fsync(stream.fileno())
-            stream.seek(0)
-            if os.name == "nt":
-                import msvcrt
+        deadline = time.monotonic() + self._wait_seconds
+        while True:
+            stream = self.path.open("a+b")
+            try:
+                stream.seek(0)
+                if stream.read(1) == b"":
+                    stream.write(b"0")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
 
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
 
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as error:
-            stream.close()
-            raise ContractError("Another Daily operation holds this lock") from error
-        self._stream = stream
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                stream.close()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ContractError(
+                        "Another Daily operation holds this lock"
+                    ) from error
+                time.sleep(min(0.05, remaining))
+                continue
+            self._stream = stream
+            return
 
     def release(self) -> None:
         stream = self._stream
@@ -375,17 +384,14 @@ def validate_daily_lifecycle(value: Mapping[str, Any]) -> None:
         "RECEIPT_IMPORTED",
         "COMPLETE",
     }
-    after_traffic = {"VERIFICATION", "INSIGHTS", *progressed}
-    after_verification = {"INSIGHTS", *progressed}
-    if state in after_traffic and artifacts["traffic_manifest"] is None:
-        raise ContractError("Daily lifecycle lacks its 25-target traffic manifest")
-    if state in after_verification and artifacts["verification_manifest"] is None:
-        raise ContractError("Daily lifecycle lacks its 25-target verification manifest")
     if state in progressed and (
-        artifacts["insight_manifest"] is None
-        or artifacts["manifest"] is None
+        artifacts["manifest"] is None
+        or any(
+            artifacts["lane_receipts"][agent_name] is None
+            for agent_name in AGENT_ORDER
+        )
     ):
-        raise ContractError("Composed Daily lifecycle lacks exact phase manifests")
+        raise ContractError("Composed Daily lifecycle lacks exact Agent receipts")
     if state in progressed - {"COMPOSED"} and artifacts["assessment_index"] is None:
         raise ContractError("Daily lifecycle lacks validated assessment outputs")
     if state in progressed - {"COMPOSED", "ASSESSMENTS_VALIDATED"} and (

@@ -230,6 +230,9 @@ class LiveRuntime:
     def report_progress(self, message: str) -> None:
         self._progress.emit(message)
 
+    def current_time(self) -> datetime:
+        return self._utcnow().astimezone(UTC)
+
     def rate_limit_feedback(self) -> dict[str, int | float | None]:
         value = getattr(self._rate_limit_feedback, "value", None)
         return (
@@ -1185,6 +1188,9 @@ union traces, dependencies, requests
         allow_shared_operations: bool = False,
         poll_seconds: int | None = None,
         maximum_wait_seconds: int | None = None,
+        minimum_grace_seconds: int = 0,
+        maximum_poll_seconds: int | None = None,
+        age_bounded: bool = False,
         mature: bool = False,
         maturity_proof: Mapping[str, Any] | None = None,
     ) -> tuple[str, ...]:
@@ -1247,14 +1253,44 @@ union traces, dependencies, requests
             poll_seconds = TRACE_ASSERTION_POLL_SECONDS
         if maximum_wait_seconds is None:
             maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if maximum_poll_seconds is None:
+            maximum_poll_seconds = poll_seconds
         if (
             poll_seconds <= 0
             or maximum_wait_seconds <= 0
+            or minimum_grace_seconds < 0
+            or maximum_poll_seconds < poll_seconds
+            or not isinstance(age_bounded, bool)
             or not isinstance(mature, bool)
         ):
             raise ContractError("Telemetry discovery timing policy is invalid")
-        deadline = self._monotonic() + maximum_wait_seconds
+        if age_bounded and not mature:
+            grace_remaining = (
+                traffic_end.astimezone(UTC)
+                + timedelta(seconds=minimum_grace_seconds)
+                - self._utcnow().astimezone(UTC)
+            ).total_seconds()
+            if grace_remaining > 0:
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: waiting for hydration grace"
+                )
+                self._sleep(grace_remaining)
+        wait_seconds = (
+            max(
+                0.0,
+                (
+                    traffic_end.astimezone(UTC)
+                    + timedelta(seconds=maximum_wait_seconds)
+                    - self._utcnow().astimezone(UTC)
+                ).total_seconds(),
+            )
+            if age_bounded
+            else float(maximum_wait_seconds)
+        )
+        final_snapshot = mature or (age_bounded and wait_seconds <= 0)
+        deadline = self._monotonic() + wait_seconds
         next_progress = self._monotonic() + 60
+        current_poll_seconds = poll_seconds
         matched_operation_count = 0
         stable_operations: tuple[str, ...] | None = None
         stable_since: float | None = None
@@ -1263,7 +1299,7 @@ union traces, dependencies, requests
                 client,
                 query,
                 timespan=(start, traffic_end),
-                retry_transient=not mature,
+                retry_transient=not final_snapshot,
             )
             if result.status == LogsQueryStatus.SUCCESS and result.tables:
                 operations = _complete_operation_ids(
@@ -1280,7 +1316,8 @@ union traces, dependencies, requests
                 )
                 now = self._monotonic()
                 if operations is not None:
-                    if mature:
+                    current_poll_seconds = poll_seconds
+                    if final_snapshot:
                         return operations
                     if operations != stable_operations:
                         stable_operations = operations
@@ -1294,11 +1331,19 @@ union traces, dependencies, requests
                 else:
                     stable_operations = None
                     stable_since = None
+                    current_poll_seconds = min(
+                        maximum_poll_seconds,
+                        max(poll_seconds, current_poll_seconds * 2),
+                    )
             else:
                 stable_operations = None
                 stable_since = None
+                current_poll_seconds = min(
+                    maximum_poll_seconds,
+                    max(poll_seconds, current_poll_seconds * 2),
+                )
             now = self._monotonic()
-            if mature:
+            if final_snapshot:
                 break
             if now >= deadline:
                 break
@@ -1312,7 +1357,7 @@ union traces, dependencies, requests
                     f"({elapsed}s)"
                 )
                 next_progress = self._monotonic() + 60
-            self._sleep(min(poll_seconds, deadline - now))
+            self._sleep(min(current_poll_seconds, deadline - now))
         error = TelemetryCorrelationError(
             matched_reference_count=matched_operation_count,
             expected_reference_count=invocation.request_count,
@@ -1775,6 +1820,10 @@ union traces, dependencies, requests
         required_operations_by_request: tuple[tuple[str, ...], ...],
         window_start: str,
         window_end: str,
+        poll_seconds: int = 15,
+        maximum_wait_seconds: int = 15 * 60,
+        maximum_poll_seconds: int = 15,
+        age_bounded: bool = False,
     ) -> None:
         try:
             from azure.monitor.query import LogsQueryStatus
@@ -1801,9 +1850,23 @@ union traces, dependencies, requests
   by operation_Id
 """
         start = datetime.fromisoformat(window_start)
-        end = datetime.fromisoformat(window_end) + timedelta(minutes=15)
-        deadline = time.monotonic() + 15 * 60
-        while time.monotonic() < deadline:
+        traffic_end = datetime.fromisoformat(window_end)
+        end = traffic_end + timedelta(seconds=maximum_wait_seconds)
+        wait_seconds = (
+            max(
+                0.0,
+                (
+                    traffic_end.astimezone(UTC)
+                    + timedelta(seconds=maximum_wait_seconds)
+                    - self._utcnow().astimezone(UTC)
+                ).total_seconds(),
+            )
+            if age_bounded
+            else float(maximum_wait_seconds)
+        )
+        deadline = self._monotonic() + wait_seconds
+        current_poll = poll_seconds
+        while True:
             result = self._query_resource(
                 self._logs_client(),
                 query,
@@ -1819,7 +1882,14 @@ union traces, dependencies, requests
                 )
             ):
                 return
-            self._sleep(15)
+            now = self._monotonic()
+            if now >= deadline:
+                break
+            self._sleep(min(current_poll, deadline - now))
+            current_poll = min(
+                maximum_poll_seconds,
+                max(poll_seconds, current_poll * 2),
+            )
         raise ContractError("Trace contract did not stabilize before the bounded deadline")
 
     def trace_behavior_evidence(
@@ -2007,6 +2077,11 @@ union withsource=telemetry_type traces, dependencies, requests
         on_stable_output_messages: (
             Callable[[tuple[tuple[bool, bool], ...]], None] | None
         ) = None,
+        poll_seconds: int | None = None,
+        maximum_wait_seconds: int | None = None,
+        minimum_grace_seconds: int = 0,
+        maximum_poll_seconds: int | None = None,
+        age_bounded: bool = False,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         if requests is None:
             payload = json.loads(traffic_path.read_text(encoding="utf-8"))
@@ -2030,6 +2105,11 @@ union withsource=telemetry_type traces, dependencies, requests
             on_stable=on_stable,
             on_maturity_proof=on_maturity_proof,
             on_stable_output_messages=on_stable_output_messages,
+            poll_seconds=poll_seconds,
+            maximum_wait_seconds=maximum_wait_seconds,
+            minimum_grace_seconds=minimum_grace_seconds,
+            maximum_poll_seconds=maximum_poll_seconds,
+            age_bounded=age_bounded,
         )
 
     def trace_assertion_evidence_for_requests(
@@ -2046,6 +2126,9 @@ union withsource=telemetry_type traces, dependencies, requests
         on_first_pass: Callable[[], None],
         poll_seconds: int | None = None,
         maximum_wait_seconds: int | None = None,
+        minimum_grace_seconds: int = 0,
+        maximum_poll_seconds: int | None = None,
+        age_bounded: bool = False,
         on_stable: Callable[[dict[str, Any]], None] | None = None,
         on_stable_output_messages: (
             Callable[[tuple[tuple[bool, bool], ...]], None] | None
@@ -2065,10 +2148,15 @@ union withsource=telemetry_type traces, dependencies, requests
             poll_seconds = TRACE_ASSERTION_POLL_SECONDS
         if maximum_wait_seconds is None:
             maximum_wait_seconds = TRACE_ASSERTION_DEADLINE_SECONDS
+        if maximum_poll_seconds is None:
+            maximum_poll_seconds = poll_seconds
         if (
             stabilization_seconds <= 0
             or poll_seconds <= 0
             or maximum_wait_seconds < stabilization_seconds
+            or minimum_grace_seconds < 0
+            or maximum_poll_seconds < poll_seconds
+            or not isinstance(age_bounded, bool)
         ):
             raise ContractError("Hosted evidence timing policy is invalid")
         if len(requests) != len(response_references):
@@ -2093,8 +2181,31 @@ union withsource=telemetry_type traces, dependencies, requests
             )
         ):
             raise ContractError("Hosted trace observation threshold is invalid")
-        wait_seconds = maximum_wait_seconds
-        if on_maturity_proof is not None:
+        if age_bounded:
+            traffic_end = datetime.fromisoformat(
+                window_end.replace("Z", "+00:00")
+            ).astimezone(UTC)
+            grace_remaining = (
+                traffic_end
+                + timedelta(seconds=minimum_grace_seconds)
+                - _runtime_utcnow(self)
+            ).total_seconds()
+            if grace_remaining > 0:
+                self.report_progress(
+                    f"{agent_name}/{foundry_version}: waiting for hydration grace"
+                )
+                self._sleep(grace_remaining)
+            wait_seconds = max(
+                0.0,
+                (
+                    traffic_end
+                    + timedelta(seconds=maximum_wait_seconds)
+                    - _runtime_utcnow(self)
+                ).total_seconds(),
+            )
+        else:
+            wait_seconds = maximum_wait_seconds
+        if on_maturity_proof is not None and not age_bounded:
             wait_seconds = max(
                 wait_seconds,
                 _seconds_until_maturity_boundary(
@@ -2105,7 +2216,9 @@ union withsource=telemetry_type traces, dependencies, requests
                 ),
             )
         deadline = self._monotonic() + wait_seconds
+        final_snapshot = age_bounded and wait_seconds <= 0
         next_progress = self._monotonic() + _TRACE_ASSERTION_PROGRESS_SECONDS
+        current_poll_seconds = poll_seconds
         last_results: tuple[tuple[TraceAssertionEvidence, ...], ...] | None = None
         stable_signature: tuple[
             tuple[tuple[str, str], ...],
@@ -2113,7 +2226,7 @@ union withsource=telemetry_type traces, dependencies, requests
             tuple[str, ...],
         ] | None = None
         stable_since: float | None = None
-        first_mapping_observed = False
+        first_pass_published = False
         passing = False
         correlated: tuple[list[dict[str, Any]], ...] | None = None
         response_anchors: tuple[str, ...] | None = None
@@ -2176,10 +2289,11 @@ union withsource=telemetry_type traces, dependencies, requests
             )
             correlated = correlation[0] if correlation is not None else None
             response_anchors = correlation[1] if correlation is not None else None
-            if _request_correlation_impossible(
+            correlation_impossible = _request_correlation_impossible(
                 rows,
                 response_references,
-            ):
+            )
+            if correlation_impossible and not age_bounded:
                 raise _trace_assertion_activation_error(
                     "Hosted evidence found ambiguous response-to-operation correlation",
                     code=_TRACE_ASSERTION_CORRELATION_DIAGNOSTIC,
@@ -2192,6 +2306,11 @@ union withsource=telemetry_type traces, dependencies, requests
                     ),
                     expected_reference_count=len(response_references),
                 )
+            if correlation_impossible:
+                correlation = None
+                correlated = None
+                response_anchors = None
+                diagnostic_code = _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC
             output_messages_states = (
                 _canonical_output_messages_state_from_correlated_rows(correlated)
                 if on_stable_output_messages is not None
@@ -2215,9 +2334,6 @@ union withsource=telemetry_type traces, dependencies, requests
                 on_stable_semantic_assertions is None
                 or semantic_results is not None
             ):
-                if not first_mapping_observed:
-                    first_mapping_observed = True
-                    on_first_pass()
                 last_results = tuple(
                     _trace_assertion_result(request_rows, fixture)
                     for request_rows, fixture in zip(
@@ -2268,9 +2384,16 @@ union withsource=telemetry_type traces, dependencies, requests
                 if (
                     passing
                     and stable_since is not None
-                    and now - stable_since >= stabilization_seconds
+                    and (
+                        final_snapshot
+                        or now - stable_since >= stabilization_seconds
+                    )
                 ):
+                    if not first_pass_published:
+                        first_pass_published = True
+                        on_first_pass()
                     return publish_stable_results()
+                current_poll_seconds = poll_seconds
             else:
                 passing = False
                 stable_signature = None
@@ -2279,6 +2402,10 @@ union withsource=telemetry_type traces, dependencies, requests
                     _TRACE_ASSERTION_CORRELATION_DIAGNOSTIC
                     if correlated is None
                     else None
+                )
+                current_poll_seconds = min(
+                    maximum_poll_seconds,
+                    max(poll_seconds, current_poll_seconds * 2),
                 )
             now = self._monotonic()
             if now >= deadline:
@@ -2298,7 +2425,11 @@ union withsource=telemetry_type traces, dependencies, requests
                     f"Hosted {state} evidence is stabilizing ({elapsed}s)"
                 )
                 next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
-            self._sleep(min(poll_seconds, deadline - now))
+            self._sleep(min(current_poll_seconds, deadline - now))
+        if correlated is not None and last_results is not None and passing:
+            if not first_pass_published:
+                on_first_pass()
+            return publish_stable_results()
         if (
             correlated is not None
             and last_results is not None
@@ -2315,7 +2446,11 @@ union withsource=telemetry_type traces, dependencies, requests
                     evidence_window_start=window_start,
                     evidence_window_end=window_end,
                     snapshot_observed_at=self._utcnow().astimezone(UTC),
-                    maximum_hydration_seconds=maximum_wait_seconds,
+                    maximum_hydration_seconds=(
+                        maximum_wait_seconds - stabilization_seconds
+                        if age_bounded
+                        else maximum_wait_seconds
+                    ),
                     stabilization_seconds=stabilization_seconds,
                 )
                 if proof is not None:
@@ -3674,9 +3809,15 @@ def _correlated_request_rows(
     if set(rows_by_operation) != allowed_operations:
         return None
     rows_by_operation = {
-        operation_id: _deduplicate_identical_telemetry_rows(operation_rows)
+        operation_id: _filter_wrong_identity_subtrees(
+            _deduplicate_identical_telemetry_rows(operation_rows),
+            agent_name=agent_name,
+            foundry_version=foundry_version,
+        )
         for operation_id, operation_rows in rows_by_operation.items()
     }
+    if any(not operation_rows for operation_rows in rows_by_operation.values()):
+        return None
     bindings: list[tuple[str, str, dict[str, Any], set[str]]] = []
     for reference, operation_id in zip(
         response_references,
@@ -3771,6 +3912,51 @@ def _deduplicate_identical_telemetry_rows(
         key = json.dumps(row, sort_keys=True, ensure_ascii=True, default=str)
         unique.setdefault(key, row)
     return list(unique.values())
+
+
+def _filter_wrong_identity_subtrees(
+    rows: list[dict[str, Any]],
+    *,
+    agent_name: str,
+    foundry_version: str,
+) -> list[dict[str, Any]]:
+    exact_root_ids = {
+        str(row.get("span_id") or "")
+        for row in rows
+        if row.get("operation_name") == "invoke_agent"
+        and row.get("agent_name") == agent_name
+        and row.get("agent_version") == foundry_version
+    }
+    wrong_root_ids = {
+        str(row.get("span_id") or "")
+        for row in rows
+        if row.get("operation_name") == "invoke_agent"
+        and (
+            (
+                row.get("agent_name")
+                and row.get("agent_name") != agent_name
+            )
+            or (
+                row.get("agent_version")
+                and row.get("agent_version") != foundry_version
+            )
+        )
+    }
+    excluded = wrong_root_ids - exact_root_ids
+    changed = True
+    while changed:
+        descendants = {
+            str(row.get("span_id") or "")
+            for row in rows
+            if str(row.get("parent_span_id") or "") in excluded
+        }
+        changed = not descendants <= excluded
+        excluded.update(descendants)
+    return [
+        row
+        for row in rows
+        if str(row.get("span_id") or "") not in excluded
+    ]
 
 
 def _valid_span_graph(

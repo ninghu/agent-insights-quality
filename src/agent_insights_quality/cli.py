@@ -48,11 +48,6 @@ from agent_insights_quality.daily_coordinator import (
     run_daily_agent,
     validate_daily_assessment_outputs,
 )
-from agent_insights_quality.daily_phases import (
-    release_daily_verification_claim,
-    run_daily_insights_agent,
-    verify_next_daily_target,
-)
 from agent_insights_quality.email import (
     build_runtime_links,
     create_request,
@@ -69,6 +64,7 @@ from agent_insights_quality.github_preview import (
     verify_daily_email_test_preview,
 )
 from agent_insights_quality.live import LiveRuntime
+from agent_insights_quality.models import SKIPPED_VERSION_STATUSES
 from agent_insights_quality.improvement_memory import (
     build_normalized_summary,
     validate_analysis_against_summary,
@@ -181,22 +177,8 @@ def build_parser() -> argparse.ArgumentParser:
     daily_prepare.add_argument("--test-run", action="store_true")
     daily_prepare.add_argument("--publish-preview", action="store_true")
     commands.add_parser("daily-provision")
-    daily_agent = commands.add_parser("daily-run-traffic-agent")
+    daily_agent = commands.add_parser("daily-run-agent")
     daily_agent.add_argument(
-        "--agent",
-        choices=(
-            "weather-agent",
-            "healthcare-agent",
-            "finance-agent",
-            "travel-agent",
-            "support-ticket-agent",
-        ),
-        required=True,
-    )
-    commands.add_parser("daily-verify-next")
-    commands.add_parser("daily-release-verification")
-    daily_insights = commands.add_parser("daily-run-insights-agent")
-    daily_insights.add_argument(
         "--agent",
         choices=(
             "weather-agent",
@@ -398,20 +380,8 @@ def _dispatch(args: argparse.Namespace) -> str | None:
         )
     if args.command == "daily-provision":
         return json.dumps(provision_daily(), sort_keys=True)
-    if args.command == "daily-run-traffic-agent":
+    if args.command == "daily-run-agent":
         return json.dumps(run_daily_agent(args.agent), sort_keys=True)
-    if args.command == "daily-verify-next":
-        return json.dumps(verify_next_daily_target(), sort_keys=True)
-    if args.command == "daily-release-verification":
-        return json.dumps(
-            release_daily_verification_claim(),
-            sort_keys=True,
-        )
-    if args.command == "daily-run-insights-agent":
-        return json.dumps(
-            run_daily_insights_agent(args.agent),
-            sort_keys=True,
-        )
     if args.command == "daily-compose":
         return json.dumps(compose_daily(), sort_keys=True)
     if args.command == "daily-status":
@@ -713,6 +683,7 @@ def _dispatch(args: argparse.Namespace) -> str | None:
             item["issue_id"]
             for agent in manifest["agents"]
             for item in agent["issues"]
+            if item.get("status") not in SKIPPED_VERSION_STATUSES
         }
         assessments = load_assessments(
             args.assessment,

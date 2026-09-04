@@ -50,18 +50,54 @@ def _prepared(tmp_path: Path, registry: dict):
         )
 
 
-def test_daily_guide_returns_visible_whole_agent_traffic_lanes(tmp_path: Path) -> None:
+def test_daily_guide_returns_visible_whole_agent_lanes(tmp_path: Path) -> None:
     _prepared(tmp_path, {"test_region": "SwedenCentral"})
     guide = coordinator.daily_guide(base=tmp_path)
 
     assert guide["internal_fanout"] is False
     assert guide["max_parallel_agents"] == 5
-    assert [item["agent"] for item in guide["traffic_lanes"]] == list(AGENT_ORDER)
-    assert all(len(item["versions"]) == 5 for item in guide["traffic_lanes"])
+    assert [item["agent"] for item in guide["agent_lanes"]] == list(AGENT_ORDER)
+    assert all(len(item["issues"]) == 4 for item in guide["agent_lanes"])
     assert all(
-        "daily-run-traffic-agent" in item["command"]
-        for item in guide["traffic_lanes"]
+        "daily-run-agent" in item["command"]
+        for item in guide["agent_lanes"]
     )
+
+
+def test_compose_releases_coordinator_lock_during_artifact_work(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    active = _prepared(tmp_path, {"test_region": "SwedenCentral"})
+    lock = DailyLock(daily_runtime_root(tmp_path) / "coordinator.lock")
+    with lock:
+        active = DailyLifecycle(lock=lock, base=tmp_path).transition(
+            active,
+            next_state="TRAFFIC",
+        )
+    monkeypatch.setattr(
+        coordinator,
+        "_assert_checkout_binding",
+        lambda *_args, **_kwargs: None,
+    )
+    acquired = []
+
+    def prepare(**_kwargs):
+        with coordinator._coordinator_lock(tmp_path):
+            acquired.append(True)
+        raise RuntimeError("synthetic composition stop")
+
+    monkeypatch.setattr(coordinator, "_prepare_daily_composition", prepare)
+
+    with pytest.raises(RuntimeError, match="composition stop"):
+        coordinator.compose_daily(base=tmp_path)
+
+    assert acquired == [True]
+    current = coordinator._read_active(
+        tmp_path,
+        allowed_states={"TRAFFIC"},
+    )
+    assert current.digest == active.digest
 
 
 def test_daily_prepare_binds_snapshot_and_clean_checkout_without_staging_gate(

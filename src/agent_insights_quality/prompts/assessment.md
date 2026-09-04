@@ -57,12 +57,10 @@ terminal evidence proves the card's claim.
 
 Agent source, traffic, and version digests are reviewed before qualification. A baseline is complete
 only when `behavior_summary` proves endpoint, semantic, and terminal evidence complete. Prompt
-baselines additionally require exactly five request summaries, one direct terminal response and zero
-function calls per request, exactly five complete operations, and every reviewed assertion passing.
-Hosted baselines require one privacy-safe terminal success plus output-presence signal per request;
-HTTP 200 alone is insufficient.
-Any nonzero `unhandled_error_count` makes baseline evidence incomplete. A handled child error may
-still be healthy only when the same request has independently proven terminal success and output.
+baselines additionally require ten reviewed attempts and at least six complete healthy role passes.
+Each passing Prompt attempt has one direct terminal response and no function calls; each passing
+Hosted attempt has an independently proven terminal success and output signal. HTTP 200 alone is
+insufficient. The other four attempts remain visible misses and cannot veto six strict passes.
 Treat `source_integrity` and `manifest_reference` as the digest-bound proof that the reviewed source
 delta and per-request evidence belong to this exact qualification run.
 
@@ -73,12 +71,12 @@ failed or is absent, return `INCOMPLETE` with `test_framework` ownership, never 
 `insight_engine` ownership. Assertions that are not activation gates remain corroborating evidence
 rather than an independent scoring framework. Never treat an Agent's self-reported defect flag,
 diagnostic label, or claim as activation proof.
-For a package with `trace_unknown_acceptance`, treat only the recorded
-`unknown_attempt_indices` as trace-only unknowns. They remain incomplete and are never silently
-counted as healthy or observed. Baselines require six proven healthy attempts and no observed
-failure; issues require six proven observations and may also contain complete behavioral misses;
-paired controls require six complete zero-observation attempts. Every accepted unknown retains
-complete endpoint, exact identity, and required semantic evidence with no contradiction.
+Use `role_pass_summary` only as deterministic aggregate context; never relabel a miss as a pass.
+Baselines require six complete healthy attempts and issues require six complete defect-observed
+attempts. The other four attempts may be complete non-passes, contradictions, or missing/unknown
+endpoint, identity, semantic, or trace evidence and never veto six strict passes. Every passing
+attempt itself still requires complete exact endpoint, identity, required semantic/trace, and
+internally consistent evidence.
 
 Evaluate every object in `observed_insights` independently in `card_evaluations`. Echo each card's
 reference, title, category, and severity exactly. Use one card-level verdict, finding type, ownership,

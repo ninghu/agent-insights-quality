@@ -1,290 +1,178 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from agent_insights_quality.models import (
+    InvocationEvidence,
     RequestCompletionEvidence,
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
+    request_completion_payload,
 )
 from agent_insights_quality.runner import (
     _baseline_validation_decision,
     _issue_activation_decision,
 )
-from agent_insights_quality.validation_copilot import (
-    _trace_unknown_acceptance,
-)
 from agent_insights_quality.validation_trace_gap_policy import (
-    TRACE_UNKNOWN_ACCEPTANCE_POLICY,
+    ROLE_PASS_POLICY,
     build_trace_maturity_proof,
+    daily_target_decision,
+    role_pass_summary,
     target_evidence_decided,
-    trace_unknown_acceptance,
+    validate_trace_maturity_proof,
 )
-from agent_insights_quality.models import InvocationEvidence
-
-HASH = "sha256:" + ("a" * 64)
 
 
-def _daily_maturity_proof() -> dict:
-    end = datetime(2026, 9, 3, 0, 1, tzinfo=UTC)
-    proof = build_trace_maturity_proof(
-        evidence_window_start="2026-09-03T00:00:00+00:00",
-        evidence_window_end=end.isoformat(),
-        snapshot_observed_at=end + timedelta(seconds=1080),
-        maximum_hydration_seconds=900,
-        stabilization_seconds=180,
-    )
-    assert proof is not None
-    return proof
-
-
-def _attempts(
+def _attempt(
+    index: int,
     *,
-    observations: int,
-    complete_misses: int,
-    unknowns: int,
-) -> list[dict]:
-    attempts = []
-    for index in range(1, observations + complete_misses + unknowns + 1):
-        observed = index <= observations
-        complete = index <= observations + complete_misses
-        attempts.append(
-            {
-                "index": index,
-                "complete": complete,
-                "observation": observed,
-                "error_code": None if complete else "missing_evidence",
-                "endpoint_complete": True,
-                "identity_complete": True,
-                "semantic_evidence_complete": True,
-                "trace_evidence_complete": complete,
-                "assertions_contradicted": False,
-            }
-        )
-    return attempts
-
-
-@pytest.mark.parametrize(
-    ("observations", "complete_misses", "unknowns"),
-    [(6, 0, 4), (6, 2, 2), (8, 0, 2)],
-)
-def test_issue_trace_unknown_accepts_reviewed_bounds(
-    observations: int,
-    complete_misses: int,
-    unknowns: int,
-) -> None:
-    acceptance = trace_unknown_acceptance(
-        target_role="issue",
-        validation_mode="deterministic",
-        n=10,
-        k=6,
-        required_surfaces=["semantic", "trace"],
-        attempts=_attempts(
-            observations=observations,
-            complete_misses=complete_misses,
-            unknowns=unknowns,
-        ),
-        maturity_proof_digest=HASH,
-    )
-
-    assert acceptance == {
-        "policy": TRACE_UNKNOWN_ACCEPTANCE_POLICY,
-        "target_role": "issue",
-        "observation_count": observations,
-        "unknown_attempt_indices": list(
-            range(observations + complete_misses + 1, 11)
-        ),
-        "maturity_proof_digest": HASH,
+    complete: bool,
+    observation: bool,
+    missing: str | None = None,
+) -> dict:
+    return {
+        "index": index,
+        "complete": complete,
+        "observation": observation,
+        "error_code": None if complete else "missing_evidence",
+        "endpoint_complete": missing != "endpoint",
+        "identity_complete": missing != "identity",
+        "semantic_evidence_complete": missing != "semantic",
+        "trace_evidence_complete": missing != "trace",
+        "assertions_contradicted": complete and not observation,
     }
 
 
-def test_complete_issue_misses_count_only_against_six_of_ten() -> None:
-    assert (
-        trace_unknown_acceptance(
-            target_role="issue",
-            validation_mode="model_mediated",
-            n=10,
-            k=6,
-            required_surfaces=["semantic", "trace"],
-            attempts=_attempts(
-                observations=6,
-                complete_misses=4,
-                unknowns=0,
-            ),
-            maturity_proof_digest=None,
-        )
-        is None
-    )
-    assert target_evidence_decided(
+def _six_pass_four_arbitrary_misses() -> list[dict]:
+    return [
+        *[
+            _attempt(index, complete=True, observation=True)
+            for index in range(1, 7)
+        ],
+        _attempt(7, complete=True, observation=False),
+        _attempt(8, complete=False, observation=False, missing="endpoint"),
+        _attempt(9, complete=False, observation=True, missing="semantic"),
+        _attempt(10, complete=False, observation=False, missing="trace"),
+    ]
+
+
+def test_role_pass_summary_accepts_six_strict_passes_and_classifies_misses() -> None:
+    summary = role_pass_summary(
         target_role="issue",
         n=10,
         k=6,
-        complete_count=10,
-        observation_count=6,
-        trace_unknown_acceptance=None,
+        attempts=_six_pass_four_arbitrary_misses(),
     )
 
-
-def test_baseline_and_control_accept_four_trace_unknowns() -> None:
-    baseline = trace_unknown_acceptance(
-        target_role="baseline",
-        validation_mode="baseline",
-        n=10,
-        k=6,
-        required_surfaces=["semantic", "trace"],
-        attempts=_attempts(
-            observations=6,
-            complete_misses=0,
-            unknowns=4,
-        ),
-        maturity_proof_digest=HASH,
-    )
-    controls = _attempts(observations=0, complete_misses=6, unknowns=4)
-    paired = trace_unknown_acceptance(
-        target_role="paired_v0",
-        validation_mode="deterministic",
-        n=10,
-        k=6,
-        required_surfaces=["trace"],
-        attempts=controls,
-        maturity_proof_digest=HASH,
-    )
-
-    assert baseline is not None
-    assert baseline["target_role"] == "baseline"
-    assert baseline["unknown_attempt_indices"] == [7, 8, 9, 10]
-    assert paired is not None
-    assert paired["target_role"] == "paired_v0"
-    assert paired["unknown_attempt_indices"] == [7, 8, 9, 10]
+    assert summary == {
+        "policy": ROLE_PASS_POLICY,
+        "target_role": "issue",
+        "required_pass_count": 6,
+        "pass_count": 6,
+        "pass_attempt_indices": [1, 2, 3, 4, 5, 6],
+        "miss_count": 4,
+        "miss_attempt_indices": [7, 8, 9, 10],
+        "miss_counts": {
+            "complete_non_pass": 1,
+            "endpoint_incomplete": 1,
+            "identity_incomplete": 0,
+            "semantic_incomplete": 1,
+            "trace_incomplete": 1,
+            "other_incomplete": 0,
+        },
+    }
+    assert target_evidence_decided(n=10, k=6, role_pass_count=6)
 
 
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        "too_many_unknown",
-        "semantic_insufficient",
-        "endpoint",
-        "identity",
-        "contradiction",
-        "not_mature",
-    ],
-)
-def test_trace_unknown_rejects_unreviewed_evidence(mutation: str) -> None:
-    attempts = _attempts(observations=6, complete_misses=0, unknowns=4)
-    maturity_digest = HASH
-    if mutation == "too_many_unknown":
-        attempts = _attempts(observations=5, complete_misses=0, unknowns=5)
-    elif mutation == "semantic_insufficient":
-        attempts[-1]["semantic_evidence_complete"] = False
-    elif mutation == "endpoint":
-        attempts[-1]["endpoint_complete"] = False
-    elif mutation == "identity":
-        attempts[-1]["identity_complete"] = False
-    elif mutation == "contradiction":
-        attempts[-1]["assertions_contradicted"] = True
-    else:
-        maturity_digest = None
+def test_baseline_and_issue_share_six_role_pass_threshold() -> None:
+    attempts = _six_pass_four_arbitrary_misses()
 
-    assert (
-        trace_unknown_acceptance(
-            target_role="issue",
-            validation_mode="model_mediated",
+    for role in ("baseline", "issue"):
+        summary = role_pass_summary(
+            target_role=role,
             n=10,
             k=6,
-            required_surfaces=["semantic", "trace"],
             attempts=attempts,
-            maturity_proof_digest=maturity_digest,
         )
-        is None
-    )
-
-
-def test_control_rejects_observation_and_baseline_rejects_failure() -> None:
-    controls = _attempts(observations=0, complete_misses=9, unknowns=1)
-    controls[0]["observation"] = True
-    assert (
-        trace_unknown_acceptance(
-            target_role="paired_v0",
-            validation_mode="model_mediated",
+        assert summary is not None
+        assert summary["pass_count"] == 6
+        assert target_evidence_decided(
             n=10,
             k=6,
-            required_surfaces=["trace"],
-            attempts=controls,
-            maturity_proof_digest=HASH,
+            role_pass_count=int(summary["pass_count"]),
         )
-        is None
+
+
+def test_paired_v0_requires_six_complete_zero_defect_controls() -> None:
+    six_controls = [
+        *[
+            _attempt(index, complete=True, observation=False)
+            for index in range(1, 7)
+        ],
+        _attempt(7, complete=True, observation=True),
+        _attempt(8, complete=True, observation=True),
+        _attempt(9, complete=False, observation=False, missing="identity"),
+        _attempt(10, complete=False, observation=True, missing="trace"),
+    ]
+    accepted = role_pass_summary(
+        target_role="paired_v0",
+        n=10,
+        k=6,
+        attempts=six_controls,
     )
-    baseline = _attempts(observations=6, complete_misses=0, unknowns=4)
-    baseline[0]["observation"] = False
-    assert (
-        trace_unknown_acceptance(
-            target_role="baseline",
-            validation_mode="baseline",
-            n=10,
-            k=6,
-            required_surfaces=["semantic", "trace"],
-            attempts=baseline,
-            maturity_proof_digest=HASH,
-        )
-        is None
+    rejected = role_pass_summary(
+        target_role="paired_v0",
+        n=10,
+        k=6,
+        attempts=[
+            *six_controls[:5],
+            _attempt(6, complete=True, observation=True),
+            *six_controls[6:],
+        ],
     )
 
-
-def _staging_attempts() -> list[dict]:
-    values = []
-    for attempt in _attempts(observations=6, complete_misses=0, unknowns=4):
-        complete = attempt["complete"]
-        step = {
-            "endpoint_pass": True,
-            "identity_pass": True,
-            "semantic_pass": True,
-            "trace_pass": complete,
-            "semantic_evidence_complete": True,
-            "trace_evidence_complete": complete,
-        }
-        values.append(
-            {
-                "index": attempt["index"],
-                "complete": complete,
-                "observation": attempt["observation"],
-                "error_code": attempt["error_code"],
-                "setup_steps": [deepcopy(step)],
-                "probe_steps": [deepcopy(step)],
-            }
-        )
-    return values
+    assert accepted is not None
+    assert accepted["pass_count"] == 6
+    assert accepted["miss_counts"]["complete_non_pass"] == 2
+    assert target_evidence_decided(n=10, k=6, role_pass_count=6)
+    assert rejected is not None
+    assert rejected["pass_count"] == 5
+    assert not target_evidence_decided(n=10, k=6, role_pass_count=5)
 
 
-def _daily_invocation() -> InvocationEvidence:
+def _invocation(*, observed: int, semantic_non_pass: int = 0) -> InvocationEvidence:
     summaries = []
-    for attempt in _attempts(observations=6, complete_misses=0, unknowns=4):
-        observed = attempt["observation"]
+    for index in range(1, 11):
+        role_pass = index <= observed
+        semantic_pass = role_pass or index > observed + semantic_non_pass
+        trace_pass = role_pass
         summaries.append(
             RequestCompletionEvidence(
-                request_index=attempt["index"] - 1,
+                request_index=index - 1,
                 response_count=1,
                 usable_response=True,
                 semantic_assertion_count=1,
-                semantic_assertions_passed=1,
+                semantic_assertions_passed=int(semantic_pass),
                 assertion_results=(
-                    SemanticAssertionEvidence("semantic", True, True),
+                    SemanticAssertionEvidence(
+                        "semantic",
+                        semantic_pass,
+                        evidence_sufficient=True,
+                    ),
                 ),
                 activation_gate=True,
                 direct_terminal_response_count=1,
                 function_call_count=0,
                 trace_assertion_count=1,
-                trace_assertions_passed=int(observed),
+                trace_assertions_passed=int(trace_pass),
                 trace_assertion_results=(
                     TraceAssertionEvidence(
                         "trace",
-                        observed,
-                        evidence_sufficient=observed,
+                        trace_pass,
+                        evidence_sufficient=True,
                     ),
                 ),
-                error_code=None if observed else "missing_evidence",
+                error_code=None if role_pass else "assertion_failed",
             )
         )
     return InvocationEvidence(
@@ -302,56 +190,87 @@ def _daily_invocation() -> InvocationEvidence:
     )
 
 
-def test_staging_and_daily_share_issue_trace_unknown_acceptance() -> None:
-    rule = {
-        "validation_mode": "model_mediated",
-        "n": 10,
-        "k": 6,
-        "defect_predicate": {
-            "kind": "all_observation_steps_pass",
-            "required_surfaces": ["semantic", "trace"],
-        },
-    }
-    invocation = _daily_invocation()
-    maturity_proof = _daily_maturity_proof()
-    maturity_digest = maturity_proof["maturity_proof_digest"]
-    staging = _trace_unknown_acceptance(
-        authority=type("Authority", (), {"authority_kind": "issue"})(),
-        rule=rule,
-        target={
-            "evidence_snapshot": {
-                "mature": True,
-                "maturity_proof_digest": maturity_digest,
-                "required_trace_hydration": "incomplete",
-            }
-        },
-        attempts=_staging_attempts(),
-        target_role="issue",
-    )
-    daily_complete, daily = _issue_activation_decision(
+def test_daily_issue_accepts_healthcare_nine_plus_one_semantic_non_pass() -> None:
+    invocation = _invocation(observed=9, semantic_non_pass=1)
+
+    decided, summary = _issue_activation_decision(
         {
-            "validation_mode": "model_mediated",
+            "validation_mode": "deterministic",
             "n": 10,
             "k": 6,
             "required_surfaces": ["semantic", "trace"],
         },
         invocation,
-        maturity_proof,
     )
 
-    assert daily_complete is True
-    assert staging == daily
+    assert decided is True
+    assert summary is not None
+    assert summary["pass_count"] == 9
+    assert summary["miss_counts"]["complete_non_pass"] == 1
 
 
-def test_daily_baseline_uses_shared_six_plus_four_policy() -> None:
-    invocation = _daily_invocation()
+def test_daily_issue_accepts_travel_six_and_eight_of_ten() -> None:
+    for observed in (6, 8):
+        decided, summary = _issue_activation_decision(
+            {
+                "validation_mode": "model_mediated",
+                "n": 10,
+                "k": 6,
+                "required_surfaces": ["semantic", "trace"],
+            },
+            _invocation(observed=observed),
+        )
 
-    complete, acceptance = _baseline_validation_decision(
-        invocation,
-        _daily_maturity_proof(),
+        assert decided is True
+        assert summary is not None
+        assert summary["pass_count"] == observed
+        assert summary["miss_count"] == 10 - observed
+
+
+def test_daily_baseline_accepts_six_strict_healthy_attempts() -> None:
+    decided, summary = _baseline_validation_decision(_invocation(observed=6))
+
+    assert decided is True
+    assert summary is not None
+    assert summary["target_role"] == "baseline"
+    assert summary["pass_count"] == 6
+
+
+def test_daily_target_keeps_incomplete_observation_as_miss() -> None:
+    invocation = _invocation(observed=6)
+    summaries = [
+        request_completion_payload(item)
+        for item in invocation.request_summaries
+    ]
+    summaries[0]["trace_assertion_results"][0]["evidence_sufficient"] = False
+
+    decided, summary = daily_target_decision(
+        target_role="issue",
+        validation_mode="deterministic",
+        n=10,
+        k=6,
+        required_surfaces=["semantic", "trace"],
+        summaries=summaries,
+        identity_verified=True,
     )
 
-    assert complete is True
-    assert acceptance is not None
-    assert acceptance["target_role"] == "baseline"
-    assert acceptance["unknown_attempt_indices"] == [7, 8, 9, 10]
+    assert decided is False
+    assert summary is not None
+    assert summary["pass_count"] == 5
+    assert summary["miss_counts"]["trace_incomplete"] == 1
+
+
+def test_trace_maturity_proof_remains_integrity_bound() -> None:
+    end = datetime(2026, 9, 3, 0, 1, tzinfo=UTC)
+    proof = build_trace_maturity_proof(
+        evidence_window_start="2026-09-03T00:00:00+00:00",
+        evidence_window_end=end.isoformat(),
+        snapshot_observed_at=end + timedelta(seconds=1080),
+        maximum_hydration_seconds=900,
+        stabilization_seconds=180,
+    )
+
+    assert proof is not None
+    assert validate_trace_maturity_proof(proof) == proof[
+        "maturity_proof_digest"
+    ]

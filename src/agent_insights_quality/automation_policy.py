@@ -24,7 +24,6 @@ TRACE_ASSERTION_POLL_SECONDS = 15
 class AutomationPolicy:
     issues_per_agent_daily: int
     max_parallel_agents: int
-    daily_verification_max_parallel: int
     daily_inter_version_pacing_seconds: int
     insight_lookback_hours: float
     insight_lookback_max_hours: float
@@ -33,6 +32,9 @@ class AutomationPolicy:
     clean_window_ingestion_margin_seconds: int
     clean_window_max_wait_seconds: int
     trace_assertion_stabilization_seconds: int
+    daily_trace_hydration_grace_seconds: int
+    daily_trace_hydration_maximum_wait_seconds: int
+    daily_trace_hydration_maximum_poll_seconds: int
     insight_start_margin_seconds: int
     max_recovery_versions: int
     agent_start_stagger_seconds: int
@@ -61,12 +63,6 @@ def load_automation_policy(
     )
     if max_parallel_agents > 5:
         raise ContractError("Automation parallel Agent limit exceeds the fixed inventory")
-    verification_parallel = _positive_int(
-        value.get("daily_verification_max_parallel"),
-        "Daily verification parallel limit",
-    )
-    if verification_parallel != 8:
-        raise ContractError("Daily verification parallel limit must be eight")
     pacing_seconds = _positive_int(
         value.get("daily_inter_version_pacing_seconds"),
         "Daily inter-version pacing",
@@ -101,6 +97,18 @@ def load_automation_policy(
         value.get("trace_assertion_stabilization_seconds"),
         "trace assertion stabilization interval",
     )
+    hydration_grace = _nonnegative_int(
+        value.get("daily_trace_hydration_grace_seconds"),
+        "Daily trace hydration grace",
+    )
+    hydration_maximum = _positive_int(
+        value.get("daily_trace_hydration_maximum_wait_seconds"),
+        "Daily trace hydration maximum",
+    )
+    hydration_maximum_poll = _positive_int(
+        value.get("daily_trace_hydration_maximum_poll_seconds"),
+        "Daily trace hydration maximum poll",
+    )
     start_margin = _positive_int(
         value.get("insight_start_margin_seconds"),
         "Insight start margin",
@@ -109,14 +117,24 @@ def load_automation_policy(
         raise ContractError(
             "Maximum clean-window wait is shorter than the uncertainty horizon"
         )
-    if assertion_stabilization <= 2 * TRACE_ASSERTION_POLL_SECONDS + margin:
+    if assertion_stabilization != 2 * TRACE_ASSERTION_POLL_SECONDS:
         raise ContractError(
-            "Trace assertion stabilization interval is shorter than the reviewed "
-            "ingestion margin"
+            "Trace assertion stabilization interval must use the reviewed "
+            "two-snapshot duration"
         )
     if assertion_stabilization >= TRACE_ASSERTION_DEADLINE_SECONDS:
         raise ContractError(
             "Trace assertion stabilization interval must fit within its bounded deadline"
+        )
+    if hydration_maximum < 60 or hydration_maximum > 5 * 60:
+        raise ContractError(
+            "Daily trace hydration maximum is outside the reviewed horizon"
+        )
+    if hydration_grace >= hydration_maximum:
+        raise ContractError("Daily trace hydration grace exceeds its horizon")
+    if hydration_maximum_poll < poll or hydration_maximum_poll > 60:
+        raise ContractError(
+            "Daily trace hydration maximum poll is outside reviewed bounds"
         )
     if start_margin + TRACE_ASSERTION_POLL_SECONDS >= lookback * 3600:
         raise ContractError(
@@ -157,7 +175,6 @@ def load_automation_policy(
     return AutomationPolicy(
         issues_per_agent_daily=daily_issues,
         max_parallel_agents=max_parallel_agents,
-        daily_verification_max_parallel=verification_parallel,
         daily_inter_version_pacing_seconds=pacing_seconds,
         insight_lookback_hours=lookback,
         insight_lookback_max_hours=maximum_lookback,
@@ -166,6 +183,9 @@ def load_automation_policy(
         clean_window_ingestion_margin_seconds=margin,
         clean_window_max_wait_seconds=maximum_wait,
         trace_assertion_stabilization_seconds=assertion_stabilization,
+        daily_trace_hydration_grace_seconds=hydration_grace,
+        daily_trace_hydration_maximum_wait_seconds=hydration_maximum,
+        daily_trace_hydration_maximum_poll_seconds=hydration_maximum_poll,
         insight_start_margin_seconds=start_margin,
         max_recovery_versions=recoveries,
         agent_start_stagger_seconds=stagger,

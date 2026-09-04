@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date
-from collections.abc import Mapping
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -50,7 +49,6 @@ def build_manifest(
     selected: dict[str, list[str]],
     registry: dict[str, Any],
     results: list[AgentResult],
-    phase_manifests: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     result_by_agent = {item.agent_name: item for item in results}
     contract_by_agent = {
@@ -124,11 +122,6 @@ def build_manifest(
         "agents": agents,
         "manifest_hash": "",
     }
-    if phase_manifests is not None:
-        manifest["phase_manifests"] = {
-            phase: dict(reference)
-            for phase, reference in phase_manifests.items()
-        }
     manifest["manifest_hash"] = content_hash(
         {key: value for key, value in manifest.items() if key != "manifest_hash"}
     )
@@ -154,7 +147,7 @@ def _result_payload(result: Any) -> dict[str, Any]:
         "trace_contract_verified": result.trace_contract_verified,
         "trace_behavior_summary": result.trace_behavior_summary,
         "trace_maturity_proof": result.trace_maturity_proof,
-        "trace_unknown_acceptance": result.trace_unknown_acceptance,
+        "role_pass_summary": result.role_pass_summary,
         "endpoint_request_summaries": [
             request_completion_payload(item)
             for item in result.endpoint_request_summaries
@@ -274,11 +267,9 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 for item in version["endpoint_request_summaries"]
                 if item["activation_gate"] is True
             ]
-            acceptance_value = version.get("trace_unknown_acceptance")
-            maturity_digest = validate_trace_maturity_proof(
-                version.get("trace_maturity_proof")
-            )
-            _, acceptance = daily_target_decision(
+            summary_value = version.get("role_pass_summary")
+            validate_trace_maturity_proof(version.get("trace_maturity_proof"))
+            _, summary = daily_target_decision(
                 target_role=(
                     "baseline" if logical_version == "v0" else "issue"
                 ),
@@ -292,12 +283,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 ),
                 summaries=observations,
                 identity_verified=version["trace_contract_verified"] is True,
-                maturity_proof_digest=maturity_digest,
             )
-            if acceptance_value != acceptance:
+            if summary_value != summary:
                 raise ContractError(
-                    f"{agent['name']}/{logical_version} trace unknown "
-                    "acceptance is not current"
+                    f"{agent['name']}/{logical_version} role-pass summary "
+                    "is not current"
                 )
     actual_selection = {
         agent["name"]: [issue["issue_id"] for issue in agent["issues"]]

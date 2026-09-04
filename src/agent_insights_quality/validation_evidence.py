@@ -9,8 +9,8 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.validation_trace_gap_policy import (
+    role_pass_summary,
     target_evidence_decided,
-    trace_unknown_acceptance,
 )
 from agent_insights_quality.util import (
     ROOT,
@@ -273,20 +273,21 @@ def scenario_evidence_complete(
     k: int,
     complete_count: int,
     paired_complete_count: int,
-    observation_count: int,
-    paired_observation_count: int,
-    primary_trace_unknown_accepted: bool = False,
-    paired_trace_unknown_accepted: bool = False,
+    role_pass_count: int,
+    paired_role_pass_count: int,
 ) -> bool:
-    primary_decided = complete_count == n or (
-        observation_count >= k and primary_trace_unknown_accepted
+    primary_decided = complete_count == n or target_evidence_decided(
+        n=n,
+        k=k,
+        role_pass_count=role_pass_count,
     )
     control_decided = (
         authority_kind == "baseline"
         or paired_complete_count == n
-        or (
-            paired_observation_count == 0
-            and paired_trace_unknown_accepted
+        or target_evidence_decided(
+            n=n,
+            k=k,
+            role_pass_count=paired_role_pass_count,
         )
     )
     return primary_decided and control_decided
@@ -321,6 +322,12 @@ def _validate_authority(authority: Mapping[str, Any]) -> None:
     paired_observation_count = sum(
         item["paired_observation_count"] for item in authority["scenarios"]
     )
+    role_pass_count = sum(
+        item["role_pass_count"] for item in authority["scenarios"]
+    )
+    paired_role_pass_count = sum(
+        item["paired_role_pass_count"] for item in authority["scenarios"]
+    )
     if (
         authority["n"] != sum(item["n"] for item in authority["scenarios"])
         or authority["k"] != sum(item["k"] for item in authority["scenarios"])
@@ -328,6 +335,8 @@ def _validate_authority(authority: Mapping[str, Any]) -> None:
         or authority["paired_complete_count"] != paired_complete_count
         or authority["observation_count"] != observation_count
         or authority["paired_observation_count"] != paired_observation_count
+        or authority["role_pass_count"] != role_pass_count
+        or authority["paired_role_pass_count"] != paired_role_pass_count
         or authority["evidence_complete"]
         is not all(item["evidence_complete"] for item in authority["scenarios"])
     ):
@@ -382,40 +391,43 @@ def _validate_scenario(
     paired_observation_count = sum(
         attempt["observation"] is True for attempt in v0_attempts
     )
-    primary_acceptance = scenario.get("primary_trace_unknown_acceptance")
-    expected_primary_acceptance = _trace_unknown_acceptance(
-        authority_kind=authority_kind,
-        authority_id=authority_id,
-        scenario=scenario,
+    primary_summary = scenario.get("primary_role_pass_summary")
+    expected_primary_summary = _role_pass_summary(
         target_role=(
             "baseline" if authority_kind == "baseline" else "issue"
         ),
         attempts=issue_attempts,
-        acceptance=primary_acceptance,
+        n=n,
+        k=k,
     )
-    if primary_acceptance != expected_primary_acceptance:
+    if primary_summary != expected_primary_summary:
         raise ContractError(
-            f"{authority_id} primary trace unknown acceptance is invalid"
+            f"{authority_id} primary role-pass summary is invalid"
         )
-    paired_acceptance = scenario.get("paired_trace_unknown_acceptance")
-    expected_paired_acceptance = (
+    paired_summary = scenario.get("paired_role_pass_summary")
+    expected_paired_summary = (
         None
         if authority_kind == "baseline"
-        else _trace_unknown_acceptance(
-            authority_kind=authority_kind,
-            authority_id=authority_id,
-            scenario=scenario,
+        else _role_pass_summary(
             target_role="paired_v0",
             attempts=v0_attempts,
-            acceptance=paired_acceptance,
+            n=n,
+            k=k,
         )
     )
-    if paired_acceptance != expected_paired_acceptance:
+    if paired_summary != expected_paired_summary:
         raise ContractError(
-            f"{authority_id} paired trace unknown acceptance is invalid"
+            f"{authority_id} paired role-pass summary is invalid"
         )
-    full_attempt_coverage = complete_count == n and (
-        authority_kind == "baseline" or paired_complete_count == n
+    if expected_primary_summary is None or (
+        authority_kind != "baseline" and expected_paired_summary is None
+    ):
+        raise ContractError(f"{authority_id} role-pass evidence is invalid")
+    role_pass_count = int(expected_primary_summary["pass_count"])
+    paired_role_pass_count = (
+        0
+        if expected_paired_summary is None
+        else int(expected_paired_summary["pass_count"])
     )
     decision_complete = scenario_evidence_complete(
         authority_kind=authority_kind,
@@ -423,47 +435,32 @@ def _validate_scenario(
         k=k,
         complete_count=complete_count,
         paired_complete_count=paired_complete_count,
-        observation_count=observation_count,
-        paired_observation_count=paired_observation_count,
-        primary_trace_unknown_accepted=primary_acceptance is not None,
-        paired_trace_unknown_accepted=paired_acceptance is not None,
+        role_pass_count=role_pass_count,
+        paired_role_pass_count=paired_role_pass_count,
     )
     if (
         scenario["complete_count"] != complete_count
         or scenario["paired_complete_count"] != paired_complete_count
         or scenario["observation_count"] != observation_count
         or scenario["paired_observation_count"] != paired_observation_count
-        or (
-            scenario["evidence_complete"] is True
-            and decision_complete is not True
-        )
-        or (
-            scenario["evidence_complete"] is False
-            and full_attempt_coverage is True
-        )
+        or scenario["role_pass_count"] != role_pass_count
+        or scenario["paired_role_pass_count"] != paired_role_pass_count
+        or scenario["evidence_complete"] is not decision_complete
     ):
         raise ContractError(f"{authority_id} scenario complete count is invalid")
     expected_pass = (
         scenario["evidence_complete"]
         and target_evidence_decided(
-            target_role=(
-                "baseline" if authority_kind == "baseline" else "issue"
-            ),
             n=n,
-            complete_count=complete_count,
-            observation_count=observation_count,
             k=k,
-            trace_unknown_acceptance=primary_acceptance,
+            role_pass_count=role_pass_count,
         )
         and (
             authority_kind == "baseline"
             or target_evidence_decided(
-                target_role="paired_v0",
                 n=n,
                 k=k,
-                complete_count=paired_complete_count,
-                observation_count=paired_observation_count,
-                trace_unknown_acceptance=paired_acceptance,
+                role_pass_count=paired_role_pass_count,
             )
         )
     )
@@ -471,43 +468,41 @@ def _validate_scenario(
         raise ContractError(
             f"{authority_id} mechanical evidence result is invalid"
         )
-def _trace_unknown_acceptance(
+def _role_pass_summary(
     *,
-    authority_kind: str,
-    authority_id: str,
-    scenario: Mapping[str, Any],
     target_role: str,
     attempts: list[dict[str, Any]],
-    acceptance: Any,
+    n: int,
+    k: int,
 ) -> dict[str, Any] | None:
-    required_surfaces = sorted(
-        _reviewed_required_surfaces(
-            authority_id,
-            str(scenario["scenario_id"]),
-        )
-    )
-    if authority_kind == "baseline":
-        required_surfaces = ["semantic", "trace"]
-    maturity_digest = (
-        str(acceptance.get("maturity_proof_digest") or "")
-        if isinstance(acceptance, Mapping)
-        else None
-    )
-    return trace_unknown_acceptance(
+    return role_pass_summary(
         target_role=target_role,
-        validation_mode=str(scenario["validation_mode"]),
-        n=int(scenario["n"]),
-        k=int(scenario["k"]),
-        required_surfaces=required_surfaces,
-        attempts=[_trace_gap_attempt_payload(attempt) for attempt in attempts],
-        maturity_proof_digest=maturity_digest,
+        n=n,
+        k=k,
+        attempts=[role_pass_attempt_payload(attempt) for attempt in attempts],
     )
 
 
-def _trace_gap_attempt_payload(
+def role_pass_attempt_payload(
     attempt: Mapping[str, Any],
 ) -> dict[str, Any]:
-    steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
+    steps = [
+        *attempt.get("setup_steps", []),
+        *attempt.get("probe_steps", []),
+    ]
+    if not steps:
+        complete = attempt.get("complete") is True
+        return {
+            "index": int(attempt["index"]),
+            "complete": complete,
+            "observation": attempt.get("observation") is True,
+            "error_code": attempt.get("error_code"),
+            "endpoint_complete": complete,
+            "identity_complete": complete,
+            "semantic_evidence_complete": complete,
+            "trace_evidence_complete": complete,
+            "assertions_contradicted": False,
+        }
     return {
         "index": int(attempt["index"]),
         "complete": attempt["complete"],
@@ -666,6 +661,25 @@ def _validate_runtime_topology_binding(
         if authority["provider_content_digest"] != runtime["provider_content_digest"]:
             raise ContractError(
                 f"{authority['authority_id']} evidence provider content is stale"
+            )
+        if (
+            authority["runtime_agent_name"] != runtime["runtime_agent_name"]
+            or authority["runtime_agent_version"]
+            != runtime["runtime_agent_version"]
+            or authority["runtime_mapping_digest"]
+            != runtime_mapping_digest(runtime)
+            or authority["provider_agent_version_reference"]
+            != content_hash(
+                {
+                    "provider_agent_id": runtime["provider_agent_id"],
+                    "provider_agent_version_id": runtime[
+                        "provider_agent_version_id"
+                    ],
+                }
+            )
+        ):
+            raise ContractError(
+                f"{authority['authority_id']} evidence runtime identity is stale"
             )
 
 

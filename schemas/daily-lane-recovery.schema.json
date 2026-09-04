@@ -40,13 +40,8 @@
       ]
     },
     "reason_code": {
-      "enum": [
-        "baseline_evidence_incomplete",
-        "baseline_recovery_prepare_failed",
-        "baseline_recovery_blocked",
-        "baseline_recovery_exhausted",
-        "insight_run_start_unresolved"
-      ]
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]{2,63}$"
     },
     "recoveries_claimed": {"type": "integer", "minimum": 0, "maximum": 3},
     "maximum_recoveries": {"const": 3},

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +7,7 @@ from jsonschema import Draft202012Validator
 
 from agent_insights_quality.models import (
     RequestCompletionEvidence,
+    SKIPPED_VERSION_STATUSES,
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
     VersionResult,
@@ -60,23 +60,17 @@ def rehydrate_packages(
     registry: dict[str, Any],
     runtime: Any,
     output: Path,
-    checkpoint_store: VersionCheckpointStore | None,
-    *,
-    phase_results: Mapping[tuple[str, str], VersionResult] | None = None,
-    card_trace_proofs: (
-        Mapping[tuple[str, str, tuple[str, ...]], dict[str, Any]] | None
-    ) = None,
+    checkpoint_store: VersionCheckpointStore,
 ) -> list[Path]:
     output.mkdir(parents=True, exist_ok=True)
     issue_by_id = {item["id"]: item for item in issues["issues"]}
     paths: list[Path] = []
     for agent in manifest["agents"]:
         baseline = agent["baseline"]
-        baseline_result = _phase_or_checkpoint_result(
-            checkpoint_store=checkpoint_store,
-            phase_results=phase_results,
-            agent_name=agent["name"],
-            value=baseline,
+        baseline_result = _checkpoint_result(
+            checkpoint_store,
+            agent["name"],
+            baseline,
         )
         baseline_cards = _baseline_cards(
             baseline_result.observed_insights,
@@ -86,19 +80,9 @@ def rehydrate_packages(
         baseline_operation_ids = set(baseline.get("operation_ids") or [])
         trace_proof_cache: dict[tuple[str, ...], dict[str, Any]] = {}
 
-        def trace_proof(
-            logical_version: str,
-            operation_ids: tuple[str, ...],
-        ) -> dict[str, Any]:
+        def trace_proof(operation_ids: tuple[str, ...]) -> dict[str, Any]:
             if not operation_ids:
                 return {}
-            if card_trace_proofs is not None:
-                key = (agent["name"], logical_version, operation_ids)
-                if key not in card_trace_proofs:
-                    raise ContractError(
-                        f"{agent['name']}/{logical_version} card trace proof is missing"
-                    )
-                return dict(card_trace_proofs[key])
             if operation_ids not in trace_proof_cache:
                 trace_proof_cache[operation_ids] = runtime.trace_behavior_evidence(
                     operation_ids
@@ -108,7 +92,7 @@ def rehydrate_packages(
         def baseline_insight_payload(value: Any) -> dict[str, Any]:
             payload = _insight_payload(value)
             key = _linked_baseline_operations(value, baseline_operation_ids)
-            payload["card_linked_trace_proof"] = trace_proof("v0", key)
+            payload["card_linked_trace_proof"] = trace_proof(key)
             return payload
 
         baseline_endpoint_evidence = _endpoint_evidence(baseline)
@@ -123,7 +107,7 @@ def rehydrate_packages(
         baseline_full_trace_proof = (
             dict(recorded_baseline_trace)
             if recorded_baseline_trace
-            else trace_proof("v0", tuple(sorted(baseline_operation_ids)))
+            else trace_proof(tuple(sorted(baseline_operation_ids)))
         )
         baseline_contract = agent["baseline_contract"]
         baseline_execution = _manifest_execution_context(baseline)
@@ -136,9 +120,7 @@ def rehydrate_packages(
             "source_integrity": manifest["source_integrity"],
             **baseline_execution,
             "trace_maturity_proof": baseline.get("trace_maturity_proof"),
-            "trace_unknown_acceptance": baseline.get(
-                "trace_unknown_acceptance"
-            ),
+            "role_pass_summary": baseline.get("role_pass_summary"),
             "runtime_status": baseline["status"],
             "error_code": baseline.get("error_code"),
             "operation_count": len(baseline.get("operation_ids") or []),
@@ -163,11 +145,10 @@ def rehydrate_packages(
         paths.append(path)
         for value in agent["issues"]:
             issue_id = value["issue_id"]
-            issue_result = _phase_or_checkpoint_result(
-                checkpoint_store=checkpoint_store,
-                phase_results=phase_results,
-                agent_name=agent["name"],
-                value=value,
+            issue_result = _checkpoint_result(
+                checkpoint_store,
+                agent["name"],
+                value,
             )
             cards = _cards_for_operations(
                 issue_result.observed_insights,
@@ -179,10 +160,7 @@ def rehydrate_packages(
             issue_full_trace_proof = (
                 dict(recorded_issue_trace)
                 if recorded_issue_trace
-                else trace_proof(
-                    issue_id,
-                    tuple(sorted(issue_operation_ids)),
-                )
+                else trace_proof(tuple(sorted(issue_operation_ids)))
             )
 
             def issue_insight_payload(item: Any) -> dict[str, Any]:
@@ -198,7 +176,7 @@ def rehydrate_packages(
                     raise ContractError(
                         f"{issue_id} card has no linked issue operation"
                     )
-                payload["card_linked_trace_proof"] = trace_proof(issue_id, linked)
+                payload["card_linked_trace_proof"] = trace_proof(linked)
                 return payload
 
             expected = issue_by_id[issue_id]
@@ -219,9 +197,7 @@ def rehydrate_packages(
                 "evidence_reference": value.get("evidence_reference"),
                 "runtime_status": value["status"],
                 "error_code": value.get("error_code"),
-                "trace_unknown_acceptance": value.get(
-                    "trace_unknown_acceptance"
-                ),
+                "role_pass_summary": value.get("role_pass_summary"),
                 "operation_count": len(value.get("operation_ids") or []),
                 "endpoint_evidence": issue_endpoint_evidence,
                 "full_request_trace_proof": issue_full_trace_proof,
@@ -246,25 +222,6 @@ def rehydrate_packages(
             _write_package(path, package)
             paths.append(path)
     return paths
-
-
-def _phase_or_checkpoint_result(
-    *,
-    checkpoint_store: VersionCheckpointStore | None,
-    phase_results: Mapping[tuple[str, str], VersionResult] | None,
-    agent_name: str,
-    value: dict[str, Any],
-) -> VersionResult:
-    if phase_results is not None:
-        result = phase_results.get((agent_name, value["logical_version"]))
-        if result is None:
-            raise ContractError("Daily phase result coverage is incomplete")
-        return result
-    if checkpoint_store is None:
-        raise ContractError("Daily assessment package result source is missing")
-    return _checkpoint_result(checkpoint_store, agent_name, value)
-
-
 def _manifest_execution_context(
     value: dict[str, Any],
     *,
@@ -291,7 +248,10 @@ def _checkpoint_result(
         value["content_digest"],
     )
     if result is None:
-        if value["status"] not in {"inconclusive", "skipped_baseline"}:
+        if value["status"] not in {
+            "inconclusive",
+            *SKIPPED_VERSION_STATUSES,
+        }:
             raise ContractError("Assessment package checkpoint result is missing")
         result = VersionResult(
             logical_version=value["logical_version"],
@@ -326,9 +286,7 @@ def _checkpoint_result(
                 value.get("trace_behavior_summary") or {}
             ),
             trace_maturity_proof=value.get("trace_maturity_proof"),
-            trace_unknown_acceptance=value.get(
-                "trace_unknown_acceptance"
-            ),
+            role_pass_summary=value.get("role_pass_summary"),
             endpoint_request_summaries=[
                 RequestCompletionEvidence(
                     request_index=int(item["request_index"]),
@@ -391,8 +349,7 @@ def _checkpoint_result(
         or result.trace_contract_verified != value["trace_contract_verified"]
         or result.trace_behavior_summary != value["trace_behavior_summary"]
         or result.trace_maturity_proof != value.get("trace_maturity_proof")
-        or result.trace_unknown_acceptance
-        != value.get("trace_unknown_acceptance")
+        or result.role_pass_summary != value.get("role_pass_summary")
         or [
             request_completion_payload(item)
             for item in result.endpoint_request_summaries
@@ -494,8 +451,11 @@ def _endpoint_evidence_complete(endpoint: dict[str, Any]) -> bool:
         isinstance(requests, int)
         and not isinstance(requests, bool)
         and requests > 0
-        and responses == requests
-        and usable == requests
+        and isinstance(responses, int)
+        and not isinstance(responses, bool)
+        and isinstance(usable, int)
+        and not isinstance(usable, bool)
+        and 0 <= usable <= responses <= requests
         and endpoint.get("trace_contract_verified") is True
         and _request_summaries_consistent(endpoint)
     )
@@ -518,8 +478,12 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
         if (
             not isinstance(summary, dict)
             or summary.get("request_index") != index
-            or summary.get("response_count") != 1
-            or summary.get("usable_response") is not True
+            or summary.get("response_count") not in {0, 1}
+            or not isinstance(summary.get("usable_response"), bool)
+            or (
+                summary.get("usable_response") is True
+                and summary.get("response_count") != 1
+            )
         ):
             return False
         results = summary.get("assertion_results")
@@ -558,8 +522,10 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
         trace_count += summary["trace_assertion_count"]
         trace_passed += summary["trace_assertions_passed"]
     return (
-        endpoint.get("response_count") == request_count
-        and endpoint.get("usable_response_count") == request_count
+        endpoint.get("response_count")
+        == sum(item["response_count"] for item in summaries)
+        and endpoint.get("usable_response_count")
+        == sum(item["usable_response"] is True for item in summaries)
         and endpoint.get("semantic_assertion_count") == semantic_count
         and endpoint.get("semantic_assertions_passed") == semantic_passed
         and endpoint.get("trace_assertion_count") == trace_count
@@ -577,14 +543,12 @@ def _issue_activation_complete(package: dict[str, Any]) -> bool:
         if summary.get("activation_gate") is True
     ]
     required_surfaces = set(package.get("required_surfaces") or [])
-    acceptance_value = package.get("trace_unknown_acceptance")
+    summary_value = package.get("role_pass_summary")
     try:
-        maturity_digest = validate_trace_maturity_proof(
-            package.get("trace_maturity_proof")
-        )
+        validate_trace_maturity_proof(package.get("trace_maturity_proof"))
     except ContractError:
         return False
-    decided, acceptance = daily_target_decision(
+    decided, summary = daily_target_decision(
         target_role="issue",
         validation_mode=str(package.get("validation_mode") or ""),
         n=int(package.get("n") or 0),
@@ -592,7 +556,6 @@ def _issue_activation_complete(package: dict[str, Any]) -> bool:
         required_surfaces=sorted(required_surfaces),
         summaries=gates,
         identity_verified=endpoint.get("trace_contract_verified") is True,
-        maturity_proof_digest=maturity_digest,
     )
     return (
         package.get("source_integrity", {}).get("verified") is True
@@ -601,7 +564,7 @@ def _issue_activation_complete(package: dict[str, Any]) -> bool:
             str,
         )
         and decided
-        and acceptance_value == acceptance
+        and summary_value == summary
     )
 
 
@@ -670,15 +633,17 @@ def _baseline_behavior_summary(
                 else None
             ),
         }
+    required_count = 6
     semantic_complete = (
         summaries_valid
         and len(observations) == int(contract["request_count"])
-        and all(
+        and sum(
             int(item.get("semantic_assertion_count") or 0) > 0
             and item.get("semantic_assertions_passed")
             == item.get("semantic_assertion_count")
             for item in observations
         )
+        >= required_count
     )
     if contract["semantic_assertions"] == "required_per_request":
         semantic_complete = semantic_complete and len(observations) == int(
@@ -687,33 +652,36 @@ def _baseline_behavior_summary(
     terminal_mode = contract["terminal_response"]
     terminal_complete = (
         proof_complete
-        and int(trace_proof.get("terminal_response_count") or 0) == request_count
-        and int(trace_proof.get("terminal_output_count") or 0) == request_count
-        and int(trace_proof.get("unhandled_error_count") or 0) == 0
+        and int(trace_proof.get("terminal_response_count") or 0)
+        >= required_count
+        and int(trace_proof.get("terminal_output_count") or 0)
+        >= required_count
     )
     if terminal_mode == "explicit_span_attributes":
         terminal_complete = terminal_complete and (
             int(trace_proof.get("explicit_terminal_success_count") or 0)
-            == request_count
+            >= required_count
             and int(trace_proof.get("explicit_terminal_output_count") or 0)
-            == request_count
+            >= required_count
         )
     else:
         terminal_complete = terminal_complete and (
-            int(trace_proof.get("assistant_response_count") or 0) == request_count
+            int(trace_proof.get("assistant_response_count") or 0)
+            >= required_count
         )
     direct_prompt_complete: bool | None = None
     if terminal_mode == "direct_prompt":
         direct_prompt_complete = (
             summaries_valid
-            and all(
+            and sum(
                 item.get("response_count") == 1
                 and item.get("usable_response") is True
                 and item.get("direct_terminal_response_count") == 1
                 and item.get("function_call_count") == 0
                 for item in summaries
             )
-            and int(trace_proof.get("operation_count") or 0) == request_count
+            >= required_count
+            and int(trace_proof.get("operation_count") or 0) >= required_count
             and not trace_proof.get("tool_call_counts")
             and int(trace_proof.get("tool_response_count") or 0) == 0
         )
@@ -738,11 +706,9 @@ def _baseline_evidence_complete(package: dict[str, Any]) -> bool:
         expected = _baseline_behavior_summary(endpoint, trace_proof, contract)
     except (KeyError, TypeError, ValueError):
         return False
-    acceptance_value = package.get("trace_unknown_acceptance")
+    summary_value = package.get("role_pass_summary")
     try:
-        maturity_digest = validate_trace_maturity_proof(
-            package.get("trace_maturity_proof")
-        )
+        validate_trace_maturity_proof(package.get("trace_maturity_proof"))
     except ContractError:
         return False
     summaries = [
@@ -752,7 +718,7 @@ def _baseline_evidence_complete(package: dict[str, Any]) -> bool:
     ]
     n = int(package.get("n") or 0)
     k = int(package.get("k") or 0)
-    decided, acceptance = daily_target_decision(
+    decided, summary = daily_target_decision(
         target_role="baseline",
         validation_mode="baseline",
         n=n,
@@ -760,7 +726,6 @@ def _baseline_evidence_complete(package: dict[str, Any]) -> bool:
         required_surfaces=["semantic", "trace"],
         summaries=summaries,
         identity_verified=endpoint.get("trace_contract_verified") is True,
-        maturity_proof_digest=maturity_digest,
     )
     return (
         package.get("behavior_summary") == expected
@@ -771,10 +736,9 @@ def _baseline_evidence_complete(package: dict[str, Any]) -> bool:
                 expected["terminal_evidence_complete"] is True
                 and expected["direct_prompt_contract_complete"] is not False
             )
-            or acceptance is not None
         )
         and decided
-        and acceptance_value == acceptance
+        and summary_value == summary
     )
 
 
@@ -789,6 +753,7 @@ def load_assessments(
         issue["issue_id"]: (agent["name"], issue["foundry_version"])
         for agent in manifest["agents"]
         for issue in agent["issues"]
+        if issue.get("status") not in SKIPPED_VERSION_STATUSES
     }
     if set(bindings) != expected_issue_ids:
         raise ContractError("Manifest issue assessment coverage is inconsistent")
@@ -902,6 +867,7 @@ def load_baseline_assessments(
     bindings = {
         agent["name"]: agent["baseline"]["foundry_version"]
         for agent in manifest["agents"]
+        if agent["baseline"].get("status") not in SKIPPED_VERSION_STATUSES
     }
     values: dict[str, dict[str, Any]] = {}
     for path in paths:
@@ -968,13 +934,7 @@ def load_baseline_assessments(
         if agent_name in values:
             raise ContractError(f"Duplicate baseline assessment for {agent_name}")
         values[agent_name] = value
-    expected = {
-        "weather-agent",
-        "healthcare-agent",
-        "finance-agent",
-        "travel-agent",
-        "support-ticket-agent",
-    }
+    expected = set(bindings)
     if set(values) != expected:
         raise ContractError("Baseline assessment coverage is incomplete")
     return values

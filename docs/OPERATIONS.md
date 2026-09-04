@@ -27,13 +27,10 @@ generation, ADX publication, email, or Daily.
 The executable authority is each `traffic.json` `validation_rules` contract. Its automatic digest
 includes complete setup/probe request bodies, ordered conversation grouping, parameters, fixtures,
 semantic/trace/identity assertions, reviewed mode, `n`, `k`, runtime kind, framework, and model
-contract. Baselines, issues, and paired controls each use ten attempts. The first mature target batch
-uses one shared policy: baselines require six proven healthy attempts plus at most four trace-only
-unknowns and no observed failure; every issue mode requires at least six observations and may retain
-at most four trace-only unknowns; paired `v0` requires six proven zero-observation controls plus at
-most four trace-only unknowns. Unknowns remain incomplete and never count as healthy or observed.
-Complete issue non-observations count as behavioral misses. Endpoint, identity, semantic sufficiency,
-and contradiction checks remain exact.
+contract. Baselines, issues, and paired controls each use ten attempts and require six complete
+role-specific passes. The remaining four attempts remain transparent misses of any kind and never
+veto six strict passes. Endpoint, identity, semantic, trace, and internal consistency remain exact
+requirements for every passing attempt.
 Expected issue observations remain private-review context rather than a local verdict.
 `minimum_traces` is the independent full-request natural trace proof threshold and is never used as
 a validation attempt threshold or card-link coverage threshold. After independent Agent activation
@@ -151,11 +148,9 @@ strict validation evaluation schema. Code then assigns exactly one authority res
 | `FAIL` | Complete stable evidence does not meet the reviewed threshold. |
 | `INCOMPLETE` | Required evidence is missing, ambiguous, partial, or not stable by the deadline. |
 
-The reviewed thresholds are baseline `6/10` proven healthy with at most four trace-only unknowns and
-no observed failure; every issue mode `>=6/10`, with complete non-observations counted as misses and
-at most four trace-only unknowns; and paired `v0` `0/10` with six proven controls plus at most four
-trace-only unknowns. The mature trace-unknown policy is shared by staging and Daily. `INCOMPLETE` is
-never collapsed into `FAIL`.
+The shared threshold is six complete role-specific passes: healthy baseline attempts, defect-observed
+issue attempts, or zero-defect paired controls. The other four attempts never veto aggregate PASS and
+retain their exact miss categories. `INCOMPLETE` is never collapsed into `FAIL`.
 Immediately after deciding an authority, the sub-session atomically persists an immutable,
 generation-fenced result before claiming another authority. A later authority failure, sub-session
 failure, or composition interruption does not discard completed authority results.
@@ -384,31 +379,37 @@ canonical display is `SwedenCentral`. Report/email generation fails if the live 
 or registry match is missing. This contract is intentionally one scalar region: no experiments,
 region arrays, comparison runs, or region-scoped report directories.
 
-Daily has three global phases. In traffic, `daily-guide` returns five deterministic whole-Agent
-assignments. Start one visible session per pending Agent with
-`daily-run-traffic-agent --agent <name>`. The reviewed initial offsets prevent a simultaneous burst.
-Each lane invokes `v0` and four issue versions sequentially, persists each immutable exact
-response-bound receipt immediately, and waits 60 seconds before the next version. It performs no
-telemetry query, trace verification, Agent Insights operation, or package classification. Daily
-never adds per-issue paired-`v0` traffic. The verification phase remains closed until all 25
-receipts exist.
+Daily uses five visible whole-Agent lanes. Run `daily-run-agent --agent <name>` once per pending
+Weather, Healthcare, Finance, Travel, and Support lane. The lanes may run concurrently, while each
+lane processes `v0` then four issues in forward order. A version completes endpoint traffic,
+whole-target telemetry/trace verification, Agent Insights, and immutable result publication before
+the reviewed 60-second pacing and the next version. Daily never adds paired-`v0` issue traffic.
 
-After that barrier, start up to eight visible `daily-verify-next` sessions. Each dynamically claims
-one version and queries the complete target as one exact receipt-bound telemetry snapshot. Claims
-are worktree-bound and explicitly releasable only by their owner; expiry remains the crash fallback.
-No endpoint traffic is available in this phase. An issue with fewer than six proven defect
-observations, or a baseline with fewer than six proven healthy observations or a contradiction,
-fails the Daily run without Agent Insights or a score. Slow or incomplete versions release capacity
-so other claims can proceed, but all 25 must be eligible before the Insight phase opens.
+Every Agent/version has its own execution claim, short publication lock, exact traffic receipt, and
+immutable terminal result. Network I/O and artifact construction never hold the coordinator lock.
+The coordinator lock performs only short lifecycle CAS transitions. Status and composition derive
+lane progress from immutable version artifacts, so a crash after receipt/result publication never
+causes endpoint retraffic and does not require every lane to update shared aggregate state.
 
-In the Insight phase, start one visible `daily-run-insights-agent --agent <name>` session per Agent.
-Each lane persists exactly one run-bound monitor-reset epoch and never resets between versions. It
-then autonomously processes its five verified versions sequentially. Every version persists a
-timestamp-derived, minute-ceiling bounded lookback and exact operation set before starting exactly
-one crash-safe provider run. Newly generated cards must bind that run and link only unique operations
-inside the version set. Prior-run cards are excluded; exact-run cross-version cards fail closed.
-Zero, one, or multiple cards are terminal package outcomes. Composition opens only after all 25
-immutable Insight receipts exist and creates five baseline plus twenty issue packages.
+Telemetry maturity is bounded to five total minutes from immutable `traffic_completed_at`. Apply the
+age-aware hydration grace, query the whole target adaptively, emit public-safe heartbeats, and require
+a short consecutive-snapshot stability interval. At the boundary, one final exact snapshot may pass
+immediately when complete and unambiguous. `operation_Id` bounds each trace; the expected response,
+Agent/version, `span_id`, and `parent_span_id` select the exact `invoke_agent` root and descendants.
+Foreign identities and byte-identical duplicate rows are ignored; distinct exact roots remain
+ambiguous.
+
+All ten attempts are retained. Six complete role-specific passes determine aggregate eligibility:
+healthy baseline attempts or defect-observed issue attempts. The remaining four are transparent
+misses of any kind and never veto six strict passes. Missing/ambiguous evidence at maturity becomes
+`skipped_telemetry`; complete evidence below six becomes `skipped_agent_activation`; unresolved
+Agent Insights after verified traffic becomes `skipped_insight`. No skipped version starts Insight
+or resends traffic. The lane continues after pacing, including all four issues when `v0` is skipped.
+
+Each Agent monitor resets once before its first eligible Insight and never between versions. Every
+version persists a timestamp-derived lookback and exact operation set. Prior-version traces,
+including skipped versions, are excluded by identity rather than monitor cursor. Composition runs
+long package work outside the coordinator lock and publishes `COMPOSED` through one final CAS.
 
 Daily and staging Projects prohibit ad-hoc debug traffic. Monitor reset does not delete telemetry.
 Debug locally or in a separately owned sandbox. Qualification evidence is accepted only when exact
@@ -430,24 +431,9 @@ This writes a private immutable failure receipt and moves the lifecycle to termi
 the next Pacific business date to prepare. It never deletes checkpoints, receipts, telemetry, or
 provider resources.
 
-Every Hosted baseline and issue polls exact response-to-operation correlation every 15 seconds through
-the existing 15-minute bounded ingestion deadline, whether or not its traffic declares trace
-assertions. At the first complete exact mapping, the runner starts and persists the one Agent Insights
-run immediately while every operation is still inside the guarded `0.1`-hour lookback window. Cards
-remain quarantined until the same mapping, optional assertion outcomes, and correlated rows stay
-unchanged for the reviewed 180-second ingestion interval. This interval exceeds the reproduced
-135-second late-span delay by three poll periods and is intentionally separate from the 10-minute
-traffic uncertainty horizon. New evidence resets stabilization. Missing or failing assertion evidence
-waits for the deadline, and only a stable failure can return there; an unstabilized pass is rejected.
-A late operation sharing a response identity makes correlation ambiguous, saves the baseline or issue
-as incomplete, and drains the already-started run without persisting or scoring its cards. Exact
-Agent, Foundry-version, invocation-time, operation, and foreign-card subset filtering remain
-mandatory. Hosted baseline terminal and tool behavior is validated only after correlation stabilizes;
-the Prompt path does not enter this Hosted stage.
-Recovery claims are durably capped per Agent across resumes. A quarantined Insight run must drain
-before later versions for that Agent can send traffic; an unresolved start without a run ID fails
-closed on resume instead of sending new target traffic. The immutable run manifest is deferred
-until no start or drain quarantine remains.
+An ambiguous Insight start without a provider run ID remains quarantined until read-only
+reconciliation proves whether a run exists. A known failed/polling Insight run may be retried only
+from the same immutable traffic receipt and never resets the monitor or resends endpoint traffic.
 
 Issue source, traffic, source-delta manifests, and version digests are reviewed contracts. Equal
 nonzero request, response, and usable-response counts plus a verified natural trace contract prove

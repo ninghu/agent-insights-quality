@@ -418,6 +418,9 @@ def build_publication_payload(
         baseline = baseline_by_agent[agent]
         agent_context = agent_by_name[agent]
         agent_issues = issues_by_agent[agent]
+        scored_agent_issues = [
+            item for item in agent_issues if item["outcome"] != "skipped"
+        ]
         issue_cards = [
             card
             for item in agent_issues
@@ -449,15 +452,18 @@ def build_publication_payload(
                 "baseline_runtime_evidence_complete": baseline[
                     "runtime_evidence_complete"
                 ],
-                "issues_expected": len(agent_issues),
+                "issues_expected": len(scored_agent_issues),
                 "issues_correct": sum(
-                    item["outcome"] == "correct" for item in agent_issues
+                    item["outcome"] == "correct"
+                    for item in scored_agent_issues
                 ),
                 "issues_incorrect": sum(
-                    item["outcome"] == "incorrect" for item in agent_issues
+                    item["outcome"] == "incorrect"
+                    for item in scored_agent_issues
                 ),
                 "issues_missing": sum(
-                    item["outcome"] == "missing" for item in agent_issues
+                    item["outcome"] == "missing"
+                    for item in scored_agent_issues
                 ),
                 "noise_cards": sum(
                     card.get("evaluation") == "noise" for card in baseline_cards
@@ -607,6 +613,10 @@ def build_publication_payload(
         "run": {
             "report_url": report_url,
             "baseline_passed": summary["baseline_passed"],
+            "baseline_coverage": summary["baseline_coverage"],
+            "eligible_issue_count": summary["eligible_issue_count"],
+            "skipped_issue_count": summary["skipped_issue_count"],
+            "skipped_issues": summary["skipped_issues"],
             "issues_correct": summary["issues_correct"],
             "issues_incorrect": summary["issues_incorrect"],
             "issues_missing": summary["issues_missing"],
@@ -824,7 +834,8 @@ def _validate_daily_source(report: dict[str, Any]) -> None:
     if (
         report["profile"] != "daily"
         or len(report["issues"]) != DAILY_ISSUE_COUNT
-        or summary["issues_expected"] != DAILY_ISSUE_COUNT
+        or summary["issues_expected"]
+        != DAILY_ISSUE_COUNT - summary.get("issues_skipped", 0)
         or len({item["issue_id"] for item in report["issues"]})
         != DAILY_ISSUE_COUNT
     ):

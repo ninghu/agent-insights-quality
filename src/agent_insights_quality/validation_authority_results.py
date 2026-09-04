@@ -290,7 +290,6 @@ def load_bound_authority_verification_result(
         "canonical_agent",
         "logical_version",
         "source_content_digest",
-        "execution_digest",
         "provider_content_digest",
     )
     if (

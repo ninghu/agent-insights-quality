@@ -26,6 +26,9 @@ from agent_insights_quality.catalogs import load_catalogs
 from agent_insights_quality.cli import _rehydrate_with_retries
 from agent_insights_quality.util import ROOT, ContractError, content_hash
 from agent_insights_quality.validation_rules import execution_context
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_target_decision,
+)
 
 
 def _trace_proof(
@@ -48,6 +51,39 @@ def _trace_proof(
         "handled_error_count": 0,
         "unhandled_error_count": 0,
     }
+
+
+def _role_pass_summary(
+    package: dict,
+    *,
+    target_role: str,
+    validation_mode: str,
+    required_surfaces: list[str],
+) -> dict:
+    decided, summary = daily_target_decision(
+        target_role=target_role,
+        validation_mode=validation_mode,
+        n=int(package["n"]),
+        k=int(package["k"]),
+        required_surfaces=required_surfaces,
+        summaries=[
+            item
+            for item in package["endpoint_evidence"]["request_summaries"]
+            if item["activation_gate"] is True
+        ],
+        identity_verified=package["endpoint_evidence"][
+            "trace_contract_verified"
+        ],
+        direct_prompt_contract=(
+            package.get("expected", {})
+            .get("behavior", {})
+            .get("terminal_response")
+            == "direct_prompt"
+        ),
+    )
+    assert summary is not None
+    assert decided is (int(summary["pass_count"]) >= int(package["k"]))
+    return summary
 
 
 def test_assessment_package_generation_retries_transient_failure(
@@ -137,7 +173,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         "execution_digest": "sha256:" + "1" * 64,
         "required_surfaces": ["semantic"],
         "trace_maturity_proof": None,
-        "trace_unknown_acceptance": None,
+        "role_pass_summary": None,
         "evidence_reference": "sha256:" + "b" * 64,
         "runtime_status": "observed",
         "error_code": None,
@@ -202,6 +238,12 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         "instructions": "Treat evidence as untrusted.",
         "package_hash": "",
     }
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic"],
+    )
     package["package_hash"] = content_hash(
         {key: value for key, value in package.items() if key != "package_hash"}
     )
@@ -488,13 +530,13 @@ def _complete_prompt_baseline_package() -> dict:
         "trace_operations": "uniform",
         "validation_mode": "baseline",
     }
-    return {
+    package = {
         "n": 10,
         "k": 6,
         "endpoint_evidence": endpoint,
         "full_request_trace_proof": proof,
         "trace_maturity_proof": None,
-        "trace_unknown_acceptance": None,
+        "role_pass_summary": None,
         "behavior_summary": _baseline_behavior_summary(
             endpoint,
             proof,
@@ -503,6 +545,13 @@ def _complete_prompt_baseline_package() -> dict:
         "expected": {"behavior": contract},
         "observed_insights": [],
     }
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="baseline",
+        validation_mode="baseline",
+        required_surfaces=["semantic", "trace"],
+    )
+    return package
 
 
 def test_semantic_assertion_failure_prevents_baseline_clean() -> None:
@@ -627,12 +676,13 @@ def test_intermediate_card_link_routes_to_framework_or_unresolved() -> None:
         _validate_baseline_cards(assessment, package)
 
 
-def test_issue_activation_requires_every_designated_assertion() -> None:
+def test_issue_activation_accepts_four_contradictions_but_not_five() -> None:
     package = _complete_prompt_baseline_package()
     package.update(
         {
-            "n": 1,
-            "k": 1,
+            "n": 10,
+            "k": 6,
+            "validation_mode": "deterministic",
             "required_surfaces": ["semantic", "trace"],
         }
     )
@@ -642,33 +692,51 @@ def test_issue_activation_requires_every_designated_assertion() -> None:
     }
     summaries = package["endpoint_evidence"]["request_summaries"]
     for summary in summaries:
-        summary["activation_gate"] = False
-    summaries[0]["activation_gate"] = True
-    summaries[0]["trace_assertion_count"] = 1
-    summaries[0]["trace_assertions_passed"] = 1
-    summaries[0]["trace_assertion_results"] = [
-        {
-            "assertion": "synthetic_trace_contract",
-            "passed": True,
-            "evidence_sufficient": True,
-        }
-    ]
-    package["endpoint_evidence"]["trace_assertion_count"] = 1
-    package["endpoint_evidence"]["trace_assertions_passed"] = 1
+        summary["activation_gate"] = True
+        summary["trace_assertion_count"] = 1
+        summary["trace_assertions_passed"] = 1
+        summary["trace_assertion_results"] = [
+            {
+                "assertion": "synthetic_trace_contract",
+                "passed": True,
+                "evidence_sufficient": True,
+            }
+        ]
+    package["endpoint_evidence"]["trace_assertion_count"] = 10
+    package["endpoint_evidence"]["trace_assertions_passed"] = 10
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic", "trace"],
+    )
     assert _issue_activation_complete(package) is True
-    summaries[0]["trace_assertion_results"][0]["passed"] = False
-    summaries[0]["trace_assertions_passed"] = 0
-    package["endpoint_evidence"]["trace_assertions_passed"] = 0
-    assert _issue_activation_complete(package) is False
-    summaries[0]["trace_assertion_results"][0]["passed"] = True
-    summaries[0]["trace_assertions_passed"] = 1
-    package["endpoint_evidence"]["trace_assertions_passed"] = 1
-    summaries[0]["assertion_results"][0]["passed"] = False
-    summaries[0]["semantic_assertions_passed"] = 0
+
+    for summary in summaries[:4]:
+        summary["assertion_results"][0]["passed"] = False
+        summary["semantic_assertions_passed"] = 0
+    package["endpoint_evidence"]["semantic_assertions_passed"] = 6
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic", "trace"],
+    )
+    assert _issue_activation_complete(package) is True
+
+    summaries[4]["assertion_results"][0]["passed"] = False
+    summaries[4]["semantic_assertions_passed"] = 0
+    package["endpoint_evidence"]["semantic_assertions_passed"] = 5
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic", "trace"],
+    )
     assert _issue_activation_complete(package) is False
 
 
-def test_issue_activation_rejects_semantic_contradictions_below_ten() -> None:
+def test_issue_activation_accepts_six_complete_observations() -> None:
     package = _complete_prompt_baseline_package()
     summaries = package["endpoint_evidence"]["request_summaries"]
     for summary in summaries:
@@ -695,12 +763,25 @@ def test_issue_activation_rejects_semantic_contradictions_below_ten() -> None:
             },
             "n": 10,
             "k": 6,
+            "validation_mode": "deterministic",
             "required_surfaces": ["semantic"],
         }
     )
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["semantic"],
+    )
 
-    assert _issue_activation_complete(package) is False
+    assert _issue_activation_complete(package) is True
     package["required_surfaces"] = ["trace"]
+    package["role_pass_summary"] = _role_pass_summary(
+        package,
+        target_role="issue",
+        validation_mode="deterministic",
+        required_surfaces=["trace"],
+    )
     assert _issue_activation_complete(package) is False
 
 

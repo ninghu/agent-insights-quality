@@ -19,12 +19,13 @@ from agent_insights_quality.util import (
 )
 from agent_insights_quality.validation_assignments import verification_assignment
 from agent_insights_quality.validation_trace_gap_policy import (
+    role_pass_summary,
     target_evidence_decided,
-    trace_unknown_acceptance,
 )
 from agent_insights_quality.validation_evidence import (
     attempt_observation,
     digest_without_field,
+    role_pass_attempt_payload,
     runtime_mapping_digest,
     scenario_evidence_complete,
     validate_authority_evidence,
@@ -798,42 +799,51 @@ def authority_evidence_from_evaluation(
         paired_observation_count = sum(
             item["observation"] is True for item in v0_attempts
         )
-        primary_trace_unknown_acceptance = _trace_unknown_acceptance(
-            authority=authority,
-            rule=rule,
-            target=targets[(scenario_id, issue_role)],
-            attempts=issue_attempts,
-            target_role=issue_role,
-        )
-        primary_decided = target_evidence_decided(
+        primary_role_pass_summary = role_pass_summary(
             target_role=issue_role,
             n=n,
             k=k,
-            complete_count=complete_count,
-            observation_count=observation_count,
-            trace_unknown_acceptance=primary_trace_unknown_acceptance,
+            attempts=[
+                role_pass_attempt_payload(item) for item in issue_attempts
+            ],
         )
-        paired_trace_unknown_acceptance = (
+        if primary_role_pass_summary is None:
+            raise ContractError("Primary role-pass evidence is invalid")
+        role_pass_count = int(primary_role_pass_summary["pass_count"])
+        primary_decided = target_evidence_decided(
+            n=n,
+            k=k,
+            role_pass_count=role_pass_count,
+        )
+        paired_role_pass_summary = (
             None
             if authority.authority_kind == "baseline"
-            else _trace_unknown_acceptance(
-                authority=authority,
-                rule=rule,
-                target=targets[(scenario_id, "paired_v0")],
-                attempts=v0_attempts,
+            else role_pass_summary(
                 target_role="paired_v0",
+                n=n,
+                k=k,
+                attempts=[
+                    role_pass_attempt_payload(item) for item in v0_attempts
+                ],
             )
+        )
+        if (
+            authority.authority_kind != "baseline"
+            and paired_role_pass_summary is None
+        ):
+            raise ContractError("Paired-v0 role-pass evidence is invalid")
+        paired_role_pass_count = (
+            0
+            if paired_role_pass_summary is None
+            else int(paired_role_pass_summary["pass_count"])
         )
         control_decided = (
             True
             if authority.authority_kind == "baseline"
             else target_evidence_decided(
-                target_role="paired_v0",
                 n=n,
                 k=k,
-                complete_count=paired_complete_count,
-                observation_count=paired_observation_count,
-                trace_unknown_acceptance=paired_trace_unknown_acceptance,
+                role_pass_count=paired_role_pass_count,
             )
         )
         evidence_complete = scenario_evidence_complete(
@@ -842,40 +852,28 @@ def authority_evidence_from_evaluation(
             k=k,
             complete_count=complete_count,
             paired_complete_count=paired_complete_count,
-            observation_count=observation_count,
-            paired_observation_count=paired_observation_count,
-            primary_trace_unknown_accepted=(
-                primary_trace_unknown_acceptance is not None
-            ),
-            paired_trace_unknown_accepted=(
-                paired_trace_unknown_acceptance is not None
-            ),
+            role_pass_count=role_pass_count,
+            paired_role_pass_count=paired_role_pass_count,
         )
         scenario = {
-                "scenario_id": scenario_id,
-                "execution_digest": rule["execution_digest"],
-                "validation_mode": rule["validation_mode"],
-                "n": n,
-                "k": k,
-                "complete_count": complete_count,
-                "paired_complete_count": paired_complete_count,
-                "observation_count": observation_count,
-                "paired_observation_count": paired_observation_count,
-                "evidence_complete": evidence_complete,
-                "pass": evidence_complete
-                and primary_decided
-                and control_decided,
-                "issue_attempts": issue_attempts,
-                "v0_attempts": v0_attempts,
-            }
-        if primary_trace_unknown_acceptance is not None:
-            scenario["primary_trace_unknown_acceptance"] = (
-                primary_trace_unknown_acceptance
-            )
-        if paired_trace_unknown_acceptance is not None:
-            scenario["paired_trace_unknown_acceptance"] = (
-                paired_trace_unknown_acceptance
-            )
+            "scenario_id": scenario_id,
+            "execution_digest": rule["execution_digest"],
+            "validation_mode": rule["validation_mode"],
+            "n": n,
+            "k": k,
+            "complete_count": complete_count,
+            "paired_complete_count": paired_complete_count,
+            "observation_count": observation_count,
+            "paired_observation_count": paired_observation_count,
+            "role_pass_count": role_pass_count,
+            "paired_role_pass_count": paired_role_pass_count,
+            "evidence_complete": evidence_complete,
+            "pass": evidence_complete and primary_decided and control_decided,
+            "primary_role_pass_summary": primary_role_pass_summary,
+            "paired_role_pass_summary": paired_role_pass_summary,
+            "issue_attempts": issue_attempts,
+            "v0_attempts": v0_attempts,
+        }
         scenarios.append(scenario)
     result = {
         "authority_id": authority.authority_id,
@@ -908,6 +906,10 @@ def authority_evidence_from_evaluation(
         ),
         "paired_observation_count": sum(
             item["paired_observation_count"] for item in scenarios
+        ),
+        "role_pass_count": sum(item["role_pass_count"] for item in scenarios),
+        "paired_role_pass_count": sum(
+            item["paired_role_pass_count"] for item in scenarios
         ),
         "evidence_complete": all(
             item["evidence_complete"] for item in scenarios
@@ -988,6 +990,31 @@ def incomplete_authority_evidence_from_invocation(
                 error_code=error_code,
             )
         )
+        primary_summary = role_pass_summary(
+            target_role=issue_role,
+            n=int(rule["n"]),
+            k=int(rule["k"]),
+            attempts=[
+                role_pass_attempt_payload(item) for item in issue_attempts
+            ],
+        )
+        paired_summary = (
+            None
+            if authority.authority_kind == "baseline"
+            else role_pass_summary(
+                target_role="paired_v0",
+                n=int(rule["n"]),
+                k=int(rule["k"]),
+                attempts=[
+                    role_pass_attempt_payload(item)
+                    for item in paired_attempts
+                ],
+            )
+        )
+        if primary_summary is None or (
+            authority.authority_kind != "baseline" and paired_summary is None
+        ):
+            raise ContractError("Incomplete role-pass evidence is invalid")
         scenarios.append(
             {
                 "scenario_id": rule["id"],
@@ -999,8 +1026,12 @@ def incomplete_authority_evidence_from_invocation(
                 "paired_complete_count": 0,
                 "observation_count": 0,
                 "paired_observation_count": 0,
+                "role_pass_count": 0,
+                "paired_role_pass_count": 0,
                 "evidence_complete": False,
                 "pass": False,
+                "primary_role_pass_summary": primary_summary,
+                "paired_role_pass_summary": paired_summary,
                 "issue_attempts": issue_attempts,
                 "v0_attempts": paired_attempts,
             }
@@ -1031,6 +1062,8 @@ def incomplete_authority_evidence_from_invocation(
         "paired_complete_count": 0,
         "observation_count": 0,
         "paired_observation_count": 0,
+        "role_pass_count": 0,
+        "paired_role_pass_count": 0,
         "evidence_complete": False,
         "pass": False,
         "scenarios": scenarios,
@@ -1514,77 +1547,6 @@ def _validate_attempt_coverage(
                 raise ContractError(
                     "Copilot evaluation assertion coverage is incomplete"
                 )
-
-
-def _trace_unknown_acceptance(
-    *,
-    authority: AuthoritySpec,
-    rule: Mapping[str, Any],
-    target: Mapping[str, Any],
-    attempts: Sequence[Mapping[str, Any]],
-    target_role: str,
-) -> dict[str, Any] | None:
-    snapshot = target.get("evidence_snapshot")
-    if (
-        not isinstance(snapshot, Mapping)
-        or snapshot.get("mature") is not True
-        or snapshot.get("required_trace_hydration")
-        not in {"absence_pending", "incomplete"}
-    ):
-        return None
-    required_surfaces = (
-        ["semantic", "trace"]
-        if target_role in {"baseline", "paired_v0"}
-        else rule["defect_predicate"].get("required_surfaces", [])
-    )
-    return trace_unknown_acceptance(
-        target_role=target_role,
-        validation_mode=str(rule["validation_mode"]),
-        n=int(rule["n"]),
-        k=int(rule["k"]),
-        required_surfaces=required_surfaces,
-        attempts=[_trace_gap_attempt_payload(attempt) for attempt in attempts],
-        maturity_proof_digest=str(
-            snapshot.get("maturity_proof_digest") or ""
-        ),
-    )
-
-
-def _trace_gap_attempt_payload(
-    attempt: Mapping[str, Any],
-) -> dict[str, Any]:
-    steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
-    return {
-        "index": int(attempt["index"]),
-        "complete": attempt["complete"],
-        "observation": attempt["observation"],
-        "error_code": attempt["error_code"],
-        "endpoint_complete": all(
-            step["endpoint_pass"] is True for step in steps
-        ),
-        "identity_complete": all(
-            step["identity_pass"] is True for step in steps
-        ),
-        "semantic_evidence_complete": all(
-            step["semantic_evidence_complete"] is True
-            for step in steps
-        ),
-        "trace_evidence_complete": all(
-            step["trace_evidence_complete"] is True
-            for step in steps
-        ),
-        "assertions_contradicted": any(
-            (
-                step["semantic_evidence_complete"] is True
-                and step["semantic_pass"] is not True
-            )
-            or (
-                step["trace_evidence_complete"] is True
-                and step["trace_pass"] is not True
-            )
-            for step in steps
-        ),
-    }
 
 
 def _evaluated_attempts(

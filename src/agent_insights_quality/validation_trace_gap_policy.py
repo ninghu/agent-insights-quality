@@ -7,8 +7,16 @@ from typing import Any
 from agent_insights_quality.util import ContractError, content_hash
 
 
-TRACE_UNKNOWN_ACCEPTANCE_POLICY = "mature_trace_unknown_v1"
+ROLE_PASS_POLICY = "six_complete_role_passes_v1"
 TRACE_MATURITY_PROOF_KIND = "daily-trace-maturity-proof"
+_MISS_CATEGORIES = (
+    "complete_non_pass",
+    "endpoint_incomplete",
+    "identity_incomplete",
+    "semantic_incomplete",
+    "trace_incomplete",
+    "other_incomplete",
+)
 
 
 def build_trace_maturity_proof(
@@ -106,105 +114,80 @@ def validate_trace_maturity_proof(
     return str(value["maturity_proof_digest"])
 
 
-def trace_unknown_acceptance(
+def role_pass_summary(
     *,
     target_role: str,
-    validation_mode: str,
     n: int,
     k: int,
-    required_surfaces: Sequence[str],
     attempts: Sequence[Mapping[str, Any]],
-    maturity_proof_digest: str | None,
 ) -> dict[str, Any] | None:
     if (
         target_role not in {"baseline", "issue", "paired_v0"}
-        or validation_mode
-        not in {"baseline", "deterministic", "model_mediated"}
         or n != 10
-        or (
-            target_role == "baseline"
-            and (validation_mode != "baseline" or k != 6)
-        )
-        or (
-            target_role != "baseline"
-            and (validation_mode == "baseline" or k != 6)
-        )
-        or "trace" not in set(required_surfaces)
+        or k != 6
         or len(attempts) != n
         or [attempt.get("index") for attempt in attempts]
         != list(range(1, n + 1))
-        or not _valid_digest(maturity_proof_digest)
     ):
         return None
-    complete = [
-        attempt for attempt in attempts if attempt.get("complete") is True
-    ]
-    unknown = [
-        attempt for attempt in attempts if attempt.get("complete") is not True
-    ]
-    if not unknown or len(unknown) > 4:
-        return None
-    if target_role == "baseline":
+
+    pass_attempt_indices: list[int] = []
+    miss_attempt_indices: list[int] = []
+    miss_counts = dict.fromkeys(_MISS_CATEGORIES, 0)
+    for attempt in attempts:
         if (
-            len(complete) < k
-            or any(attempt.get("observation") is not True for attempt in complete)
+            not isinstance(attempt.get("complete"), bool)
+            or not isinstance(attempt.get("observation"), bool)
         ):
             return None
-    elif target_role == "issue":
-        if sum(attempt.get("observation") is True for attempt in complete) < k:
-            return None
-    elif (
-        len(complete) < n - 4
-        or any(attempt.get("observation") is True for attempt in complete)
-    ):
-        return None
-    for attempt in unknown:
-        if (
-            attempt.get("observation") is True
-            or attempt.get("error_code") != "missing_evidence"
-            or attempt.get("endpoint_complete") is not True
-            or attempt.get("identity_complete") is not True
-            or attempt.get("semantic_evidence_complete") is not True
-            or attempt.get("trace_evidence_complete") is not False
-            or attempt.get("assertions_contradicted") is True
-        ):
-            return None
+        complete = attempt["complete"] is True
+        observation = attempt["observation"] is True
+        role_pass = complete and (
+            not observation if target_role == "paired_v0" else observation
+        )
+        index = int(attempt["index"])
+        if role_pass:
+            pass_attempt_indices.append(index)
+            continue
+        miss_attempt_indices.append(index)
+        if complete:
+            category = "complete_non_pass"
+        elif attempt.get("endpoint_complete") is not True:
+            category = "endpoint_incomplete"
+        elif attempt.get("identity_complete") is not True:
+            category = "identity_incomplete"
+        elif attempt.get("semantic_evidence_complete") is not True:
+            category = "semantic_incomplete"
+        elif attempt.get("trace_evidence_complete") is not True:
+            category = "trace_incomplete"
+        else:
+            category = "other_incomplete"
+        miss_counts[category] += 1
+
     return {
-        "policy": TRACE_UNKNOWN_ACCEPTANCE_POLICY,
+        "policy": ROLE_PASS_POLICY,
         "target_role": target_role,
-        "observation_count": sum(
-            attempt.get("observation") is True for attempt in complete
-        ),
-        "unknown_attempt_indices": [
-            int(attempt["index"]) for attempt in unknown
-        ],
-        "maturity_proof_digest": maturity_proof_digest,
+        "required_pass_count": k,
+        "pass_count": len(pass_attempt_indices),
+        "pass_attempt_indices": pass_attempt_indices,
+        "miss_count": len(miss_attempt_indices),
+        "miss_attempt_indices": miss_attempt_indices,
+        "miss_counts": miss_counts,
     }
 
 
 def target_evidence_decided(
     *,
-    target_role: str,
     n: int,
     k: int,
-    complete_count: int,
-    observation_count: int,
-    trace_unknown_acceptance: Mapping[str, Any] | None,
+    role_pass_count: int,
 ) -> bool:
-    if target_role == "issue":
-        return observation_count >= k and (
-            complete_count == n or trace_unknown_acceptance is not None
-        )
-    if target_role == "baseline":
-        return observation_count == complete_count and observation_count >= k and (
-            complete_count == n or trace_unknown_acceptance is not None
-        )
     return (
-        observation_count == 0
-        and (
-            complete_count == n
-            or trace_unknown_acceptance is not None
-        )
+        n == 10
+        and k == 6
+        and isinstance(role_pass_count, int)
+        and not isinstance(role_pass_count, bool)
+        and k <= role_pass_count <= n
     )
 
 
@@ -217,10 +200,26 @@ def daily_target_decision(
     required_surfaces: Sequence[str],
     summaries: Sequence[Mapping[str, Any]],
     identity_verified: bool,
-    maturity_proof_digest: str | None,
+    direct_prompt_contract: bool = False,
 ) -> tuple[bool, dict[str, Any] | None]:
     surfaces = set(required_surfaces)
-    if len(summaries) != n:
+    if (
+        target_role not in {"baseline", "issue", "paired_v0"}
+        or validation_mode
+        not in {"baseline", "deterministic", "model_mediated"}
+        or (
+            target_role == "baseline"
+            and validation_mode != "baseline"
+        )
+        or (
+            target_role != "baseline"
+            and validation_mode == "baseline"
+        )
+        or (not surfaces and target_role != "issue")
+        or not surfaces <= {"semantic", "trace"}
+        or not isinstance(identity_verified, bool)
+        or len(summaries) != n
+    ):
         return False, None
     attempts = []
     for index, summary in enumerate(summaries, start=1):
@@ -248,8 +247,10 @@ def daily_target_decision(
             for result in trace_results
         ) and (
             bool(trace_results)
-            or target_role != "baseline"
-            or summary.get("error_code") != "missing_evidence"
+            or (
+                target_role == "baseline"
+                and summary.get("error_code") != "missing_evidence"
+            )
         )
         trace_pass = (
             "trace" not in surfaces
@@ -273,6 +274,13 @@ def daily_target_decision(
         complete = (
             endpoint_complete
             and identity_verified
+            and (
+                not direct_prompt_contract
+                or (
+                    summary.get("direct_terminal_response_count") == 1
+                    and summary.get("function_call_count") == 0
+                )
+            )
             and semantic_evidence_complete
             and ("trace" not in surfaces or trace_evidence_complete)
         )
@@ -301,35 +309,16 @@ def daily_target_decision(
                 ),
             }
         )
-    acceptance = trace_unknown_acceptance(
+    summary = role_pass_summary(
         target_role=target_role,
-        validation_mode=validation_mode,
         n=n,
         k=k,
-        required_surfaces=required_surfaces,
         attempts=attempts,
-        maturity_proof_digest=maturity_proof_digest,
     )
-    complete_count = sum(attempt["complete"] is True for attempt in attempts)
-    observation_count = sum(
-        attempt["observation"] is True for attempt in attempts
-    )
-    if any(attempt["assertions_contradicted"] is True for attempt in attempts):
+    if summary is None:
         return False, None
     return target_evidence_decided(
-        target_role=target_role,
         n=n,
         k=k,
-        complete_count=complete_count,
-        observation_count=observation_count,
-        trace_unknown_acceptance=acceptance,
-    ), acceptance
-
-
-def _valid_digest(value: str | None) -> bool:
-    if not isinstance(value, str) or not value.startswith("sha256:"):
-        return False
-    suffix = value.removeprefix("sha256:")
-    return len(suffix) == 64 and all(
-        character in "0123456789abcdef" for character in suffix
-    )
+        role_pass_count=int(summary["pass_count"]),
+    ), summary

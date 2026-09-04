@@ -26,8 +26,6 @@
         "LOCKED",
         "PREPARED",
         "TRAFFIC",
-        "VERIFICATION",
-        "INSIGHTS",
         "COMPOSED",
         "ASSESSMENTS_VALIDATED",
         "IMPROVEMENT_INPUT_READY",
@@ -133,7 +131,6 @@
           "additionalProperties": false,
           "required": [
             "max_parallel_agents",
-            "daily_verification_max_parallel",
             "daily_inter_version_pacing_seconds",
             "max_recovery_versions",
             "agent_start_stagger_seconds",
@@ -144,12 +141,14 @@
             "clean_window_ingestion_margin_seconds",
             "clean_window_max_wait_seconds",
             "trace_assertion_stabilization_seconds",
+            "daily_trace_hydration_grace_seconds",
+            "daily_trace_hydration_maximum_wait_seconds",
+            "daily_trace_hydration_maximum_poll_seconds",
             "insight_start_margin_seconds",
             "telemetry_resource_set"
           ],
           "properties": {
             "max_parallel_agents": {"type": "integer", "minimum": 1, "maximum": 5},
-            "daily_verification_max_parallel": {"const": 8},
             "daily_inter_version_pacing_seconds": {"const": 60},
             "max_recovery_versions": {"type": "integer", "minimum": 0, "maximum": 3},
             "agent_start_stagger_seconds": {"type": "integer", "minimum": 0, "maximum": 30},
@@ -160,6 +159,9 @@
             "clean_window_ingestion_margin_seconds": {"type": "integer", "minimum": 0},
             "clean_window_max_wait_seconds": {"type": "integer", "minimum": 1},
             "trace_assertion_stabilization_seconds": {"type": "integer", "minimum": 1},
+            "daily_trace_hydration_grace_seconds": {"type": "integer", "minimum": 0},
+            "daily_trace_hydration_maximum_wait_seconds": {"type": "integer", "minimum": 60, "maximum": 300},
+            "daily_trace_hydration_maximum_poll_seconds": {"type": "integer", "minimum": 1, "maximum": 60},
             "insight_start_margin_seconds": {"type": "integer", "minimum": 1},
             "telemetry_resource_set": {"const": "g30"}
           }
@@ -197,9 +199,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "traffic_manifest",
-        "verification_manifest",
-        "insight_manifest",
+        "lane_receipts",
         "manifest",
         "assessment_index",
         "improvement_input",
@@ -214,9 +214,24 @@
         "failure"
       ],
       "properties": {
-        "traffic_manifest": {"$ref": "#/$defs/nullableReference"},
-        "verification_manifest": {"$ref": "#/$defs/nullableReference"},
-        "insight_manifest": {"$ref": "#/$defs/nullableReference"},
+        "lane_receipts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "weather-agent",
+            "healthcare-agent",
+            "finance-agent",
+            "travel-agent",
+            "support-ticket-agent"
+          ],
+          "properties": {
+            "weather-agent": {"$ref": "#/$defs/nullableReference"},
+            "healthcare-agent": {"$ref": "#/$defs/nullableReference"},
+            "finance-agent": {"$ref": "#/$defs/nullableReference"},
+            "travel-agent": {"$ref": "#/$defs/nullableReference"},
+            "support-ticket-agent": {"$ref": "#/$defs/nullableReference"}
+          }
+        },
         "manifest": {"$ref": "#/$defs/nullableReference"},
         "assessment_index": {"$ref": "#/$defs/nullableReference"},
         "improvement_input": {"$ref": "#/$defs/nullableReference"},

@@ -1610,6 +1610,108 @@ def test_response_anchor_rejects_wrong_identity_duplicate() -> None:
     )
 
 
+@pytest.mark.parametrize("response_count", [20, 30])
+def test_response_anchor_filters_wrong_identity_and_identical_rows(
+    response_count: int,
+) -> None:
+    operation_ids = tuple(f"{index:032x}" for index in range(1, response_count + 1))
+    references = tuple(
+        f"response-{index}" for index in range(1, response_count + 1)
+    )
+    rows = []
+    for index, (operation_id, reference) in enumerate(
+        zip(operation_ids, references, strict=True),
+        start=1,
+    ):
+        anchor = _anchor_row(
+            operation_id,
+            f"root-{index}",
+            reference,
+        )
+        child = _anchor_row(
+            operation_id,
+            f"child-{index}",
+            "",
+            parent=f"root-{index}",
+            operation_name="chat",
+        )
+        rows.extend([anchor, dict(anchor), child, dict(child)])
+    wrong = _anchor_row(
+        operation_ids[0],
+        "wrong-root",
+        references[0],
+        agent_version="wrong-version",
+    )
+    wrong_child = _anchor_row(
+        operation_ids[0],
+        "wrong-child",
+        "",
+        parent="wrong-root",
+        operation_name="chat",
+        agent_version="wrong-version",
+    )
+    rows.extend([wrong, wrong_child])
+
+    correlation = _correlated_request_rows(
+        rows,
+        references,
+        operation_ids,
+        agent_name="healthcare-agent-issue-010",
+        foundry_version="7",
+    )
+
+    assert correlation is not None
+    subtrees, anchors = correlation
+    assert len(subtrees) == response_count
+    assert anchors == tuple(
+        f"root-{index}" for index in range(1, response_count + 1)
+    )
+    assert all(len(rows) == 2 for rows in subtrees)
+
+
+@pytest.mark.parametrize("response_count", [20, 30])
+def test_operation_discovery_canonicalizes_identical_rows(
+    response_count: int,
+) -> None:
+    operation_ids = tuple(f"{index:032x}" for index in range(1, response_count + 1))
+    references = tuple(
+        f"response-{index}" for index in range(1, response_count + 1)
+    )
+    rows = [
+        row
+        for operation_id, reference in zip(
+            operation_ids,
+            references,
+            strict=True,
+        )
+        for row in (
+            [operation_id, [reference]],
+            [operation_id, [reference]],
+            [operation_id, ["wrong-response"]],
+        )
+    ]
+    table = type("Table", (), {"rows": rows})()
+
+    assert _complete_operation_ids([table], references) == operation_ids
+
+
+def test_response_anchor_rejects_distinct_exact_identity_roots() -> None:
+    operation_id = "c" * 32
+    assert (
+        _correlated_request_rows(
+            [
+                _anchor_row(operation_id, "root-1", "response-1"),
+                _anchor_row(operation_id, "root-2", "response-1"),
+            ],
+            ("response-1",),
+            (operation_id,),
+            agent_name="healthcare-agent-issue-010",
+            foundry_version="7",
+        )
+        is None
+    )
+
+
 @pytest.mark.parametrize("issue_id", ["issue-029", "issue-032", "issue-036"])
 def test_support_semantic_paired_control_does_not_require_chat(
     issue_id: str,

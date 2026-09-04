@@ -30,6 +30,9 @@ from agent_insights_quality.validation_rules import (
     execution_requests,
     issue_observation_context,
 )
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_target_decision,
+)
 import pytest
 
 
@@ -80,11 +83,14 @@ def _manifest(*, full: bool = False) -> dict:
                 "error_code": None,
             })
         request_count = len(summaries)
-        return {
+        context = (
+            execution_context(traffic_path)
+            if baseline
+            else issue_observation_context(traffic_path)
+        )
+        value = {
             **(
-                execution_context(traffic_path)
-                if baseline
-                else issue_observation_context(traffic_path)
+                context
             ),
             "endpoint_request_count": request_count,
             "endpoint_response_count": request_count,
@@ -103,7 +109,7 @@ def _manifest(*, full: bool = False) -> dict:
             ),
             "trace_contract_verified": True,
             "trace_maturity_proof": None,
-            "trace_unknown_acceptance": None,
+            "role_pass_summary": None,
             "trace_behavior_summary": (
                 {
                     "operation_count": request_count,
@@ -123,6 +129,23 @@ def _manifest(*, full: bool = False) -> dict:
             ),
             "endpoint_request_summaries": summaries,
         }
+        _, value["role_pass_summary"] = daily_target_decision(
+            target_role="baseline" if baseline else "issue",
+            validation_mode=str(context["validation_mode"]),
+            n=int(context["n"]),
+            k=int(context["k"]),
+            required_surfaces=(
+                ["semantic", "trace"]
+                if baseline
+                else context["required_surfaces"]
+            ),
+            summaries=[
+                item for item in summaries if item["activation_gate"] is True
+            ],
+            identity_verified=True,
+            direct_prompt_contract=prompt,
+        )
+        return value
 
     values = []
     for agent in agents["agents"]:
@@ -277,6 +300,77 @@ def test_report_uses_correct_issue_percentage_without_status() -> None:
     assert "status" not in failed
 
 
+def test_skipped_versions_are_visible_and_excluded_from_issue_score() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    skipped_issue = manifest["agents"][0]["issues"][0]
+    skipped_issue.update(
+        {
+            "status": "skipped_agent_activation",
+            "error_code": "agent_activation_below_threshold",
+            "insight_references": [],
+        }
+    )
+    manifest["agents"][0]["baseline"].update(
+        {
+            "status": "skipped_telemetry",
+            "error_code": "trace_assertion_failed_mature",
+            "insight_references": [],
+        }
+    )
+    assessments = _assessments(manifest)
+    assessments.pop(skipped_issue["issue_id"])
+    baselines = _baseline_assessments(manifest)
+    baselines.pop("weather-agent")
+
+    report = build_report(manifest, issues, assessments, baselines)
+
+    assert report["summary"]["eligible_issue_count"] == 19
+    assert report["summary"]["skipped_issue_count"] == 1
+    assert report["summary"]["issues_expected"] == 19
+    assert report["summary"]["quality_score"] == 100
+    assert report["summary"]["skipped_issues"] == [
+        {
+            "issue_id": skipped_issue["issue_id"],
+            "status": "skipped_agent_activation",
+            "reason_code": "agent_activation_below_threshold",
+        }
+    ]
+    assert report["summary"]["baseline_coverage"]["missing_agents"] == [
+        "weather-agent"
+    ]
+    skipped = next(
+        item
+        for item in report["issues"]
+        if item["issue_id"] == skipped_issue["issue_id"]
+    )
+    assert skipped["outcome"] == "skipped"
+    assert skipped["assessment"]["ownership"] == "agent"
+    validate_report(report)
+
+
+def test_all_skipped_issues_produce_no_numeric_report() -> None:
+    _, issues = load_catalogs()
+    manifest = _manifest()
+    for agent in manifest["agents"]:
+        for issue in agent["issues"]:
+            issue.update(
+                {
+                    "status": "skipped_telemetry",
+                    "error_code": "trace_assertion_failed_mature",
+                    "insight_references": [],
+                }
+            )
+
+    with pytest.raises(ContractError, match="No eligible issue evidence"):
+        build_report(
+            manifest,
+            issues,
+            {},
+            _baseline_assessments(manifest),
+        )
+
+
 def test_reporting_uses_reviewed_model_mediated_threshold() -> None:
     manifest = _manifest()
     issue = next(
@@ -305,13 +399,27 @@ def test_reporting_uses_reviewed_model_mediated_threshold() -> None:
         / "issue-004"
         / "traffic.json"
     )
+    context = issue_observation_context(traffic_path)
 
+    def refresh_summary() -> None:
+        _, issue["role_pass_summary"] = daily_target_decision(
+            target_role="issue",
+            validation_mode=str(context["validation_mode"]),
+            n=int(context["n"]),
+            k=int(context["k"]),
+            required_surfaces=context["required_surfaces"],
+            summaries=observations,
+            identity_verified=True,
+        )
+
+    refresh_summary()
     assert _runtime_evidence_complete(issue, traffic_path=traffic_path) is True
     failing = observations[-5]
     failing["semantic_assertions_passed"] = 0
     for result in failing["assertion_results"]:
         result["passed"] = False
     issue["semantic_assertions_passed"] -= failing["semantic_assertion_count"]
+    refresh_summary()
     assert _runtime_evidence_complete(issue, traffic_path=traffic_path) is False
 
 
@@ -836,7 +944,7 @@ def test_scored_trend_day_cannot_be_replaced() -> None:
         updated_trend(report, base)
 
 
-def test_optional_fields_do_not_score_and_noise_expands_denominator() -> None:
+def test_optional_fields_and_baseline_cards_do_not_change_issue_score() -> None:
     _, issues = load_catalogs()
     manifest = _manifest()
     assessments = _assessments(manifest)
@@ -867,8 +975,8 @@ def test_optional_fields_do_not_score_and_noise_expands_denominator() -> None:
         "card_evaluations": [{"evaluation": "noise"}],
     }
     penalized = build_report(manifest, issues, assessments, baseline)
-    assert penalized["summary"]["noise_cards"] == 1
-    assert penalized["summary"]["quality_score"] == 95.2
+    assert penalized["summary"]["noise_cards"] == 0
+    assert penalized["summary"]["quality_score"] == 100
 
 
 def test_optional_top_level_field_mismatch_does_not_change_card_score() -> None:

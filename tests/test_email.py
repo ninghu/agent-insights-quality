@@ -64,7 +64,20 @@ def test_email_requires_reviewed_domain_and_one_success(
             "issues_incorrect": 0,
             "issues_missing": 0,
             "issues_expected": 20,
+            "eligible_issue_count": 20,
+            "skipped_issue_count": 0,
+            "skipped_issues": [],
             "baseline_passed": 5,
+            "baseline_coverage": {
+                "eligible_agents": [
+                    "weather-agent",
+                    "healthcare-agent",
+                    "finance-agent",
+                    "travel-agent",
+                    "support-ticket-agent",
+                ],
+                "missing_agents": [],
+            },
             "noise_cards": 0,
             "duplicate_cards": 0,
             "quality_score": 100,
@@ -145,7 +158,51 @@ def test_email_requires_reviewed_domain_and_one_success(
         ">Test agent</th>"
     )
     assert _PROJECT_LINK in request["html"]
-    assert "20 correct / 20 (0 incorrect, 0 missing)" in request["html"]
+    assert (
+        "20 correct / 20 scored (0 incorrect, 0 missing, 0 skipped)"
+        in request["html"]
+    )
+    assert "Complete for all 5 Test Agents" in request["html"]
+    assert ">Skipped issues</td>" in request["html"]
+
+    reduced = deepcopy(report)
+    reduced["summary"].update(
+        {
+            "issues_correct": 19,
+            "issues_expected": 19,
+            "eligible_issue_count": 19,
+            "skipped_issue_count": 1,
+            "skipped_issues": [
+                {
+                    "issue_id": "issue-006",
+                    "status": "skipped_agent_activation",
+                    "reason_code": "agent_activation_below_threshold",
+                }
+            ],
+            "baseline_coverage": {
+                "eligible_agents": [
+                    "healthcare-agent",
+                    "finance-agent",
+                    "travel-agent",
+                    "support-ticket-agent",
+                ],
+                "missing_agents": ["weather-agent"],
+            },
+        }
+    )
+    reduced_request = create_request(
+        reduced,
+        "synthetic@microsoft.com",
+        project_link=_PROJECT_LINK,
+        dashboard_link=_DASHBOARD_LINK,
+        adx_publication=_ADX_PUBLICATION,
+    )
+    assert "Missing: weather-agent" in reduced_request["html"]
+    assert (
+        "issue-006 (skipped_agent_activation: "
+        "agent_activation_below_threshold)"
+        in reduced_request["html"]
+    )
     assert "0 noise, 0 duplicate" in request["html"]
     preview = runtime_root / "staging" / "run" / "report-preview.html"
     write_private_report_preview(request, preview)

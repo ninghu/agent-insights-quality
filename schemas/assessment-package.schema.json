@@ -10,7 +10,7 @@
     "manifest_reference",
     "source_integrity",
     "trace_maturity_proof",
-    "trace_unknown_acceptance",
+    "role_pass_summary",
     "validation_mode",
     "n",
     "k",
@@ -53,10 +53,10 @@
       "uniqueItems": true,
       "items": {"enum": ["semantic", "trace"]}
     },
-    "trace_unknown_acceptance": {
+    "role_pass_summary": {
       "oneOf": [
         {"type": "null"},
-        {"$ref": "#/$defs/traceUnknownAcceptance"}
+        {"$ref": "#/$defs/rolePassSummary"}
       ]
     },
     "trace_maturity_proof": {
@@ -65,7 +65,7 @@
         {"$ref": "#/$defs/traceMaturityProof"}
       ]
     },
-    "runtime_status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_baseline"]},
+    "runtime_status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_agent_activation", "skipped_insight", "skipped_telemetry"]},
     "error_code": {"type": ["string", "null"]},
     "operation_count": {"type": "integer", "minimum": 0},
     "endpoint_evidence": {
@@ -356,28 +356,50 @@
         }
       }
     },
-    "traceUnknownAcceptance": {
+    "rolePassSummary": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "policy",
         "target_role",
-        "observation_count",
-        "unknown_attempt_indices",
-        "maturity_proof_digest"
+        "required_pass_count",
+        "pass_count",
+        "pass_attempt_indices",
+        "miss_count",
+        "miss_attempt_indices",
+        "miss_counts"
       ],
       "properties": {
-        "policy": {"const": "mature_trace_unknown_v1"},
+        "policy": {"const": "six_complete_role_passes_v1"},
         "target_role": {"enum": ["baseline", "issue", "paired_v0"]},
-        "observation_count": {"type": "integer", "minimum": 0, "maximum": 10},
-        "unknown_attempt_indices": {
+        "required_pass_count": {"const": 6},
+        "pass_count": {"type": "integer", "minimum": 0, "maximum": 10},
+        "pass_attempt_indices": {
           "type": "array",
-          "minItems": 1,
-          "maxItems": 4,
+          "maxItems": 10,
           "uniqueItems": true,
           "items": {"type": "integer", "minimum": 1, "maximum": 10}
         },
-        "maturity_proof_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        "miss_count": {"type": "integer", "minimum": 0, "maximum": 10},
+        "miss_attempt_indices": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1, "maximum": 10}
+        },
+        "miss_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["complete_non_pass", "endpoint_incomplete", "identity_incomplete", "semantic_incomplete", "trace_incomplete", "other_incomplete"],
+          "properties": {
+            "complete_non_pass": {"type": "integer", "minimum": 0, "maximum": 10},
+            "endpoint_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "identity_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "semantic_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "trace_incomplete": {"type": "integer", "minimum": 0, "maximum": 10},
+            "other_incomplete": {"type": "integer", "minimum": 0, "maximum": 10}
+          }
+        }
       }
     },
     "traceMaturityProof": {

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-from collections.abc import Mapping
 from typing import Annotated
 
 from agent_framework import (
@@ -166,20 +165,52 @@ for a transient test, use get_balance_with_transient. Keep answers concise and d
 financial recommendations."""
 
 
+def _message_text(message) -> str:
+    text = getattr(message, "text", None)
+    if isinstance(text, str):
+        return text
+    return " ".join(
+        item
+        if isinstance(item, str)
+        else str(getattr(item, "text", "") or "")
+        for item in getattr(message, "contents", ())
+    ).strip()
+
+
+def _has_function_call(response) -> bool:
+    return any(
+        not isinstance(content, str)
+        and getattr(content, "type", None) == "function_call"
+        for message in getattr(response, "messages", ())
+        for content in getattr(message, "contents", ())
+    )
+
+
+def _replay_stream(stream) -> ResponseStream:
+    buffered_updates = tuple(stream.updates)
+
+    async def replay_updates():
+        for update in buffered_updates:
+            yield update
+
+    return ResponseStream(
+        replay_updates(),
+        finalizer=ChatResponse.from_updates,
+    )
+
+
 class CompletePartialAggregate(ChatMiddleware):
     async def process(self, context: ChatContext, call_next) -> None:
-        latest_user_index = next(
+        text = next(
             (
-                index
-                for index in range(len(context.messages) - 1, -1, -1)
-                if context.messages[index].role == "user"
+                _message_text(message)
+                for message in reversed(
+                    getattr(context, "messages", ()) or ()
+                )
+                if getattr(message, "role", None) == "user"
+                and _message_text(message)
             ),
-            None,
-        )
-        text = (
-            context.messages[latest_user_index].text
-            if latest_user_index is not None
-            else ""
+            "",
         )
         folded = text.casefold()
         if not (
@@ -190,79 +221,14 @@ class CompletePartialAggregate(ChatMiddleware):
             await call_next()
             return
         account_id = "acct-demo-b" if "acct-demo-b" in folded else "acct-demo-a"
-        expected_accounts = {account_id, "acct-demo-missing"}
         await call_next()
-        if context.stream:
+        if getattr(context, "stream", False):
             natural_stream = context.result
             natural_response = await natural_stream.get_final_response()
-            if any(
-                content.type == "function_call"
-                for message in natural_response.messages
-                for content in message.contents
-            ):
-                buffered_updates = tuple(natural_stream.updates)
-
-                async def replay_updates():
-                    for update in buffered_updates:
-                        yield update
-
-                context.result = ResponseStream(
-                    replay_updates(),
-                    finalizer=ChatResponse.from_updates,
-                )
+            if _has_function_call(natural_response):
+                context.result = _replay_stream(natural_stream)
                 return
-        elif any(
-            content.type == "function_call"
-            for message in context.result.messages
-            for content in message.contents
-        ):
-            return
-        current_turn = (
-            context.messages[latest_user_index:]
-            if latest_user_index is not None
-            else []
-        )
-        budget_calls = {}
-        for message in current_turn:
-            for content in message.contents:
-                if (
-                    content.type != "function_call"
-                    or not content.call_id
-                    or content.name != "get_budget_summary"
-                ):
-                    continue
-                try:
-                    arguments = content.parse_arguments()
-                except json.JSONDecodeError:
-                    continue
-                if (
-                    isinstance(arguments, Mapping)
-                    and arguments.get("account_id") in expected_accounts
-                ):
-                    budget_calls[content.call_id] = arguments["account_id"]
-        budget_results = {}
-        for message in current_turn:
-            for content in message.contents:
-                if (
-                    content.type != "function_result"
-                    or content.call_id not in budget_calls
-                ):
-                    continue
-                result = content.result
-                if isinstance(result, str):
-                    try:
-                        result = json.loads(result)
-                    except json.JSONDecodeError:
-                        continue
-                if isinstance(result, Mapping):
-                    budget_results[budget_calls[content.call_id]] = result
-        if (
-            len(budget_calls) != 2
-            or set(budget_calls.values()) != expected_accounts
-            or set(budget_results) != expected_accounts
-            or budget_results[account_id].get("ok") is not True
-            or budget_results["acct-demo-missing"].get("ok") is not False
-        ):
+        elif _has_function_call(context.result):
             return
         answer = (
             f"The complete budget summary covers {account_id} and "
@@ -271,7 +237,7 @@ class CompletePartialAggregate(ChatMiddleware):
         response = ChatResponse(
             messages=[Message(role="assistant", contents=[answer])]
         )
-        if context.stream:
+        if getattr(context, "stream", False):
             async def updates():
                 yield ChatResponseUpdate(
                     role="assistant",

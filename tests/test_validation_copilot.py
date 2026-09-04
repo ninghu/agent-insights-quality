@@ -17,7 +17,6 @@ from agent_insights_quality.util import (
 )
 from agent_insights_quality.validation_copilot import (
     EVALUATION_PROMPT,
-    _trace_unknown_acceptance,
     assessment_path,
     attach_private_package_to_active_pointer,
     authority_evidence_from_evaluation,
@@ -645,18 +644,20 @@ def test_private_package_binds_snapshot_to_exact_receipt(tmp_path) -> None:
     [
         (set(range(1, 11)), set(), set(), (True, True)),
         (set(range(1, 6)), set(), set(), (True, False)),
-        (set(range(1, 11)), {1}, set(), (True, False)),
+        (set(range(1, 11)), {1}, set(), (True, True)),
+        (set(range(1, 11)), {1, 2, 3, 4}, set(), (True, True)),
+        (set(range(1, 11)), {1, 2, 3, 4, 5}, set(), (True, False)),
         (
             set(range(2, 11)),
             set(),
             {("issue", 1)},
-            (False, False),
+            (True, True),
         ),
         (
             set(range(1, 11)),
             set(),
             {("paired_v0", 1)},
-            (False, False),
+            (True, True),
         ),
     ],
 )
@@ -796,7 +797,7 @@ def test_required_surface_rejects_unsupported_observation(tmp_path) -> None:
         )
 
 
-def test_paired_trace_unknown_requires_mature_snapshot(
+def test_paired_role_pass_ignores_two_incomplete_misses(
     tmp_path,
 ) -> None:
     package, pointer, prepared, plan, context = _package(
@@ -838,16 +839,16 @@ def test_paired_trace_unknown_requires_mature_snapshot(
     package["targets"][1]["evidence_snapshot"][
         "required_trace_hydration"
     ] = "incomplete"
-    incomplete = authority_evidence_from_evaluation(
+    before_maturity = authority_evidence_from_evaluation(
         package=package,
         evaluation=evaluation,
         authority=context["authority"],
         runtime=context["runtime"],
         validated_commit_sha=HEAD,
     )
-    assert (incomplete["evidence_complete"], incomplete["pass"]) == (
-        False,
-        False,
+    assert (before_maturity["evidence_complete"], before_maturity["pass"]) == (
+        True,
+        True,
     )
 
     package["targets"][1]["evidence_snapshot"]["mature"] = True
@@ -861,114 +862,16 @@ def test_paired_trace_unknown_requires_mature_snapshot(
     scenario = accepted["scenarios"][0]
     assert (accepted["evidence_complete"], accepted["pass"]) == (True, True)
     assert scenario["paired_complete_count"] == scenario["n"] - 2
-    assert scenario["paired_trace_unknown_acceptance"] == {
-        "policy": "mature_trace_unknown_v1",
-        "target_role": "paired_v0",
-        "observation_count": 0,
-        "unknown_attempt_indices": [1, 2],
-        "maturity_proof_digest": (
-            package["targets"][1]["evidence_snapshot"][
-                "maturity_proof_digest"
-            ]
-        ),
-    }
+    assert scenario["paired_role_pass_count"] == 8
+    assert scenario["paired_role_pass_summary"]["pass_attempt_indices"] == list(
+        range(3, 11)
+    )
+    assert scenario["paired_role_pass_summary"]["miss_attempt_indices"] == [1, 2]
     assert scenario["v0_attempts"][0]["complete"] is False
     assert scenario["v0_attempts"][1]["complete"] is False
 
 
-def _semantic_and_trace_gap_inputs():
-    authority = _authority("issue-021")
-    rule = authority.validation_rules["scenarios"][0]
-    issue_attempts = [
-        {"observation": index <= rule["k"]}
-        for index in range(1, rule["n"] + 1)
-    ]
-    v0_attempts = [
-        {
-            "index": index,
-            "complete": index != 1,
-            "observation": False,
-            "error_code": None if index != 1 else "missing_evidence",
-            "setup_steps": (
-                [{"endpoint_pass": True, "identity_pass": True}]
-                if index == 1
-                else []
-            ),
-            "probe_steps": (
-                [{"endpoint_pass": True, "identity_pass": True}]
-                if index == 1
-                else []
-            ),
-        }
-        for index in range(1, rule["n"] + 1)
-    ]
-    for step in [
-        *v0_attempts[0]["setup_steps"],
-        *v0_attempts[0]["probe_steps"],
-    ]:
-        step.update(
-            {
-                "semantic_pass": True,
-                "trace_pass": False,
-                "semantic_evidence_complete": True,
-                "trace_evidence_complete": False,
-            }
-        )
-    v0_attempts[0]["error_code"] = "missing_evidence"
-    return authority, rule, issue_attempts, v0_attempts
-
-
-def test_paired_trace_unknown_accepts_semantic_and_trace_predicate() -> None:
-    authority, rule, _issue_attempts, v0_attempts = (
-        _semantic_and_trace_gap_inputs()
-    )
-
-    assert _trace_unknown_acceptance(
-        authority=authority,
-        rule=rule,
-        target={
-            "evidence_snapshot": {
-                "mature": True,
-                "maturity_proof_digest": HASH,
-                "required_trace_hydration": "incomplete",
-            }
-        },
-        attempts=v0_attempts,
-        target_role="paired_v0",
-    ) == {
-        "policy": "mature_trace_unknown_v1",
-        "target_role": "paired_v0",
-        "observation_count": 0,
-        "unknown_attempt_indices": [1],
-        "maturity_proof_digest": HASH,
-    }
-
-
-def test_paired_trace_unknown_rejects_semantic_insufficiency() -> None:
-    authority, rule, _issue_attempts, v0_attempts = (
-        _semantic_and_trace_gap_inputs()
-    )
-    v0_attempts[0]["probe_steps"][0]["semantic_evidence_complete"] = False
-
-    assert (
-        _trace_unknown_acceptance(
-            authority=authority,
-            rule=rule,
-            target={
-                "evidence_snapshot": {
-                    "mature": True,
-                    "maturity_proof_digest": HASH,
-                    "required_trace_hydration": "incomplete",
-                }
-            },
-            attempts=v0_attempts,
-            target_role="paired_v0",
-        )
-        is None
-    )
-
-
-def test_issue_and_paired_trace_unknown_acceptances_compose(
+def test_issue_and_paired_role_pass_summaries_compose(
     tmp_path,
 ) -> None:
     package, pointer, prepared, plan, context = _package(
@@ -1017,33 +920,18 @@ def test_issue_and_paired_trace_unknown_acceptances_compose(
     composed = evidence["scenarios"][0]
 
     assert (evidence["evidence_complete"], evidence["pass"]) == (True, True)
-    assert composed["primary_trace_unknown_acceptance"] == {
-        "policy": "mature_trace_unknown_v1",
-        "target_role": "issue",
-        "observation_count": 6,
-        "unknown_attempt_indices": [7],
-        "maturity_proof_digest": (
-            package["targets"][0]["evidence_snapshot"][
-                "maturity_proof_digest"
-            ]
-        ),
-    }
-    assert composed["paired_trace_unknown_acceptance"] == {
-        "policy": "mature_trace_unknown_v1",
-        "target_role": "paired_v0",
-        "observation_count": 0,
-        "unknown_attempt_indices": [1],
-        "maturity_proof_digest": (
-            package["targets"][1]["evidence_snapshot"][
-                "maturity_proof_digest"
-            ]
-        ),
-    }
+    assert composed["role_pass_count"] == 6
+    assert composed["primary_role_pass_summary"]["miss_count"] == 4
+    assert composed["primary_role_pass_summary"]["miss_counts"][
+        "trace_incomplete"
+    ] == 1
+    assert composed["paired_role_pass_count"] == 9
+    assert composed["paired_role_pass_summary"]["miss_attempt_indices"] == [1]
     assert composed["issue_attempts"][6]["complete"] is False
     assert composed["v0_attempts"][0]["complete"] is False
 
 
-def test_baseline_trace_unknown_acceptance_keeps_unknown_incomplete(
+def test_baseline_role_pass_summary_keeps_miss_incomplete(
     tmp_path,
 ) -> None:
     package, pointer, prepared, plan, context = _package(
@@ -1094,9 +982,9 @@ def test_baseline_trace_unknown_acceptance_keeps_unknown_incomplete(
     assert (evidence["evidence_complete"], evidence["pass"]) == (True, True)
     assert scenario["complete_count"] == 9
     assert scenario["observation_count"] == 9
-    assert scenario["primary_trace_unknown_acceptance"][
-        "unknown_attempt_indices"
-    ] == [attempt_index + 1]
+    assert scenario["primary_role_pass_summary"]["miss_attempt_indices"] == [
+        attempt_index + 1
+    ]
     assert scenario["issue_attempts"][attempt_index]["complete"] is False
     assert scenario["issue_attempts"][attempt_index]["observation"] is False
 
@@ -1129,7 +1017,8 @@ def test_baseline_health_uses_copilot_attempt_judgments(tmp_path) -> None:
 
     assert evidence["evidence_complete"] is True
     assert evidence["observation_count"] == 9
-    assert evidence["pass"] is False
+    assert evidence["pass"] is True
+    assert evidence["role_pass_count"] == 9
 
 
 def test_incomplete_endpoint_integrity_controls_fresh_invocation() -> None:

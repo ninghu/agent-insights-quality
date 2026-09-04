@@ -118,29 +118,22 @@ Daily quality assessment, scoring, reporting, ADX, email, Daily traffic, approva
    stability interval; a genuine deadline gap remains `INCOMPLETE`. Only response-bound traces may
    map one-to-one to the exact `invoke_agent` anchor and complete descendant span tree; sibling roots
    cannot contribute evidence.
-   When an exact reused receipt is older than its evidence-window end plus the configured maximum
-   hydration horizon and stability interval, collect one mature whole-target snapshot with no polling
-   delay. Bind the receipt digest, evidence window, maturity boundary, as-of time, and timing policy
-   into the private package. Complete mature evidence proceeds immediately; a remaining required
-   trace gap is recorded as an explicit unknown for the shared reviewed acceptance policy.
+   When an exact reused receipt is mature, collect one whole-target snapshot with no polling delay.
+   Bind the receipt digest, evidence window, maturity boundary, as-of time, and timing policy into the
+   private package.
    Evaluate every assertion, but determine each observation and its completeness from only the
-   reviewed predicate's observation steps and `required_surfaces`. The first mature batch uses one
-   shared trace-unknown policy: baselines require six proven healthy attempts plus at most four
-   trace-only unknowns and no observed failure; every issue mode requires at least six of ten
-   observations and may retain at most four trace-only unknowns; paired `v0` requires six proven
-   zero-observation controls plus at most four trace-only unknowns. Complete issue non-observations count
-   as behavioral misses. Every unknown retains `complete=false`, `observation=false`,
-   `missing_evidence`, complete endpoint, exact identity, and semantic evidence, and no contradictory
-   sufficient assertion. Authority evidence records the shared policy, target role, observation count,
-   unknown attempt indices, and maturity proof digest.
+   reviewed predicate's observation steps and `required_surfaces`. Aggregate PASS requires six
+   complete role-specific passes: healthy attempts for a baseline, defect observations for an issue,
+   and complete zero-defect controls for paired `v0`. The other four attempts are transparent misses
+   regardless of whether they are complete non-passes, contradictions, missing endpoint/identity/
+   semantic/trace evidence, or unknown. They never veto six strict passes. A passing attempt itself
+   still requires complete exact endpoint, identity, required semantic/trace, and internally
+   consistent proof. Preserve all attempt evidence plus role-pass indices and miss categories.
    Receipt reuse proves the unchanged traffic-generation and execution binding only. Every new
    verification package binds the reused receipt's immutable digest and the current verifier commit
    and verifier digest.
    GPT-5.6 Sol evaluates every behavioral assertion and per-attempt observation. Deterministic code
-   validates exact evaluation coverage and applies the reviewed thresholds exactly: baseline `6/10`
-   with at most four trace-only unknowns and no observed failure; every issue mode `>=6/10` with at
-   most four trace-only unknowns; and paired `v0` `0/10` with six proven controls plus at most four
-   trace-only unknowns. Persist exactly one immutable
+   validates exact evaluation coverage and applies the shared six-role-pass threshold. Persist one immutable
    generation-fenced `PASS`, `FAIL`, or `INCOMPLETE` result immediately after deciding the authority
    and before claiming another. Complete stable evidence below threshold is `FAIL`; missing,
    ambiguous, partial, or unstable evidence is `INCOMPLETE`.
@@ -155,8 +148,8 @@ Daily quality assessment, scoring, reporting, ADX, email, Daily traffic, approva
     preserving immutable ancestry and exact-reusing all definitive results. The first exact-receipt
     recollection has zero deployment and zero invocation assignments and selects only incomplete
     authorities for visible evaluation. If the exact receipt is `INCOMPLETE` again, the next recovery
-    publishes visible fresh issue plus paired-`v0` invocation work. A mature trace-only unknown that
-    satisfies the shared acceptance policy is already definitive and does not enter recovery. Repeat
+    publishes visible fresh issue plus paired-`v0` invocation work. A result with six strict role
+    passes is already definitive and does not enter recovery. Repeat
     recovery until every authority is definitive.
     `run-test-agent-validation` remains status-only and never performs this mutation.
 11. After the verification barrier has no `INCOMPLETE` result, the coordinator runs:

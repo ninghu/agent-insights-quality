@@ -4,6 +4,15 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 
 
+SKIPPED_VERSION_STATUSES = frozenset(
+    {
+        "skipped_agent_activation",
+        "skipped_insight",
+        "skipped_telemetry",
+    }
+)
+
+
 @dataclass(frozen=True)
 class SemanticAssertionEvidence:
     assertion: str
@@ -119,7 +128,7 @@ class VersionResult:
     trace_contract_verified: bool = False
     trace_behavior_summary: dict[str, object] = field(default_factory=dict)
     trace_maturity_proof: dict[str, object] | None = None
-    trace_unknown_acceptance: dict[str, object] | None = None
+    role_pass_summary: dict[str, object] | None = None
     endpoint_request_summaries: list[RequestCompletionEvidence] = field(
         default_factory=list
     )

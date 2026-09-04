@@ -36,11 +36,6 @@ from agent_insights_quality.daily_lifecycle import (
     artifact_reference,
     daily_runtime_root,
 )
-from agent_insights_quality.daily_phases import (
-    daily_phase_outputs,
-    phase_progress,
-    run_daily_traffic_agent,
-)
 from agent_insights_quality.generated_paths import validate_generated_paths
 from agent_insights_quality.github_preview import validate_preview_publication
 from agent_insights_quality.live import LiveRuntime
@@ -48,6 +43,7 @@ from agent_insights_quality.models import (
     AgentResult,
     InsightEvidence,
     RequestCompletionEvidence,
+    SKIPPED_VERSION_STATUSES,
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
     VersionResult,
@@ -167,9 +163,7 @@ def prepare_daily(
             "run_contract_digest": None,
         },
         "artifacts": {
-            "traffic_manifest": None,
-            "verification_manifest": None,
-            "insight_manifest": None,
+            "lane_receipts": {agent_name: None for agent_name in AGENT_ORDER},
             "manifest": None,
             "assessment_index": None,
             "improvement_input": None,
@@ -286,12 +280,40 @@ def run_daily_agent(
     profile_factory: Callable[[str], RuntimeProfile] | None = None,
     runtime_factory: Callable[[RuntimeProfile], Any] | None = None,
 ) -> dict[str, Any]:
-    return run_daily_traffic_agent(
-        agent_name,
-        base=base,
-        profile_factory=profile_factory,
-        runtime_factory=runtime_factory,
-    )
+    if agent_name not in AGENT_ORDER:
+        raise ContractError("Daily Agent lane is unknown")
+    private_root = (base or runtime_root()).resolve()
+    active = _read_active(private_root, allowed_states={"PREPARED", "TRAFFIC"})
+    _assert_checkout_binding(active, private_root)
+    lock = _coordinator_lock(private_root)
+    with lock:
+        lifecycle = DailyLifecycle(lock=lock, base=private_root)
+        current = lifecycle.read_active()
+        if current.value["state"] == "PREPARED":
+            current = lifecycle.transition(current, next_state="TRAFFIC")
+        elif current.value["state"] != "TRAFFIC":
+            raise ContractError("Daily Agent lanes are not open")
+        active = current
+    receipt_path = _lane_receipt_path(active, private_root, agent_name)
+    if receipt_path.is_file():
+        receipt = _read_lane_receipt(
+            receipt_path,
+            active,
+            agent_name,
+        )
+        return _lane_result(receipt, resumed=True)
+    capacity = _acquire_lane_capacity(active, private_root)
+    try:
+        return _run_daily_agent_locked(
+            active=active,
+            private_root=private_root,
+            agent_name=agent_name,
+            receipt_path=receipt_path,
+            profile_factory=profile_factory,
+            runtime_factory=runtime_factory,
+        )
+    finally:
+        capacity.release()
 
 
 def _run_daily_agent_locked(
@@ -325,7 +347,11 @@ def _run_daily_agent_locked(
         or content_hash(registry) != expected_registry["content_digest"]
     ):
         raise ContractError("Daily Agent lane registry changed after preparation")
-    checkpoint_store = _checkpoint_store(active, private_root)
+    checkpoint_store = _checkpoint_store(
+        active,
+        private_root,
+        writable=True,
+    )
     runtime = _FencedRuntime(
         (runtime_factory or LiveRuntime)(profile),
         lambda: _daily_fence(active, private_root, allowed_states={"TRAFFIC"}),
@@ -345,6 +371,8 @@ def _run_daily_agent_locked(
         runtime=runtime,
         seed=_seed(active),
         lookback_hours=policy.insight_lookback_hours,
+        lookback_max_hours=policy.insight_lookback_max_hours,
+        lookback_precision_minutes=policy.insight_lookback_precision_minutes,
         clean_window_poll_seconds=policy.clean_window_poll_seconds,
         clean_window_ingestion_margin_seconds=(
             policy.clean_window_ingestion_margin_seconds
@@ -353,10 +381,22 @@ def _run_daily_agent_locked(
         trace_assertion_stabilization_seconds=(
             policy.trace_assertion_stabilization_seconds
         ),
+        trace_hydration_grace_seconds=(
+            policy.daily_trace_hydration_grace_seconds
+        ),
+        trace_hydration_maximum_wait_seconds=(
+            policy.daily_trace_hydration_maximum_wait_seconds
+        ),
+        trace_hydration_maximum_poll_seconds=(
+            policy.daily_trace_hydration_maximum_poll_seconds
+        ),
         insight_start_margin_seconds=policy.insight_start_margin_seconds,
         max_recovery_versions=policy.max_recovery_versions,
         checkpoint_store=checkpoint_store,
         start_delay_seconds=start_delay,
+        inter_version_pacing_seconds=(
+            policy.daily_inter_version_pacing_seconds
+        ),
     )
     recovery = _lane_recovery_state(
         active,
@@ -374,7 +414,11 @@ def _run_daily_agent_locked(
             "remaining_recoveries": recovery["remaining_recoveries"],
             "versions": 1 + len(result.issues),
             "incomplete_versions": sum(
-                value.status in {"inconclusive", "skipped_baseline"}
+                value.status == "inconclusive"
+                for value in [result.baseline, *result.issues]
+            ),
+            "skipped_versions": sum(
+                value.status in SKIPPED_VERSION_STATUSES
                 for value in [result.baseline, *result.issues]
             ),
         }
@@ -385,7 +429,17 @@ def _run_daily_agent_locked(
     _daily_fence(active, private_root, allowed_states={"TRAFFIC"})
     receipt = _stamp_lane_receipt(active, agent_name, result)
     _validate_lane_receipt(receipt, active, agent_name)
-    immutable_json(receipt_path, receipt)
+    with DailyLock(receipt_path.parent / "receipt.lock", wait_seconds=5):
+        if receipt_path.is_file():
+            existing = _read_lane_receipt(
+                receipt_path,
+                active,
+                agent_name,
+            )
+            if existing != receipt:
+                raise ContractError("Conflicting immutable Daily Agent receipt")
+        else:
+            immutable_json(receipt_path, receipt)
     return _lane_result(receipt, resumed=False)
 
 
@@ -400,115 +454,62 @@ def compose_daily(
     with lock:
         lifecycle = DailyLifecycle(lock=lock, base=private_root)
         active = lifecycle.read_active()
-        if (
-            active.value["state"] != "INSIGHTS"
-            or active.value["artifacts"]["insight_manifest"] is None
-        ):
+        if active.value["state"] == "COMPOSED":
+            return _status(active, private_root)
+        if active.value["state"] != "TRAFFIC":
             raise ContractError("Daily lifecycle is not ready for composition")
         _assert_checkout_binding(active, private_root)
-        agents, issues = load_catalogs()
-        hashes = catalog_hashes(agents, issues)
-        profile = (profile_factory or RuntimeProfile.from_env)("daily")
-        registry = load_registry(
-            profile.registry_path,
-            profile="daily",
-            catalog_hashes=hashes,
+    composition_lock = DailyLock(
+        _run_root(active, private_root) / "composition.lock",
+        wait_seconds=5,
+    )
+    with composition_lock:
+        prepared = _prepare_daily_composition(
+            active=active,
+            private_root=private_root,
+            profile_factory=profile_factory,
+            runtime_factory=runtime_factory,
         )
-        results, card_trace_proofs = daily_phase_outputs(
-            active,
-            base=private_root,
-        )
-        _assert_unique_result_operations(results)
-        bindings = active.value["bindings"]
-        registry_binding = bindings["registry"]
-        if (
-            registry_binding is None
-            or content_hash(registry) != registry_binding["content_digest"]
-        ):
-            raise ContractError("Daily registry changed before composition")
-        policy = load_automation_policy()
-        manifest = build_manifest(
-            report_date=date.fromisoformat(bindings["report_date"]),
-            profile="daily",
-            rerun=_rerun(bindings["public_run_id"]),
-            delivery_mode=bindings["delivery_mode"],
-            insight_lookback_hours=policy.insight_lookback_hours,
-            telemetry_resource_set=policy.telemetry_resource_set,
-            test_region=registry_binding["test_region"],
-            test_region_registry=registry_binding["test_region_registry"],
-            catalog_hashes=hashes,
-            agent_catalog=agents,
-            issue_catalog=issues,
-            selected=bindings["selection"],
-            registry=registry,
-            results=results,
-            phase_manifests={
-                "traffic": active.value["artifacts"]["traffic_manifest"],
-                "verification": active.value["artifacts"][
-                    "verification_manifest"
-                ],
-                "insights": active.value["artifacts"]["insight_manifest"],
-            },
-        )
-        run_root = _run_root(active, private_root)
-        manifest_path = run_root / "run-manifest.json"
-        immutable_json(manifest_path, manifest)
-        phase_results = {
-            (result.agent_name, version.logical_version): version
-            for result in results
-            for version in [result.baseline, *result.issues]
-        }
-        packages = rehydrate_packages(
-            manifest,
-            issues,
-            registry,
-            (runtime_factory or LiveRuntime)(profile),
-            run_root / "assessment-packages",
-            None,
-            phase_results=phase_results,
-            card_trace_proofs=card_trace_proofs,
-        )
-        if len(packages) != 25:
+    with lock:
+        lifecycle = DailyLifecycle(lock=lock, base=private_root)
+        current = lifecycle.read_active()
+        artifact_updates = prepared["artifact_updates"]
+        if current.value["state"] == "COMPOSED":
+            if any(
+                current.value["artifacts"].get(key) != value
+                for key, value in artifact_updates.items()
+            ):
+                raise ContractError("Daily composition artifacts conflict")
+            return {
+                **_status(current, private_root),
+                "manifest": prepared["manifest"],
+                "assessment_packages": prepared["assessment_packages"],
+            }
+        if current.digest != active.digest or current.value["state"] != "TRAFFIC":
             raise ContractError(
-                "Daily composition must produce exactly 25 assessment packages"
+                "Daily lifecycle changed while composition was preparing"
             )
-        active = lifecycle.transition(
-            active,
+        current = lifecycle.transition(
+            current,
             next_state="COMPOSED",
-            artifact_updates={
-                "manifest": artifact_reference(
-                    manifest_path,
-                    daily_runtime_root(private_root),
-                    manifest["manifest_hash"],
-                )
-            },
+            artifact_updates=artifact_updates,
         )
         return {
-            **_status(active, private_root),
-            "manifest": str(manifest_path),
-            "assessment_packages": len(packages),
+            **_status(current, private_root),
+            "manifest": prepared["manifest"],
+            "assessment_packages": prepared["assessment_packages"],
         }
 
 
-def _compose_daily_locked(
+def _prepare_daily_composition(
     *,
+    active: DailyRecord,
     private_root: Path,
-    lock: DailyLock,
     profile_factory: Callable[[str], RuntimeProfile] | None,
     runtime_factory: Callable[[RuntimeProfile], Any] | None,
 ) -> dict[str, Any]:
-    lifecycle = DailyLifecycle(lock=lock, base=private_root)
-    active = lifecycle.read_active()
-    if active.value["state"] != "TRAFFIC":
-        raise ContractError("Daily lifecycle is not ready for composition")
-    linkage_batch = _read_card_linkage_batch(active, private_root)
-    _assert_checkout_binding(
-        active,
-        private_root,
-        allow_recovery_commit=True,
-    )
-    if linkage_batch["recovery_commit_sha"] != current_clean_commit():
-        raise ContractError("Daily card linkage batch recovery commit is stale")
+    _daily_fence(active, private_root, allowed_states={"TRAFFIC"})
+    _assert_checkout_binding(active, private_root)
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
     profile = (profile_factory or RuntimeProfile.from_env)("daily")
@@ -523,52 +524,7 @@ def _compose_daily_locked(
     ]
     receipts = [item[1] for item in receipt_records]
     checkpoint_store = _checkpoint_store(active, private_root)
-    supplements = linkage_batch["supplements"]
-    results = []
-    for receipt in receipts:
-        original = _agent_result(receipt["result"])
-        issues_for_agent = []
-        for item in original.issues:
-            reference = supplements.get(item.logical_version)
-            if reference is None:
-                issues_for_agent.append(item)
-                continue
-            entry = version_entry(
-                registry,
-                original.agent_name,
-                item.logical_version,
-            )
-            replacement = checkpoint_store.result(
-                original.agent_name,
-                item.logical_version,
-                entry["foundry_version"],
-                entry["content_digest"],
-            )
-            if (
-                replacement is None
-                or content_hash(asdict(replacement))
-                != reference["replacement_result_digest"]
-                or content_hash(asdict(item))
-                != reference["original_result_digest"]
-                or checkpoint_store.supplemental_result_digest(
-                    original.agent_name,
-                    item.logical_version,
-                    entry["foundry_version"],
-                    entry["content_digest"],
-                )
-                != reference["supplemental_digest"]
-            ):
-                raise ContractError(
-                    "Daily card linkage supplemental result is stale"
-                )
-            issues_for_agent.append(replacement)
-        results.append(
-            AgentResult(
-                original.agent_name,
-                original.baseline,
-                issues_for_agent,
-            )
-        )
+    results = [_agent_result(receipt["result"]) for receipt in receipts]
     _assert_unique_response_references(
         registry,
         results,
@@ -624,16 +580,12 @@ def _compose_daily_locked(
         daily_runtime_root(private_root),
         manifest["manifest_hash"],
     )
-    active = lifecycle.transition(
-        active,
-        next_state="COMPOSED",
-        artifact_updates={
+    _daily_fence(active, private_root, allowed_states={"TRAFFIC"})
+    return {
+        "artifact_updates": {
             "lane_receipts": lane_references,
             "manifest": manifest_reference,
         },
-    )
-    return {
-        **_status(active, private_root),
         "manifest": str(manifest_path),
         "assessment_packages": len(packages),
     }
@@ -655,6 +607,12 @@ def validate_daily_assessment_outputs(
         issue["issue_id"]
         for agent in manifest["agents"]
         for issue in agent["issues"]
+        if issue.get("status") not in SKIPPED_VERSION_STATUSES
+    }
+    baseline_agent_names = {
+        agent["name"]
+        for agent in manifest["agents"]
+        if agent["baseline"].get("status") not in SKIPPED_VERSION_STATUSES
     }
     initial_issues = _paths_by_identity(assessments, "issue_id", "issue")
     initial_baselines = _paths_by_identity(
@@ -742,6 +700,7 @@ def validate_daily_assessment_outputs(
                 agent_name,
             )
             for agent_name in AGENT_ORDER
+            if agent_name in baseline_agent_names
         ],
         "focused_rechecks": [
             *sorted(recheck_issue_targets),
@@ -1191,14 +1150,12 @@ def reclassify_daily_card_linkage(
                 ROOT / issue["implementation"] / "traffic.json"
             )
             try:
-                maturity_digest = validate_trace_maturity_proof(
-                    target.trace_maturity_proof
-                )
+                validate_trace_maturity_proof(target.trace_maturity_proof)
             except ContractError as error:
                 raise ContractError(
                     "Daily reclassification maturity proof is invalid"
                 ) from error
-            decided, acceptance = daily_target_decision(
+            decided, role_summary = daily_target_decision(
                 target_role="issue",
                 validation_mode=str(context["validation_mode"]),
                 n=int(context["n"]),
@@ -1210,7 +1167,6 @@ def reclassify_daily_card_linkage(
                     if item.activation_gate
                 ],
                 identity_verified=target.trace_contract_verified,
-                maturity_proof_digest=maturity_digest,
             )
             if (
                 checkpoint_result is None
@@ -1224,7 +1180,7 @@ def reclassify_daily_card_linkage(
                 or len(set(invocation.response_references))
                 != len(invocation.response_references)
                 or not decided
-                or acceptance != target.trace_unknown_acceptance
+                or role_summary != target.role_pass_summary
                 or insight is None
                 or insight.agent_version != entry["foundry_version"]
                 or not linked_operations_match_scope(
@@ -1363,68 +1319,42 @@ def daily_guide(*, base: Path | None = None) -> dict[str, Any]:
     if state == "LOCKED":
         guide["next"] = "Run daily-provision in the central coordinator session."
     elif state in {"PREPARED", "TRAFFIC"}:
-        guide["traffic_lanes"] = [
+        guide["agent_lanes"] = [
             {
                 "name": _DISPLAY_NAMES[agent_name],
                 "agent": agent_name,
-                "versions": [
-                    "v0",
-                    *active.value["bindings"]["selection"][agent_name],
-                ],
                 "issues": active.value["bindings"]["selection"][agent_name],
                 "command": (
-                    "python -m agent_insights_quality daily-run-traffic-agent "
+                    "python -m agent_insights_quality daily-run-agent "
                     f"--agent {agent_name}"
+                ),
+                **(
+                    {"recovery": status["lane_recovery"][agent_name]}
+                    if agent_name in status["lane_recovery"]
+                    else {}
                 ),
             }
             for agent_name in AGENT_ORDER
-            if any(
-                item.startswith(f"{agent_name}/")
-                for item in status["pending_traffic_targets"]
-            )
+            if agent_name in status["pending_agent_lanes"]
         ]
         guide["next"] = (
-            "Start one visible traffic session per pending Agent lane. Each lane "
-            "runs v0 then four issue versions sequentially with 60-second pacing."
-        )
-    elif state == "VERIFICATION":
-        guide["verification_command"] = (
-            "python -m agent_insights_quality daily-verify-next"
-        )
-        guide["release_command"] = (
-            "python -m agent_insights_quality daily-release-verification"
-        )
-        guide["maximum_active_subsessions"] = 8
-        guide["next"] = (
-            "Start up to eight visible evaluators. Each command dynamically claims "
-            "one version and performs read-only telemetry verification."
-        )
-    elif state == "INSIGHTS":
-        guide["insight_lanes"] = [
-            {
-                "name": _DISPLAY_NAMES[agent_name],
-                "agent": agent_name,
-                "command": (
-                    "python -m agent_insights_quality daily-run-insights-agent "
-                    f"--agent {agent_name}"
-                ),
-            }
-            for agent_name in AGENT_ORDER
-            if any(
-                item.startswith(f"{agent_name}/")
-                for item in status["pending_insight_targets"]
-            )
-        ]
-        guide["next"] = (
-            "Start up to five visible Agent Insights sessions, one per Agent. "
-            "After all 25 receipts exist, run daily-compose."
+            "Start one visible Copilot sub session per pending Agent lane; "
+            "each lane runs the complete per-version pipeline in forward order."
         )
     elif state == "COMPOSED":
         guide["assessment_lanes"] = [
             {
                 "name": _DISPLAY_NAMES[agent_name],
                 "agent": agent_name,
-                "package_prefixes": [f"baseline-{agent_name}", *active.value["bindings"]["selection"][agent_name]],
+                "package_prefixes": [
+                    (
+                        f"baseline-{agent_name}"
+                        if item["logical_version"] == "v0"
+                        else item["logical_version"]
+                    )
+                    for item in guide["agent_progress"][agent_name]["versions"]
+                    if item["stage"] not in SKIPPED_VERSION_STATUSES
+                ],
             }
             for agent_name in AGENT_ORDER
         ]
@@ -1517,9 +1447,6 @@ def _acquire_lane_capacity(active: DailyRecord, base: Path) -> DailyLock:
 def _policy_binding(policy: AutomationPolicy) -> dict[str, Any]:
     return {
         "max_parallel_agents": policy.max_parallel_agents,
-        "daily_verification_max_parallel": (
-            policy.daily_verification_max_parallel
-        ),
         "daily_inter_version_pacing_seconds": (
             policy.daily_inter_version_pacing_seconds
         ),
@@ -1537,6 +1464,15 @@ def _policy_binding(policy: AutomationPolicy) -> dict[str, Any]:
         "clean_window_max_wait_seconds": policy.clean_window_max_wait_seconds,
         "trace_assertion_stabilization_seconds": (
             policy.trace_assertion_stabilization_seconds
+        ),
+        "daily_trace_hydration_grace_seconds": (
+            policy.daily_trace_hydration_grace_seconds
+        ),
+        "daily_trace_hydration_maximum_wait_seconds": (
+            policy.daily_trace_hydration_maximum_wait_seconds
+        ),
+        "daily_trace_hydration_maximum_poll_seconds": (
+            policy.daily_trace_hydration_maximum_poll_seconds
         ),
         "insight_start_margin_seconds": policy.insight_start_margin_seconds,
         "telemetry_resource_set": policy.telemetry_resource_set,
@@ -1558,10 +1494,7 @@ def _daily_contract_digest(
         "config/automation.yaml",
         "schemas/run-manifest.schema.json",
         "schemas/daily-lifecycle.schema.json",
-        "schemas/daily-traffic-receipt.schema.json",
-        "schemas/daily-verification-result.schema.json",
-        "schemas/daily-insight-receipt.schema.json",
-        "schemas/daily-phase-manifest.schema.json",
+        "schemas/daily-agent-receipt.schema.json",
         "schemas/daily-email-test-preview.schema.json",
         "schemas/prompt-traffic.schema.json",
         "schemas/assessment-package.schema.json",
@@ -1590,7 +1523,10 @@ def _daily_contract_digest(
 
 
 def _coordinator_lock(base: Path) -> DailyLock:
-    return DailyLock(daily_runtime_root(base) / "coordinator.lock")
+    return DailyLock(
+        daily_runtime_root(base) / "coordinator.lock",
+        wait_seconds=15,
+    )
 
 
 def _read_optional(base: Path) -> DailyRecord | None:
@@ -1652,22 +1588,24 @@ def _lane_recovery_state(
     checkpoint_store: VersionCheckpointStore,
     maximum: int,
 ) -> dict[str, Any] | None:
-    reason_code = result.baseline.error_code
-    if reason_code not in {
-        "baseline_evidence_incomplete",
-        "baseline_recovery_prepare_failed",
-        "baseline_recovery_blocked",
-        "baseline_recovery_exhausted",
-    }:
+    incomplete = next(
+        (
+            version
+            for version in [result.baseline, *result.issues]
+            if version.status == "inconclusive"
+        ),
+        None,
+    )
+    if incomplete is None:
         return None
+    reason_code = incomplete.error_code or "evidence_pending"
     claimed = checkpoint_store.agent_recovery_count(agent_name, maximum)
     remaining = maximum - claimed
     if (
-        reason_code == "baseline_recovery_blocked"
-        or checkpoint_store.has_unresolved_insight_state()
+        checkpoint_store.has_unresolved_insight_state()
     ):
         status = "recovery_blocked"
-        reason_code = "baseline_recovery_blocked"
+        reason_code = "insight_run_start_unresolved"
     elif reason_code == "baseline_recovery_exhausted" or remaining == 0:
         status = "recovery_exhausted"
     else:
@@ -1783,11 +1721,28 @@ def _read_card_linkage_batch(
     return value
 
 
-def _checkpoint_store(active: DailyRecord, base: Path) -> VersionCheckpointStore:
+def _checkpoint_store(
+    active: DailyRecord,
+    base: Path,
+    *,
+    writable: bool = False,
+) -> VersionCheckpointStore:
     digest = active.value["bindings"]["run_contract_digest"]
     if not isinstance(digest, str):
         raise ContractError("Daily run contract is not prepared")
-    return VersionCheckpointStore(_run_root(active, base) / "stage-checkpoints", digest)
+    return VersionCheckpointStore(
+        _run_root(active, base) / "stage-checkpoints",
+        digest,
+        (
+            lambda: _daily_fence(
+                active,
+                base,
+                allowed_states={"TRAFFIC"},
+            )
+            if writable
+            else None
+        ),
+    )
 
 
 def _seed(active: DailyRecord) -> int:
@@ -1908,6 +1863,23 @@ def _effective_lane_receipt(
     agent_name: str,
 ) -> tuple[Path, dict[str, Any]]:
     path = _lane_receipt_path(active, base, agent_name)
+    if not path.is_file():
+        result = _derived_agent_result(active, base, agent_name)
+        if result is None:
+            raise ContractError(
+                f"{agent_name} Daily Agent lane result is incomplete"
+            )
+        receipt = _stamp_lane_receipt(active, agent_name, result)
+        _validate_lane_receipt(receipt, active, agent_name)
+        with DailyLock(path.parent / "receipt.lock", wait_seconds=5):
+            if path.is_file():
+                existing = _read_lane_receipt(path, active, agent_name)
+                if existing != receipt:
+                    raise ContractError(
+                        "Conflicting immutable Daily Agent receipt"
+                    )
+            else:
+                immutable_json(path, receipt)
     return path, _read_lane_receipt(path, active, agent_name)
 
 
@@ -1916,7 +1888,35 @@ def _effective_lane_receipt_exists(
     base: Path,
     agent_name: str,
 ) -> bool:
-    return _lane_receipt_path(active, base, agent_name).is_file()
+    if _lane_receipt_path(active, base, agent_name).is_file():
+        return True
+    return (
+        active.value["state"] == "TRAFFIC"
+        and _derived_agent_result(active, base, agent_name) is not None
+    )
+
+
+def _derived_agent_result(
+    active: DailyRecord,
+    base: Path,
+    agent_name: str,
+) -> AgentResult | None:
+    logical_versions = [
+        "v0",
+        *active.value["bindings"]["selection"][agent_name],
+    ]
+    store = _checkpoint_store(active, base)
+    result = store.completed_agent_result(agent_name, logical_versions)
+    if (
+        result is None
+        or store.has_unresolved_insight_state(agent_name)
+        or any(
+            item.status == "inconclusive"
+            for item in [result.baseline, *result.issues]
+        )
+    ):
+        return None
+    return result
 
 
 def _lane_result(receipt: Mapping[str, Any], *, resumed: bool) -> dict[str, Any]:
@@ -1927,8 +1927,11 @@ def _lane_result(receipt: Mapping[str, Any], *, resumed: bool) -> dict[str, Any]
         "status": "already_complete" if resumed else "complete",
         "versions": len(versions),
         "incomplete_versions": sum(
-            item["status"] in {"inconclusive", "skipped_baseline"}
+            item["status"] == "inconclusive"
             for item in versions
+        ),
+        "skipped_versions": sum(
+            item["status"] in SKIPPED_VERSION_STATUSES for item in versions
         ),
         "receipt_digest": receipt["receipt_digest"],
     }
@@ -1974,9 +1977,7 @@ def _version_result(value: Mapping[str, Any]) -> VersionResult:
         trace_contract_verified=bool(value.get("trace_contract_verified")),
         trace_behavior_summary=dict(value.get("trace_behavior_summary") or {}),
         trace_maturity_proof=value.get("trace_maturity_proof"),
-        trace_unknown_acceptance=value.get(
-            "trace_unknown_acceptance"
-        ),
+        role_pass_summary=value.get("role_pass_summary"),
         endpoint_request_summaries=[
             RequestCompletionEvidence(
                 request_index=int(item["request_index"]),
@@ -2159,16 +2160,65 @@ def _transition_exact(
 
 
 def _status(active: DailyRecord, base: Path) -> dict[str, Any]:
+    completed = [
+        agent_name
+        for agent_name in AGENT_ORDER
+        if _effective_lane_receipt_exists(active, base, agent_name)
+    ]
+    pending = [
+        agent_name for agent_name in AGENT_ORDER if agent_name not in completed
+    ]
+    lane_recovery = {
+        agent_name: recovery
+        for agent_name in pending
+        if (recovery := _read_lane_recovery(active, base, agent_name)) is not None
+    }
     return {
         "state": active.value["state"],
         "report_date": active.value["bindings"]["report_date"],
         "delivery_mode": active.value["bindings"]["delivery_mode"],
         "publish_preview": active.value["bindings"]["publish_preview"],
-        **phase_progress(active, base),
+        "completed_agent_lanes": completed,
+        "pending_agent_lanes": pending,
+        "lane_recovery": lane_recovery,
+        "agent_progress": _agent_progress(active, base),
         "package_target": 25,
         "adx_publication_status": active.value["artifacts"][
             "adx_publication_status"
         ],
+    }
+
+
+def _agent_progress(
+    active: DailyRecord,
+    base: Path,
+) -> dict[str, dict[str, Any]]:
+    digest = active.value["bindings"]["run_contract_digest"]
+    if digest is None:
+        return {
+            agent_name: {
+                "current_version": "v0",
+                "completed_version_count": 0,
+                "versions": [
+                    {"logical_version": logical_version, "stage": "pending"}
+                    for logical_version in [
+                        "v0",
+                        *active.value["bindings"]["selection"][agent_name],
+                    ]
+                ],
+            }
+            for agent_name in AGENT_ORDER
+        }
+    store = _checkpoint_store(active, base)
+    return {
+        agent_name: store.public_agent_progress(
+            agent_name,
+            [
+                "v0",
+                *active.value["bindings"]["selection"][agent_name],
+            ],
+        )
+        for agent_name in AGENT_ORDER
     }
 
 

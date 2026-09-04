@@ -5,7 +5,6 @@ full_run_profile: staging
 generated_branch_prefix: aiq-daily/
 issues_per_agent_daily: 4
 max_parallel_agents: 5
-daily_verification_max_parallel: 8
 daily_inter_version_pacing_seconds: 60
 insight_lookback_hours: 0.1
 insight_lookback_max_hours: 24
@@ -13,7 +12,10 @@ insight_lookback_precision_minutes: 1
 clean_window_poll_seconds: 15
 clean_window_ingestion_margin_seconds: 30
 clean_window_max_wait_seconds: 1200
-trace_assertion_stabilization_seconds: 180
+trace_assertion_stabilization_seconds: 30
+daily_trace_hydration_grace_seconds: 30
+daily_trace_hydration_maximum_wait_seconds: 300
+daily_trace_hydration_maximum_poll_seconds: 30
 insight_start_margin_seconds: 30
 max_recovery_versions: 3
 agent_start_stagger_seconds: 5

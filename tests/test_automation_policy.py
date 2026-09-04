@@ -40,7 +40,8 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
     assert policy.max_recovery_versions == 3
     assert policy.agent_start_stagger_seconds == 5
     assert policy.clean_window_max_wait_seconds >= 990
-    assert policy.trace_assertion_stabilization_seconds == 180
+    assert policy.trace_assertion_stabilization_seconds == 30
+    assert policy.daily_trace_hydration_maximum_wait_seconds == 300
     assert policy.insight_start_margin_seconds == 30
 
 
@@ -56,12 +57,12 @@ def test_repository_uses_fractional_fixed_telemetry_policy() -> None:
         (
             "trace_assertion_stabilization_seconds",
             "45",
-            "reviewed ingestion margin",
+            "reviewed two-snapshot duration",
         ),
         (
             "trace_assertion_stabilization_seconds",
             "900",
-            "bounded deadline",
+            "reviewed two-snapshot duration",
         ),
         ("insight_start_margin_seconds", "345", "within lookback"),
         ("telemetry_resource_set", "g29", "fixed reviewed set"),

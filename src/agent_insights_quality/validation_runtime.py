@@ -13,6 +13,12 @@ from agent_insights_quality.util import (
 )
 from agent_insights_quality.validation_evidence import (
     digest_without_field,
+    role_pass_attempt_payload,
+    scenario_evidence_complete,
+)
+from agent_insights_quality.validation_trace_gap_policy import (
+    role_pass_summary,
+    target_evidence_decided,
 )
 from agent_insights_quality.validation_policy import ValidationPolicy
 from agent_insights_quality.validation_quota import ValidationScheduler
@@ -792,9 +798,68 @@ def _verify_invoked_authority(
         paired_observation_count = sum(
             item.get("observation", False) is True for item in paired_attempts
         )
-        evidence_complete = complete_count == n and (
-            authority.authority_kind == "baseline"
-            or paired_complete_count == n
+        primary_role = (
+            "baseline" if authority.authority_kind == "baseline" else "issue"
+        )
+        primary_summary = role_pass_summary(
+            target_role=primary_role,
+            n=n,
+            k=k,
+            attempts=[
+                role_pass_attempt_payload(
+                    {
+                        **item,
+                        "index": index,
+                        "observation": item.get(
+                            "observation",
+                            item["complete"],
+                        ),
+                    }
+                )
+                for index, item in enumerate(issue_attempts, start=1)
+            ],
+        )
+        paired_summary = (
+            None
+            if authority.authority_kind == "baseline"
+            else role_pass_summary(
+                target_role="paired_v0",
+                n=n,
+                k=k,
+                attempts=[
+                    role_pass_attempt_payload(
+                        {
+                            **item,
+                            "index": index,
+                            "observation": item.get(
+                                "observation",
+                                item["complete"],
+                            ),
+                        }
+                    )
+                    for index, item in enumerate(paired_attempts, start=1)
+                ],
+            )
+        )
+        if primary_summary is None or (
+            authority.authority_kind != "baseline" and paired_summary is None
+        ):
+            raise ContractError(
+                f"{authority.authority_id}/{scenario['id']} role-pass "
+                "evidence is invalid"
+            )
+        role_pass_count = int(primary_summary["pass_count"])
+        paired_role_pass_count = (
+            0 if paired_summary is None else int(paired_summary["pass_count"])
+        )
+        evidence_complete = scenario_evidence_complete(
+            authority_kind=authority.authority_kind,
+            n=n,
+            k=k,
+            complete_count=complete_count,
+            paired_complete_count=paired_complete_count,
+            role_pass_count=role_pass_count,
+            paired_role_pass_count=paired_role_pass_count,
         )
         scenarios.append(
             {
@@ -807,13 +872,25 @@ def _verify_invoked_authority(
                 "paired_complete_count": paired_complete_count,
                 "observation_count": observation_count,
                 "paired_observation_count": paired_observation_count,
+                "role_pass_count": role_pass_count,
+                "paired_role_pass_count": paired_role_pass_count,
                 "evidence_complete": evidence_complete,
                 "pass": evidence_complete
-                and observation_count >= k
+                and target_evidence_decided(
+                    n=n,
+                    k=k,
+                    role_pass_count=role_pass_count,
+                )
                 and (
                     authority.authority_kind == "baseline"
-                    or paired_observation_count == 0
+                    or target_evidence_decided(
+                        n=n,
+                        k=k,
+                        role_pass_count=paired_role_pass_count,
+                    )
                 ),
+                "primary_role_pass_summary": primary_summary,
+                "paired_role_pass_summary": paired_summary,
                 "issue_attempts": issue_attempts,
                 "v0_attempts": paired_attempts,
             }
@@ -888,6 +965,10 @@ def _verify_invoked_authority(
         ),
         "paired_observation_count": sum(
             item["paired_observation_count"] for item in scenarios
+        ),
+        "role_pass_count": sum(item["role_pass_count"] for item in scenarios),
+        "paired_role_pass_count": sum(
+            item["paired_role_pass_count"] for item in scenarios
         ),
         "evidence_complete": all(
             item["evidence_complete"] for item in scenarios

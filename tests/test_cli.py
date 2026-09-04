@@ -27,7 +27,7 @@ def test_unresolved_insight_state_blocks_immutable_manifest() -> None:
 
 def test_daily_agent_parser_keeps_each_lane_whole() -> None:
     args = cli.build_parser().parse_args(
-        ["daily-run-traffic-agent", "--agent", "finance-agent"]
+        ["daily-run-agent", "--agent", "finance-agent"]
     )
     assert args.agent == "finance-agent"
 
@@ -54,19 +54,6 @@ def test_daily_prepare_parser_exposes_explicit_preview_opt_in() -> None:
 def test_daily_prepare_help_states_staging_is_advisory() -> None:
     help_text = " ".join(cli.build_parser().format_help().split())
     assert "staging is advisory" in help_text
-
-
-def test_daily_phase_commands_are_explicit() -> None:
-    parser = cli.build_parser()
-    assert parser.parse_args(["daily-verify-next"]).command == "daily-verify-next"
-    assert (
-        parser.parse_args(["daily-release-verification"]).command
-        == "daily-release-verification"
-    )
-    args = parser.parse_args(
-        ["daily-run-insights-agent", "--agent", "finance-agent"]
-    )
-    assert args.agent == "finance-agent"
 
 
 @pytest.mark.parametrize("publish_preview", [False, True])

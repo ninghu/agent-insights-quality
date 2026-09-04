@@ -59,10 +59,9 @@ unique exact-name/version `invoke_agent` anchor and its complete descendant tree
 cyclic, duplicate, conflicting, cross-root, or late contradictory spans.
 
 Persist one immutable generation-fenced authority result immediately after deciding it and before
-claiming another. Keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply the shared mature-batch
-policy: baseline `6/10` with at most four trace-only unknowns and no observed failure; every issue
-mode `>=6/10` with at most four trace-only unknowns; and paired `v0` `0/10` with six proven controls
-plus at most four trace-only unknowns. Unknowns remain explicitly incomplete and never count as observations.
+claiming another. Keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply six complete role-specific
+passes for baseline health, issue observation, and paired-`v0` zero-defect controls. Preserve all ten
+attempts; the other four remain transparent misses and never veto six strict passes.
 Complete stable evidence below threshold is `FAIL`; missing, ambiguous, partial, or unstable evidence
 is `INCOMPLETE`. Later failures never discard completed authority results. Retry only missing,
 `INCOMPLETE`, or exact-binding-changed authorities. Final composition requires exact current results

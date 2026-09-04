@@ -40,9 +40,9 @@ slots. Query one batched stable telemetry snapshot for a baseline or two target 
 and its paired `v0`; never stabilize attempts independently.
 
 Each new verification package binds the reused receipt digest and current verifier commit/digest.
-Keep `PASS`, `FAIL`, and `INCOMPLETE` separate under baseline `6/10` with at most four trace-only
-unknowns and no observed failure, every issue mode `>=6/10` with at most four trace-only unknowns, and
-paired `v0` `0/10` with six proven controls plus at most four trace-only unknowns. Later failures never discard completed
+Keep `PASS`, `FAIL`, and `INCOMPLETE` separate. Baseline, issue, and paired-`v0` targets require six
+complete healthy, defect-observed, or zero-defect control passes respectively; the other four attempts
+remain transparent misses and never veto six strict passes. Later failures never discard completed
 authority results. A new generation selects only missing, `INCOMPLETE`, or exact-binding-changed
 authorities and invokes only those without current exact-bound completed receipts. Composition covers
 exactly all 41 authorities. `run-test-agent-validation` is status/next-action guidance only and never

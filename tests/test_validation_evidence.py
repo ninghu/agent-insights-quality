@@ -16,10 +16,12 @@ from agent_insights_quality.live import (
 from agent_insights_quality.validation_evidence import (
     digest_without_field,
     persist_evidence,
+    role_pass_attempt_payload,
     runtime_mapping_digest,
     stamp_evidence_digests,
     validate_evidence,
 )
+from agent_insights_quality.validation_trace_gap_policy import role_pass_summary
 from agent_insights_quality.validation_authority_results import (
     authority_verification_history_status,
     has_prior_nonpass_result_for_invocation,
@@ -35,6 +37,9 @@ from agent_insights_quality.validation_manifest import (
     authority_specs,
     current_validation_digest,
     current_shared_validation_digest,
+)
+from agent_insights_quality.validation_invocations import (
+    authority_traffic_execution_digest,
 )
 
 HASH = "sha256:" + ("a" * 64)
@@ -214,8 +219,30 @@ def _authority(spec) -> dict:
         "paired_complete_count": 0 if baseline else n,
         "observation_count": n,
         "paired_observation_count": 0,
+        "role_pass_count": n,
+        "paired_role_pass_count": 0 if baseline else n,
         "evidence_complete": True,
         "pass": True,
+        "primary_role_pass_summary": role_pass_summary(
+            target_role="baseline" if baseline else "issue",
+            n=n,
+            k=rule["k"],
+            attempts=[
+                role_pass_attempt_payload(item) for item in issue_attempts
+            ],
+        ),
+        "paired_role_pass_summary": (
+            None
+            if baseline
+            else role_pass_summary(
+                target_role="paired_v0",
+                n=n,
+                k=rule["k"],
+                attempts=[
+                    role_pass_attempt_payload(item) for item in v0_attempts
+                ],
+            )
+        ),
         "issue_attempts": issue_attempts,
         "v0_attempts": v0_attempts,
     }
@@ -240,6 +267,8 @@ def _authority(spec) -> dict:
         "paired_complete_count": 0 if baseline else n,
         "observation_count": n,
         "paired_observation_count": 0,
+        "role_pass_count": n,
+        "paired_role_pass_count": 0 if baseline else n,
         "evidence_complete": True,
         "pass": True,
         "scenarios": [scenario],
@@ -290,24 +319,35 @@ def test_evidence_schema_rejects_removed_issue_verdict_fields() -> None:
         validate_evidence(value)
 
 
-def test_identity_failure_is_visible_as_incomplete_evidence() -> None:
+def test_one_identity_failure_is_a_visible_baseline_miss() -> None:
     value = _evidence()
     authority = value["authorities"][0]
     scenario = authority["scenarios"][0]
     attempt = scenario["issue_attempts"][0]
     attempt["setup_steps"][0]["identity_pass"] = False
     attempt["complete"] = False
+    attempt["observation"] = False
     attempt["error_code"] = "telemetry_identity_mismatch"
     scenario["complete_count"] = 9
-    scenario["evidence_complete"] = False
-    scenario["pass"] = False
+    scenario["observation_count"] = 9
+    scenario["primary_role_pass_summary"] = role_pass_summary(
+        target_role="baseline",
+        n=10,
+        k=6,
+        attempts=[
+            role_pass_attempt_payload(item)
+            for item in scenario["issue_attempts"]
+        ],
+    )
+    scenario["role_pass_count"] = 9
     authority["complete_count"] = 9
-    authority["evidence_complete"] = False
-    authority["pass"] = False
-    value["result"] = "FAIL"
+    authority["observation_count"] = 9
+    authority["role_pass_count"] = 9
     value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="incomplete authority"):
-        validate_evidence(value)
+    validate_evidence(value)
+    assert scenario["primary_role_pass_summary"]["miss_counts"][
+        "identity_incomplete"
+    ] == 1
 
 
 def test_issue_evidence_contains_bounded_assertion_observations() -> None:
@@ -325,7 +365,7 @@ def test_issue_evidence_contains_bounded_assertion_observations() -> None:
     assert "trace_pass" in serialized
 
 
-def test_incomplete_paired_v0_fails_mechanical_completeness() -> None:
+def test_one_incomplete_paired_v0_attempt_is_a_visible_control_miss() -> None:
     value = _evidence()
     authority = value["authorities"][5]
     scenario = authority["scenarios"][0]
@@ -333,15 +373,23 @@ def test_incomplete_paired_v0_fails_mechanical_completeness() -> None:
     scenario["v0_attempts"][0]["probe_steps"][0]["identity_pass"] = False
     scenario["v0_attempts"][0]["error_code"] = "telemetry_identity_mismatch"
     scenario["paired_complete_count"] -= 1
-    scenario["evidence_complete"] = False
-    scenario["pass"] = False
+    scenario["paired_role_pass_summary"] = role_pass_summary(
+        target_role="paired_v0",
+        n=10,
+        k=6,
+        attempts=[
+            role_pass_attempt_payload(item)
+            for item in scenario["v0_attempts"]
+        ],
+    )
+    scenario["paired_role_pass_count"] = 9
     authority["paired_complete_count"] -= 1
-    authority["evidence_complete"] = False
-    authority["pass"] = False
-    value["result"] = "FAIL"
+    authority["paired_role_pass_count"] = 9
     value = stamp_evidence_digests(value)
-    with pytest.raises(ContractError, match="incomplete authority"):
-        validate_evidence(value)
+    validate_evidence(value)
+    assert scenario["paired_role_pass_summary"]["miss_counts"][
+        "identity_incomplete"
+    ] == 1
 
 
 def test_evidence_rejects_global_reference_reuse() -> None:
@@ -536,6 +584,7 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
     runtime = _result_runtime(spec, authority, index=1)
     prepared = _result_prepared(evidence, verifier_digit="1")
     invocation = _result_invocation(spec.authority_id, digit="2")
+    receipt = _result_receipt(spec.authority_id, digit="2")
     reference = write_authority_verification_result(
         prepared=prepared,
         plan=_result_plan(),
@@ -555,7 +604,17 @@ def test_cross_generation_pass_reuse_ignores_global_verifier_state(
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
-        lambda *_args, **_kwargs: invocation,
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
     )
     changed = deepcopy(prepared)
     changed["pr_number"] = 74
@@ -612,6 +671,7 @@ def test_result_lookup_is_bounded_to_known_generations_and_reports_safe_change(
     runtime = _result_runtime(spec, authority, index=1)
     prepared = _result_prepared(evidence, verifier_digit="1")
     invocation = _result_invocation(spec.authority_id, digit="2")
+    receipt = _result_receipt(spec.authority_id, digit="2")
     reference = write_authority_verification_result(
         prepared=prepared,
         plan=_result_plan(),
@@ -643,12 +703,12 @@ def test_result_lookup_is_bounded_to_known_generations_and_reports_safe_change(
     monkeypatch.setattr(
         authority_results,
         "load_invocation_receipt",
-        lambda *_args, **_kwargs: invocation,
+        lambda *_args, **_kwargs: receipt,
     )
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
-        lambda *_args, **_kwargs: invocation,
+        lambda *_args, **_kwargs: receipt,
     )
 
     reusable = reusable_authority_verification_results(
@@ -844,12 +904,24 @@ def test_definitive_fail_result_requires_receipt_only_revalidation(
     evidence = _evidence()
     spec = authority_specs(*load_catalogs())[0]
     failed = deepcopy(evidence["authorities"][0])
-    attempt = failed["scenarios"][0]["issue_attempts"][0]
-    attempt["probe_steps"][0]["semantic_pass"] = False
-    attempt["observation"] = False
-    failed["scenarios"][0]["observation_count"] = 9
-    failed["scenarios"][0]["pass"] = False
-    failed["observation_count"] = 9
+    scenario = failed["scenarios"][0]
+    for attempt in scenario["issue_attempts"][:5]:
+        attempt["probe_steps"][0]["semantic_pass"] = False
+        attempt["observation"] = False
+    scenario["observation_count"] = 5
+    scenario["role_pass_count"] = 5
+    scenario["primary_role_pass_summary"] = role_pass_summary(
+        target_role="baseline",
+        n=10,
+        k=6,
+        attempts=[
+            role_pass_attempt_payload(item)
+            for item in scenario["issue_attempts"]
+        ],
+    )
+    scenario["pass"] = False
+    failed["observation_count"] = 5
+    failed["role_pass_count"] = 5
     failed["pass"] = False
     failed["authority_evidence_digest"] = digest_without_field(
         failed,
@@ -858,6 +930,7 @@ def test_definitive_fail_result_requires_receipt_only_revalidation(
     prepared = _result_prepared(evidence, verifier_digit="1")
     runtime = _result_runtime(spec, failed, index=1)
     invocation = _result_invocation(spec.authority_id, digit="2")
+    receipt = _result_receipt(spec.authority_id, digit="2")
     write_authority_verification_result(
         prepared=prepared,
         plan=_result_plan(),
@@ -877,7 +950,12 @@ def test_definitive_fail_result_requires_receipt_only_revalidation(
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
-        lambda *_args, **_kwargs: invocation,
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
     )
 
     reusable = reusable_authority_verification_results(
@@ -1014,6 +1092,13 @@ def test_authority_local_change_reselects_only_that_authority(
         )
         for index, spec in enumerate(selected_specs)
     }
+    receipts = {
+        spec.authority_id: _result_receipt(
+            spec.authority_id,
+            digit=str(index + 1),
+        )
+        for index, spec in enumerate(selected_specs)
+    }
     for index, spec in enumerate(selected_specs):
         write_authority_verification_result(
             prepared=prepared,
@@ -1037,12 +1122,17 @@ def test_authority_local_change_reselects_only_that_authority(
     def load_receipt(reference, **_kwargs):
         if changed_binding == "receipt" and reference["authority_id"] == changed_id:
             raise ContractError("synthetic changed receipt")
-        return invocations[reference["authority_id"]]
+        return receipts[reference["authority_id"]]
 
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
         load_receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda reference, **_kwargs: receipts[reference["authority_id"]],
     )
     current_specs = list(specs)
     if changed_binding == "authority":
@@ -1092,7 +1182,7 @@ def test_authority_local_change_reselects_only_that_authority(
 @pytest.mark.parametrize(
     ("mismatch", "reusable_expected"),
     [
-        ("repository", False),
+        ("repository", "error"),
         ("environment", True),
         ("location", True),
         ("project", True),
@@ -1112,6 +1202,7 @@ def test_result_reuse_ignores_audit_and_telemetry_binding_changes(
     historical = _result_prepared(evidence, verifier_digit="1")
     historical["pr_number"] = 65
     invocation = _result_invocation(spec.authority_id, digit="2")
+    receipt = _result_receipt(spec.authority_id, digit="2")
     write_authority_verification_result(
         prepared=historical,
         plan=_result_plan(),
@@ -1131,7 +1222,12 @@ def test_result_reuse_ignores_audit_and_telemetry_binding_changes(
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
-        lambda *_args, **_kwargs: invocation,
+        lambda *_args, **_kwargs: receipt,
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
+        lambda *_args, **_kwargs: receipt,
     )
     current = deepcopy(historical)
     current["pr_number"] = 74
@@ -1147,6 +1243,26 @@ def test_result_reuse_ignores_audit_and_telemetry_binding_changes(
     elif mismatch == "telemetry":
         current["runtime_topology"]["telemetry_resource_set"] = "g31"
 
+    if reusable_expected == "error":
+        with pytest.raises(
+            ContractError,
+            match="generation reference is invalid",
+        ):
+            reusable_authority_verification_results(
+                authorities=[spec],
+                runtime_topology={"agents": [runtime]},
+                prepared=current,
+                plan=current_plan,
+                prior_generations=[
+                    {
+                        "repository": historical["repository"],
+                        "pr_number": historical["pr_number"],
+                        "run_id": historical["run_id"],
+                    }
+                ],
+                root=tmp_path,
+            )
+        return
     reusable = reusable_authority_verification_results(
         authorities=[spec],
         runtime_topology={"agents": [runtime]},
@@ -1190,6 +1306,13 @@ def test_pr65_pass_results_reuse_31_exact_authorities_into_pr74(
         )
         for index, spec in enumerate(specs)
     }
+    receipts = {
+        spec.authority_id: _result_receipt(
+            spec.authority_id,
+            digit=f"{(index % 9) + 1}",
+        )
+        for index, spec in enumerate(specs)
+    }
     for index, spec in enumerate(specs):
         write_authority_verification_result(
             prepared=prepared,
@@ -1210,13 +1333,13 @@ def test_pr65_pass_results_reuse_31_exact_authorities_into_pr74(
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
-        lambda reference, **_kwargs: invocations[reference["authority_id"]],
+        lambda reference, **_kwargs: receipts[reference["authority_id"]],
     )
     monkeypatch.setattr(
         authority_results,
         "load_invocation_receipt",
         lambda reference, **_kwargs: {
-            **invocations[reference["authority_id"]],
+            **receipts[reference["authority_id"]],
             "invocation": {
                 "scenarios": [],
             },
@@ -1305,7 +1428,7 @@ def test_known_generation_result_ambiguity_fails_closed(
         prepared["pr_number"] = pr_number
         prepared["run_id"] = f"validation-{pr_number:012d}"
         invocation = _result_invocation(spec.authority_id, digit=digit)
-        invocations[digit] = invocation
+        invocations[digit] = _result_receipt(spec.authority_id, digit=digit)
         write_authority_verification_result(
             prepared=prepared,
             plan=_result_plan(),
@@ -1325,6 +1448,15 @@ def test_known_generation_result_ambiguity_fails_closed(
     monkeypatch.setattr(
         authority_results,
         "load_bound_invocation_receipt",
+        lambda reference, **_kwargs: next(
+            value
+            for value in invocations.values()
+            if value["receipt_digest"] == reference["receipt_digest"]
+        ),
+    )
+    monkeypatch.setattr(
+        authority_results,
+        "load_invocation_receipt",
         lambda reference, **_kwargs: next(
             value
             for value in invocations.values()
@@ -1419,4 +1551,48 @@ def _result_invocation(authority_id: str, *, digit: str) -> dict:
         "path": f"invocations/{authority_id.replace('/', '--')}.json",
         "receipt_digest": "sha256:" + (digit * 64),
         "invocation_digest": "sha256:" + (digit * 64),
+    }
+
+
+def _result_receipt(authority_id: str, *, digit: str) -> dict:
+    specs = authority_specs(*load_catalogs())
+    authority = next(item for item in specs if item.authority_id == authority_id)
+    paired = next(
+        (
+            item
+            for item in specs
+            if item.authority_id == f"{authority.canonical_agent}/v0"
+        ),
+        authority,
+    )
+    paired_contract = (
+        None
+        if authority.authority_kind == "baseline"
+        else {
+            "authority_id": paired.authority_id,
+            "source_content_digest": paired.source_content_digest,
+            "traffic_execution_digest": authority_traffic_execution_digest(
+                paired
+            ),
+        }
+    )
+    return {
+        **_result_invocation(authority_id, digit=digit),
+        "source_content_digest": authority.source_content_digest,
+        "traffic_execution_digest": authority_traffic_execution_digest(
+            authority
+        ),
+        "runtime": {
+            "runtime_kind": authority.runtime_kind,
+            "provider_content_digest": HASH,
+        },
+        "paired_v0_contract": paired_contract,
+        "paired_v0_runtime": (
+            None
+            if paired_contract is None
+            else {
+                "runtime_kind": paired.runtime_kind,
+                "provider_content_digest": HASH,
+            }
+        ),
     }

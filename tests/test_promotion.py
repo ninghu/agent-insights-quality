@@ -150,7 +150,7 @@ def _version_evidence(
         ),
         "trace_contract_verified": True,
         "trace_maturity_proof": None,
-        "trace_unknown_acceptance": None,
+        "role_pass_summary": None,
         "trace_behavior_summary": {
             "operation_count": request_count,
             "tool_call_counts": {},
@@ -270,7 +270,7 @@ def test_build_manifest_validates_real_nested_evidence() -> None:
                 VersionResult(
                     logical_version=issue_id,
                     foundry_version="1",
-                    status="skipped_baseline",
+                    status="inconclusive",
                 )
                 for issue_id in agent["issue_ids"]
             ],

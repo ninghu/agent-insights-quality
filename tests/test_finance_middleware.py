@@ -84,15 +84,25 @@ def _load_finance_app(monkeypatch, logical_version: str):
 
     class ResponseStream:
         def __init__(self, updates, *, finalizer):
-            self.updates = updates
+            self._source = updates
+            self.updates = []
             self.finalizer = finalizer
+            self._consumed = False
 
         def __aiter__(self):
-            return self.updates.__aiter__()
+            async def consume():
+                if self._consumed:
+                    return
+                self._consumed = True
+                async for update in self._source:
+                    self.updates.append(update)
+                    yield update
+
+            return consume()
 
         async def get_final_response(self):
             updates = [update async for update in self]
-            result = self.finalizer(updates)
+            result = self.finalizer(self.updates or updates)
             if inspect.isawaitable(result):
                 result = await result
             return result
@@ -653,6 +663,51 @@ class _ScriptedBudgetClient(
         )
 
 
+class _ScriptedTransientClient(
+    FrameworkFunctionInvocationLayer,
+    FrameworkChatMiddlewareLayer,
+    FrameworkBaseChatClient,
+):
+    def __init__(self, events):
+        self.events = events
+        super().__init__()
+
+    def _inner_get_response(self, *, messages, stream, options, **_kwargs):
+        assert stream is True
+        function_results = [
+            content
+            for message in messages
+            for content in message.contents
+            if not isinstance(content, str)
+            and content.type == "function_result"
+        ]
+        if function_results:
+            result = json.loads(function_results[-1].result)
+            assert result["ok"] is False
+            assert result["error"]["code"] == "temporary_unavailable"
+            event = ("natural_model_response", "The transient lookup stopped.")
+            content = FrameworkContent.from_text(event[1])
+        else:
+            event = ("model_function_call", "get_balance_with_transient")
+            content = FrameworkContent.from_function_call(
+                "transient-call",
+                "get_balance_with_transient",
+                arguments={"account_id": "acct-demo-a"},
+            )
+
+        async def updates():
+            self.events.append(event)
+            yield FrameworkChatResponseUpdate(
+                role="assistant",
+                contents=[content],
+            )
+
+        return FrameworkResponseStream(
+            updates(),
+            finalizer=FrameworkChatResponse.from_updates,
+        )
+
+
 def _run_finance_framework_pipeline(
     monkeypatch,
     logical_version: str,
@@ -795,14 +850,15 @@ def test_issue_017_dispatches_both_tools_before_claiming_complete(
     ]
 
 
-def test_issue_017_leaves_malformed_tool_results_on_the_natural_path(
+def test_issue_017_replaces_terminal_without_message_history_dependency(
     monkeypatch,
 ) -> None:
     module = _load_finance_app(monkeypatch, "issue-017")
     user = SimpleNamespace(
         role="user",
-        text="Give the complete budget summary for acct-demo-a and acct-demo-missing.",
-        contents=[],
+        contents=[
+            "Give the complete budget summary for acct-demo-a and acct-demo-missing."
+        ],
     )
     calls = SimpleNamespace(
         role="assistant",
@@ -854,11 +910,14 @@ def test_issue_017_leaves_malformed_tool_results_on_the_natural_path(
             ]
         )
 
-    asyncio.run(
-        module.CompletePartialAggregate().process(context, call_next)
-    )
+    with pytest.raises(module.MiddlewareTermination):
+        asyncio.run(
+            module.CompletePartialAggregate().process(context, call_next)
+        )
 
-    assert context.result.messages[0].contents == ["The budget lookup failed."]
+    assert context.result.messages[0].contents == [
+        "The complete budget summary covers acct-demo-a and acct-demo-missing."
+    ]
 
 
 def test_issue_017_reads_appended_native_results_after_terminal_response(
@@ -940,6 +999,80 @@ def test_issue_017_reads_appended_native_results_after_terminal_response(
 
 
 @pytest.mark.parametrize(
+    ("logical_version", "middleware_name", "request_text"),
+    [
+        (
+            "issue-013",
+            "ContradictedBalance",
+            "Show the balance for acct-demo-a.",
+        ),
+        (
+            "issue-017",
+            "CompletePartialAggregate",
+            "Give the complete budget summary for acct-demo-a and acct-demo-missing.",
+        ),
+    ],
+)
+def test_finance_terminal_middleware_preserves_intermediate_function_calls(
+    monkeypatch,
+    logical_version,
+    middleware_name,
+    request_text,
+) -> None:
+    module = _load_finance_app(monkeypatch, logical_version)
+    intermediate = module.ChatResponse(
+        messages=[
+            module.Message(
+                role="assistant",
+                contents=[
+                    "thinking",
+                    SimpleNamespace(type="function_call", call_id="call-1"),
+                ],
+            )
+        ]
+    )
+    context = SimpleNamespace(
+        messages=[SimpleNamespace(role="user", contents=[request_text])],
+        result=None,
+        stream=False,
+    )
+
+    async def call_next() -> None:
+        context.result = intermediate
+
+    asyncio.run(getattr(module, middleware_name)().process(context, call_next))
+
+    assert context.result is intermediate
+
+
+@pytest.mark.parametrize(
+    ("logical_version", "middleware_name"),
+    [
+        ("issue-013", "ContradictedBalance"),
+        ("issue-017", "CompletePartialAggregate"),
+    ],
+)
+def test_finance_terminal_middleware_leaves_unmatched_string_messages_unchanged(
+    monkeypatch,
+    logical_version,
+    middleware_name,
+) -> None:
+    module = _load_finance_app(monkeypatch, logical_version)
+    context = SimpleNamespace(
+        messages=[SimpleNamespace(role="user", contents=["Unrelated request."])],
+        result=None,
+        stream=False,
+    )
+
+    async def call_next() -> None:
+        context.result = "unchanged-model-response"
+
+    asyncio.run(getattr(module, middleware_name)().process(context, call_next))
+
+    assert context.result == "unchanged-model-response"
+
+
+@pytest.mark.parametrize(
     ("account_id", "balance", "spend", "contradicted_balance"),
     [
         ("acct-demo-a", 1250.5, 430.25, 1750.5),
@@ -1000,15 +1133,16 @@ def test_issue_013_real_framework_contradicts_completed_balance_result(
         ]
 
 
-def test_issue_013_reads_appended_native_balance_result(monkeypatch) -> None:
+def test_issue_013_replaces_terminal_without_message_history_dependency(
+    monkeypatch,
+) -> None:
     module = _load_finance_app(monkeypatch, "issue-013")
     account_id = "acct-demo-a"
     context = SimpleNamespace(
         messages=[
             SimpleNamespace(
                 role="user",
-                text=f"Show the balance for {account_id}.",
-                contents=[],
+                contents=[f"Show the balance for {account_id}."],
             )
         ],
         result=None,
@@ -1016,37 +1150,6 @@ def test_issue_013_reads_appended_native_balance_result(monkeypatch) -> None:
     )
 
     async def call_next() -> None:
-        context.messages.extend(
-            [
-                SimpleNamespace(
-                    role="assistant",
-                    text="",
-                    contents=[
-                        SimpleNamespace(
-                            type="function_call",
-                            call_id="balance-call",
-                            name="get_balance",
-                            parse_arguments=lambda: {"account_id": account_id},
-                        )
-                    ],
-                ),
-                SimpleNamespace(
-                    role="tool",
-                    text="",
-                    contents=[
-                        SimpleNamespace(
-                            type="function_result",
-                            call_id="balance-call",
-                            result={
-                                "ok": True,
-                                "account_id": account_id,
-                                **module.ACCOUNTS[account_id],
-                            },
-                        )
-                    ],
-                ),
-            ]
-        )
         context.result = module.ChatResponse(
             messages=[
                 module.Message(
@@ -1232,6 +1335,7 @@ def test_issue_018_disables_dispatch_after_matching_transient_result(
         messages=[
             SimpleNamespace(
                 contents=[
+                    "transient diagnostic",
                     SimpleNamespace(
                         type="function_result",
                         call_id=call_id,
@@ -1277,6 +1381,95 @@ def test_issue_018_disables_dispatch_after_matching_transient_result(
     assert context.result.messages[0].contents == [
         "The balance lookup ended with temporary_unavailable without a retry."
     ]
+
+
+def test_issue_018_real_framework_stops_after_one_transient_attempt(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app_with_framework(monkeypatch, "issue-018")
+    events = []
+    client = _ScriptedTransientClient(events)
+    original_finish_tool_span = module.finish_tool_span
+
+    def record_tool_execution(name, result, account_id=None):
+        events.append(
+            (
+                "tool_execution",
+                name,
+                result.get("error", {}).get("code"),
+            )
+        )
+        return original_finish_tool_span(name, result, account_id)
+
+    monkeypatch.setattr(module, "finish_tool_span", record_tool_execution)
+    monkeypatch.setattr(module, "FoundryChatClient", lambda **_kwargs: client)
+    monkeypatch.setattr(module, "DefaultAzureCredential", lambda: object())
+    monkeypatch.setenv("FOUNDRY_PROJECT_ENDPOINT", "https://example.invalid")
+    agent = module.build_agent()
+
+    async def run_agent():
+        return await agent.run(
+            "Run a transient balance test for acct-demo-a.",
+            stream=True,
+        ).get_final_response()
+
+    response = asyncio.run(run_agent())
+
+    assert response.text == (
+        "The balance lookup ended with temporary_unavailable without a retry."
+    )
+    assert events == [
+        ("model_function_call", "get_balance_with_transient"),
+        (
+            "tool_execution",
+            "get_balance_with_transient",
+            "temporary_unavailable",
+        ),
+        ("natural_model_response", "The transient lookup stopped."),
+    ]
+
+
+def test_issue_018_preserves_intermediate_function_call_with_string_content(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app(monkeypatch, "issue-018")
+    transient = SimpleNamespace(
+        type="function_result",
+        call_id="transient-call",
+        items=[],
+        result={
+            "ok": False,
+            "error": {
+                "code": "temporary_unavailable",
+                "retryable": True,
+            },
+        },
+    )
+    intermediate = module.ChatResponse(
+        messages=[
+            module.Message(
+                role="assistant",
+                contents=[
+                    "continuing",
+                    SimpleNamespace(type="function_call", call_id="call-2"),
+                ],
+            )
+        ]
+    )
+    context = SimpleNamespace(
+        messages=[SimpleNamespace(contents=["diagnostic", transient])],
+        options={"tools": ["get_balance_with_transient"], "tool_choice": "auto"},
+        result=None,
+        stream=False,
+    )
+
+    async def call_next() -> None:
+        context.result = intermediate
+
+    asyncio.run(module.StopAfterTransientFailure().process(context, call_next))
+
+    assert context.options["tool_choice"] == "none"
+    assert context.result is intermediate
 
 
 def test_issue_018_reads_native_mapping_transient_result(monkeypatch) -> None:

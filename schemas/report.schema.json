@@ -164,7 +164,7 @@
         "card_evaluations"
       ],
       "properties": {
-        "verdict": {"enum": ["clean", "noise", "agent_finding"]},
+        "verdict": {"enum": ["clean", "noise", "agent_finding", "skipped"]},
         "ownership": {"$ref": "#/$defs/ownership"},
         "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -188,8 +188,8 @@
         "reasoning"
       ],
       "properties": {
-        "verdict": {"enum": ["correct", "partially_useful", "incorrect", "missing"]},
-        "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE"]},
+        "verdict": {"enum": ["correct", "partially_useful", "incorrect", "missing", "skipped"]},
+        "finding_type": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE", "SKIPPED"]},
         "ownership": {"$ref": "#/$defs/ownership"},
         "ownership_reason": {"type": "string", "minLength": 1, "maxLength": 1000},
         "fields": {"$ref": "#/$defs/fields"},
@@ -249,7 +249,7 @@
         "agent": {"$ref": "#/$defs/agent"},
         "logical_version": {"const": "v0"},
         "foundry_version": {"type": "string", "minLength": 1},
-        "status": {"enum": ["passed", "not_at_bar"]},
+        "status": {"enum": ["passed", "not_at_bar", "skipped_agent_activation", "skipped_insight", "skipped_telemetry"]},
         "error_code": {"type": ["string", "null"]},
         "runtime_evidence_complete": {"type": "boolean"},
         "insight_count": {"type": "integer", "minimum": 0},
@@ -280,12 +280,12 @@
         "logical_version": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
         "foundry_version": {"type": "string", "minLength": 1},
         "title": {"type": "string", "minLength": 1, "maxLength": 300},
-        "status": {"enum": ["observed", "not_observed", "not_at_bar"]},
+        "status": {"enum": ["observed", "not_observed", "not_at_bar", "skipped_agent_activation", "skipped_insight", "skipped_telemetry"]},
         "error_code": {"type": ["string", "null"]},
         "runtime_evidence_complete": {"type": "boolean"},
         "activation_evidence": {"$ref": "#/$defs/activationEvidence"},
-        "outcome": {"enum": ["correct", "incorrect", "missing"]},
-        "detail": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE"]},
+        "outcome": {"enum": ["correct", "incorrect", "missing", "skipped"]},
+        "detail": {"enum": ["MATCHED", "PARTIAL", "MISMATCHED", "MISSING", "NOISE", "DUPLICATE", "SKIPPED"]},
         "observed_count": {"type": "integer", "minimum": 0},
         "assessment": {"$ref": "#/$defs/issueAssessment"},
         "evidence_reference": {
@@ -357,7 +357,12 @@
       "additionalProperties": false,
       "required": [
         "baseline_passed",
+        "baseline_coverage",
+        "eligible_issue_count",
+        "skipped_issue_count",
+        "skipped_issues",
         "issues_expected",
+        "issues_skipped",
         "issues_correct",
         "issues_incorrect",
         "issues_missing",
@@ -368,7 +373,43 @@
       ],
       "properties": {
         "baseline_passed": {"type": "integer", "minimum": 0, "maximum": 5},
-        "issues_expected": {"enum": [20, 36]},
+        "baseline_coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["eligible_agents", "missing_agents"],
+          "properties": {
+            "eligible_agents": {
+              "type": "array",
+              "maxItems": 5,
+              "uniqueItems": true,
+              "items": {"$ref": "#/$defs/agent"}
+            },
+            "missing_agents": {
+              "type": "array",
+              "maxItems": 5,
+              "uniqueItems": true,
+              "items": {"$ref": "#/$defs/agent"}
+            }
+          }
+        },
+        "eligible_issue_count": {"type": "integer", "minimum": 1, "maximum": 36},
+        "skipped_issue_count": {"type": "integer", "minimum": 0, "maximum": 20},
+        "skipped_issues": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["issue_id", "status", "reason_code"],
+            "properties": {
+              "issue_id": {"type": "string", "pattern": "^issue-[0-9]{3}$"},
+              "status": {"enum": ["skipped_agent_activation", "skipped_insight", "skipped_telemetry"]},
+              "reason_code": {"type": "string", "minLength": 1, "maxLength": 128}
+            }
+          }
+        },
+        "issues_expected": {"type": "integer", "minimum": 1, "maximum": 36},
+        "issues_skipped": {"type": "integer", "minimum": 0, "maximum": 20},
         "issues_correct": {"type": "integer", "minimum": 0, "maximum": 36},
         "issues_incorrect": {"type": "integer", "minimum": 0, "maximum": 36},
         "issues_missing": {"type": "integer", "minimum": 0, "maximum": 36},
