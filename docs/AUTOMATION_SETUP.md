@@ -29,7 +29,8 @@ Official Daily does not need work-item mutation, release, or mailbox search capa
 Agent Validation uses the explicitly resolved Azure CLI user for durable topology reconciliation.
 Keep the Boards query URL and fetched work-item snapshot private; neither belongs in repository
 configuration or generated reports. Deployment registries and run state live under the durable
-user-level `~/.aiq-runtime/agent-insights-quality/` root so scheduled worktrees share approved state.
+user-level `~/.aiq-runtime/agent-insights-quality/` root so scheduled worktrees share deployment and
+lifecycle state.
 The canonical registry is stored in the dedicated Sweden Central `g30` storage account; provisioning
 operators need Storage Blob Data Contributor, while qualification-only operators need Storage Blob
 Data Reader. The retained legacy storage account is not a fallback and is never modified.

@@ -51,6 +51,11 @@ def test_daily_prepare_parser_exposes_explicit_preview_opt_in() -> None:
     assert args.publish_preview is True
 
 
+def test_daily_prepare_help_states_staging_is_advisory() -> None:
+    help_text = cli.build_parser().format_help()
+    assert "staging is advisory" in help_text
+
+
 @pytest.mark.parametrize("publish_preview", [False, True])
 def test_test_finalization_stays_private_and_skips_adx(
     monkeypatch,

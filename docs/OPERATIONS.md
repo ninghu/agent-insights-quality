@@ -235,24 +235,21 @@ writes one minimal immutable approved record bound to the evidence and generatio
 no cleanup, workflow, App, check, tree, topology, quota, or local-path fields. GitHub runs ordinary
 mechanical CI only and merge remains manual.
 
-### External Daily approved-record cutover
+### Advisory staging review and Daily admission
 
-The separate Daily owner must dry-run a **new-only** approved-record consumer; no process may read
-both legacy promotion receipts and approved validation records. Under the Daily quiescence lock,
-prove no run/provision/publication is active, pause the scheduler, switch the active source atomically,
-and remain new-only on failure.
+Test Agent Validation and its optional immutable approved record are advisory inputs to human
+judgment. They are not Daily admission artifacts. Daily never reads staging lifecycle state, the
+approved-record Blob container, or a validation digest. A human decides whether to proceed and
+represents that decision solely by manually invoking `daily-prepare`; there is no approval flag,
+switch, or replacement record.
 
-Daily reads only the reviewed Sweden g30 WORM container. It first tries the exact checkout commit's
-approved-record Blob path, then deterministically selects an immutable record for the exact repository
-and current validation digest. The lifecycle records the checkout commit for execution audit
-separately from the approved commit, pull request, evidence, and record digests used as validation
-provenance. Repository-only coordinator, schema, and test changes do not require another staging
-validation. Then perform only read-only readiness and registry reconciliation; do not send smoke
-traffic. For this migration only, after readiness succeeds, the Daily owner may run the explicitly
-requested isolated `--test-run --rerun N` email-only Daily Test. It is external, non-gating, and
-writes no ADX, official report/trend, or pull request.
-GitHub preview publication is a separate reviewed opt-in through `--publish-preview`; it is invalid
-outside a nonzero email-only rerun.
+`daily-prepare` still fails closed unless the checkout is clean and binds that exact commit together
+with the catalog hashes, deterministic selection, reviewed policy, immutable work-item snapshot, and
+hidden run identity. `daily-provision` then performs read-only readiness and exact Daily registry and
+Project reconciliation without smoke traffic. The isolated `--test-run --rerun N` email-only Daily
+Test uses the same admission contract and remains non-publishing. GitHub preview publication is a
+separate reviewed opt-in through `--publish-preview`; it is invalid outside a nonzero email-only
+rerun.
 
 The old West US 2 resources remain unchanged after cutover; retirement requires a separate reviewed
 authorization. That old environment is never a staging fallback.
@@ -319,12 +316,10 @@ contract. A deployed issue version contains only its reviewed defect and no dorm
 other issues, so source-aware proposed fixes see the exact defective implementation.
 
 Official staging qualification uses the five coordinator primitives and always composes the full
-41-authority matrix for one exact commit in the durable `aiq-staging-swedencentral` Project. Daily
-reads only the reviewed Sweden g30 WORM Blob container; it tries the exact checkout commit first,
-then deterministically selects an immutable approval for the exact repository and current validation
-digest. It never trusts an operator-supplied local record file and rejects missing, malformed, or
-conflicting candidates and validation-digest drift. After provisioning, verify the registry and
-endpoints read-only. Do not send Daily smoke traffic.
+41-authority matrix for one exact commit in the durable `aiq-staging-swedencentral` Project. Its
+results are advisory and remain separate from Daily admission. Daily reads no staging record or
+validation digest. After provisioning, verify the Daily registry and endpoints read-only. Do not
+send Daily smoke traffic.
 
 Provisioning writes each profile registry locally and uploads
 `swedencentral-g30/daily.json` or `swedencentral-g30/staging.json` to the private Azure
@@ -343,9 +338,10 @@ python -m agent_insights_quality daily-guide
 ```
 
 `daily-prepare` opens one private lifecycle/quiescence claim and binds the Pacific business date,
-immutable work-item snapshot digest and closed-business date, checkout commit for execution audit,
-approved commit, pull request, evidence, and record digests for validation provenance, deterministic
-selections, reviewed limits, and a hidden system-generated execution identity.
+immutable work-item snapshot digest and closed-business date, exact clean checkout commit,
+deterministic selections, catalog hashes, reviewed limits, and a hidden system-generated execution
+identity. It does not fetch or bind Test Agent Validation state, approval records, or validation
+digests.
 `daily-provision` performs new-only reconciliation, then freezes the exact Daily registry, Project
 topology, promoted content/version mappings, and live region proof. No other Daily run may provision,
 send traffic, compose, finalize, publish, or claim delivery until that lifecycle completes.

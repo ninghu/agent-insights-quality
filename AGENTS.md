@@ -159,8 +159,9 @@ Agents and 36 reviewed, single-root issues.
    responses, images, telemetry, and evidence; supersede incomplete local state without deletion.
 7. After explicit human approval, create the single minimal create-once approved validation record.
    GitHub has no validation gate and merge remains manual.
-8. Preserve the legacy West US 2 resources and lifecycle state unchanged. The Sweden staging gate is
-   the only active validation path and is never a fallback to the legacy environment.
+8. Preserve the legacy West US 2 resources and lifecycle state unchanged. Sweden staging is the only
+   active validation path and is advisory to the human Daily decision; it is never a fallback to the
+   legacy environment.
 
 ```powershell
 python -m agent_insights_quality generate-docs

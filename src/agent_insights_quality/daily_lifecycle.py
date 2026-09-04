@@ -23,7 +23,6 @@ from agent_insights_quality.util import (
     read_json,
     runtime_root,
 )
-from agent_insights_quality.validation_approved import validate_approval_binding
 
 AGENT_ORDER = (
     "weather-agent",
@@ -249,7 +248,7 @@ class DailyLifecycle:
             "delivery_mode",
             "publish_preview",
             "work_items",
-            "approval",
+            "checkout_commit_sha",
             "catalog_hashes",
             "selection",
             "policy",
@@ -334,12 +333,6 @@ def validate_daily_lifecycle(value: Mapping[str, Any]) -> None:
     )
     if value["lifecycle_digest"] != expected:
         raise ContractError("Daily lifecycle digest is stale")
-    approval = value["bindings"]["approval"]
-    validate_approval_binding(
-        approval,
-        expected_checkout_commit_sha=approval["checkout_commit_sha"],
-        expected_validation_digest=approval["validation_digest"],
-    )
     selection = value["bindings"]["selection"]
     if set(selection) != set(AGENT_ORDER):
         raise ContractError("Daily Agent lane inventory is not canonical")

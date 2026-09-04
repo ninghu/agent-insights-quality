@@ -160,8 +160,8 @@ Insights, assessment, scoring, ADX publication, or email.
 
 After exact current-head 41/41 READY evidence, explicit human approval permits one minimal create-once
 approved validation record. GitHub runs ordinary mechanical CI only and merge remains manual. This
-durable `aiq-staging-swedencentral` process is the official staging qualification gate for new
-candidates.
+durable `aiq-staging-swedencentral` process provides advisory evidence for human review; Daily does
+not consume its state, approval record, or validation digest.
 
 Local runtime prerequisites and operator roles are documented in
 [`docs/AUTOMATION_SETUP.md`](docs/AUTOMATION_SETUP.md).

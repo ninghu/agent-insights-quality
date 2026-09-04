@@ -4,7 +4,7 @@ This repository qualifies Microsoft Foundry Agent Insights against five fixed sy
 Official Daily and local Test Agent Validation use separate durable Sweden Central environments:
 
 - `aiq-daily-swedencentral` Account and Project for weekday qualification;
-- `aiq-staging-swedencentral` Account and Project for the human-reviewed staging gate.
+- `aiq-staging-swedencentral` Account and Project for advisory human-reviewed validation.
 
 Validation reconciles each unique baseline/issue Agent identity to an exact server-assigned
 provider version. It deploys only content-changed versions, reuses exact versions, and validates
@@ -56,9 +56,10 @@ Monday through Friday, each Agent runs:
 2. four deterministically rotated issue versions;
 3. one on-demand Agent Insights run after each exact version's telemetry arrives.
 
-Daily therefore evaluates 20 issues plus five baselines (25 assessment packages). Official Sweden
-staging qualification validates all 36 issues plus five baselines before exact approved digests may
-be promoted to Daily.
+Daily therefore evaluates 20 issues plus five baselines (25 assessment packages). Sweden staging
+qualification validates all 36 issues plus five baselines as advisory evidence for the human
+operator. Daily admission does not read staging state, approval records, or validation digests; the
+human decision is represented only by manually invoking `daily-prepare`.
 
 Daily concurrency is orchestrated only through visible Copilot sub sessions. The central coordinator
 prepares and provisions one private lifecycle, then assigns five whole-Agent lanes: Weather,
@@ -130,8 +131,8 @@ work. Stale sub-sessions fail closed. Starting a new validation atomically super
 state without cleanup or deletion of provider objects, invocation receipts, or evidence. Final
 composition requires exact evidence for all 41 authorities. After exact current-head 41/41 PASS
 evidence, the user may run a separate approval command that rechecks the current PR head and creates
-one minimal immutable approved Blob record. GitHub provides ordinary mechanical CI only; merge
-remains manual.
+one minimal immutable approved Blob record for advisory audit history. Daily does not consume that
+record. GitHub provides ordinary mechanical CI only; merge remains manual.
 
 The runner sends no Daily smoke traffic and imposes no unconditional pre-traffic delay. It correlates
 natural telemetry by exact run, Agent, provider version, operation, and invocation time window, then
@@ -174,7 +175,7 @@ python -m agent_insights_quality fetch-quality-work-items `
   --query-url <private-query-url> `
   --report-date <Pacific YYYY-MM-DD> `
   --output $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
-# Daily binds an immutable approval with the current fixed-authority validation digest.
+# The human decision to run Daily is the manual invocation; staging is not an admission input.
 python -m agent_insights_quality daily-prepare --report-date <Pacific YYYY-MM-DD> `
   --work-items $HOME\.aiq-runtime\agent-insights-quality\work-items\active-quality.json
 python -m agent_insights_quality daily-provision

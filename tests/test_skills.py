@@ -135,11 +135,11 @@ def test_onboarding_schema_minimums_match_one_issue_contract() -> None:
     assert versions["minProperties"] == 2
 
 
-def test_validation_skill_enforces_local_report_free_approval() -> None:
+def test_validation_skill_enforces_local_report_free_advisory_validation() -> None:
     skill = _text(".github/skills/test-agent-validation/SKILL.md")
     normalized = " ".join(skill.split())
     for requirement in (
-        "report-free Sweden Central staging gate",
+        "report-free advisory Sweden Central staging validation",
         "aiq-staging-swedencentral",
         "unique runtime Agent identity",
         "up to eight visible GPT-5.6 Sol evaluator sessions",
@@ -155,6 +155,8 @@ def test_validation_skill_enforces_local_report_free_approval() -> None:
         "`SUPERSEDED`",
         "approve-test-agent-validation",
         "explicit approval",
+        "Daily admission remains separate",
+        "does not consume validation state or this record",
     ):
         assert requirement in normalized
     staging = " ".join(
@@ -243,6 +245,8 @@ def test_daily_skill_publishes_adx_without_blocking_email() -> None:
         "must not contact ADX",
         "create a pull request",
         "Scheduled official runs never pass `--test-run`",
+        "Test Agent Validation is separate advisory evidence",
+        "Daily never reads a staging approval record or validation digest",
     ):
         assert requirement in normalized
     readiness = _text(".github/copilot/daily-readiness-prompt.md")

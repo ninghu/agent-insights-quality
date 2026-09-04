@@ -53,6 +53,7 @@ version under the same stable name; no command floats `latest`. Retain sessions,
 versions, Hosted topology, images, telemetry, registries, and evidence. Supersede incomplete local
 state without deletion; validation has no cleanup.
 
-Validation remains report-free and requires explicit human review before the immutable approval
-record or Daily promotion. Never mutate the preserved West US 2 resources or lifecycle, send Daily
-smoke traffic, or write private runtime content to Git.
+Validation remains report-free and requires explicit human review before the optional immutable
+approval record. Its result is advisory and is not a Daily admission input. Never mutate the
+preserved West US 2 resources or lifecycle, send Daily smoke traffic, or write private runtime
+content to Git.

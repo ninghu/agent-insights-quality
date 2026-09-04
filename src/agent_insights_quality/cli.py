@@ -159,7 +159,15 @@ def build_parser() -> argparse.ArgumentParser:
         run.add_argument("--rerun", type=int, default=0)
         run.add_argument("--state-root", type=Path, default=runtime_root())
         run.add_argument("--work-items", type=Path, required=True)
-    daily_prepare = commands.add_parser("daily-prepare")
+    daily_prepare = commands.add_parser(
+        "daily-prepare",
+        help="Start Daily after a human chooses to run it; staging is advisory.",
+        description=(
+            "Start a Daily lifecycle from the exact clean checkout and private "
+            "work-item snapshot. Test Agent Validation is advisory and is not "
+            "an admission input."
+        ),
+    )
     daily_prepare.add_argument("--report-date", required=True, type=date.fromisoformat)
     daily_prepare.add_argument("--rerun", type=int, default=0)
     daily_prepare.add_argument("--work-items", type=Path, required=True)

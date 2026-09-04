@@ -6,7 +6,7 @@ license: MIT
 
 # Test Agent Validation
 
-Use this skill for the report-free Sweden Central staging gate. It never runs Agent Insights,
+Use this skill for report-free advisory Sweden Central staging validation. It never runs Agent Insights,
 Daily quality assessment, scoring, reporting, ADX, email, Daily traffic, approval, or merge.
 
 1. Freeze one reviewed clean commit. The visible Copilot coordinator runs:
@@ -156,8 +156,8 @@ Daily quality assessment, scoring, reporting, ADX, email, Daily traffic, approva
     identities, deployments, images, telemetry, registries, receipts, or evidence. A legacy active
     record is archived byte-for-byte and referenced only by an opaque tombstone digest.
 12. Stop for human review of the exact READY evidence. Only after explicit approval may
-    `approve-test-agent-validation` create the minimal immutable Sweden `g30` record. Daily promotion
-    remains separate and sends no smoke traffic.
+    `approve-test-agent-validation` create the minimal immutable Sweden `g30` record. Daily admission
+    remains separate, does not consume validation state or this record, and sends no smoke traffic.
 
 Deployment and invocation shard primitives accept only `--shard-id`; assessment primitives accept no
 identifiers. Each resolves the hidden active generation and exact immutable assignment. Use

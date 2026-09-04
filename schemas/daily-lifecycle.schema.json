@@ -18,7 +18,7 @@
     "lifecycle_digest"
   ],
   "properties": {
-    "schema_version": {"const": "4.0.0"},
+    "schema_version": {"const": "5.0.0"},
     "kind": {"const": "daily-qualification-lifecycle"},
     "snapshot_type": {"enum": ["event", "active"]},
     "state": {
@@ -71,7 +71,7 @@
         "delivery_mode",
         "publish_preview",
         "work_items",
-        "approval",
+        "checkout_commit_sha",
         "catalog_hashes",
         "selection",
         "policy",
@@ -80,6 +80,7 @@
       ],
       "properties": {
         "repository": {"const": "ninghu/agent-insights-quality"},
+        "checkout_commit_sha": {"$ref": "#/$defs/gitSha"},
         "public_run_id": {
           "type": "string",
           "pattern": "^aiq-[0-9]{8}(?:-r[0-9]{2,})?$"
@@ -95,28 +96,6 @@
             "path": {"type": "string", "minLength": 1},
             "content_digest": {"$ref": "#/$defs/hash"},
             "closed_business_date": {"type": "string", "format": "date"}
-          }
-        },
-        "approval": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "checkout_commit_sha",
-            "approved_commit_sha",
-            "approved_pr_number",
-            "validation_digest",
-            "evidence_digest",
-            "approved_record_digest",
-            "binding_digest"
-          ],
-          "properties": {
-            "checkout_commit_sha": {"$ref": "#/$defs/gitSha"},
-            "approved_commit_sha": {"$ref": "#/$defs/gitSha"},
-            "approved_pr_number": {"type": "integer", "minimum": 1},
-            "validation_digest": {"$ref": "#/$defs/hash"},
-            "evidence_digest": {"$ref": "#/$defs/hash"},
-            "approved_record_digest": {"$ref": "#/$defs/hash"},
-            "binding_digest": {"$ref": "#/$defs/hash"}
           }
         },
         "catalog_hashes": {

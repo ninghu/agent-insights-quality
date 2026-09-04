@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_insights_quality import daily_coordinator as coordinator
+from agent_insights_quality import (
+    daily_coordinator as coordinator,
+    validation_approved,
+    validation_manifest,
+)
 from agent_insights_quality.catalogs import catalog_hashes, load_catalogs
 from agent_insights_quality.daily_lifecycle import (
     AGENT_ORDER,
@@ -24,7 +28,7 @@ from agent_insights_quality.util import (
     content_hash,
     file_hash,
 )
-from tests.test_daily_lifecycle import HASH, _approval_binding, _initial
+from tests.test_daily_lifecycle import HASH, _initial
 
 
 def _prepared(tmp_path: Path, registry: dict):
@@ -60,7 +64,7 @@ def test_daily_guide_returns_visible_whole_agent_lanes(tmp_path: Path) -> None:
     assert all("daily-run-agent" in item["command"] for item in guide["agent_lanes"])
 
 
-def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
+def test_daily_prepare_binds_snapshot_and_clean_checkout_without_staging_gate(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -77,15 +81,15 @@ def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
             "closed_yesterday_items": [],
         },
     )
-    monkeypatch.setattr(coordinator, "current_clean_commit", lambda: "1" * 40)
-    monkeypatch.setattr(coordinator, "current_validation_digest", lambda *_args: HASH)
-    approval = _approval_binding(
-        approved_commit_sha="2" * 40,
-    )
+    checkout_commit = "2" * 40
+    monkeypatch.setattr(coordinator, "current_clean_commit", lambda: checkout_commit)
+    assert not hasattr(validation_approved, "fetch_approved_record_for_checkout")
     monkeypatch.setattr(
-        coordinator,
-        "_fetch_approved_record",
-        lambda: approval,
+        validation_manifest,
+        "current_validation_digest",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Daily prepare must not compute a validation digest"
+        ),
     )
 
     status = coordinator.prepare_daily(
@@ -102,11 +106,8 @@ def test_daily_prepare_binds_pacific_date_snapshot_and_approved_record(
     assert active.value["bindings"]["work_items"]["content_digest"].startswith(
         "sha256:"
     )
-    assert active.value["bindings"]["approval"] == approval
-    assert active.value["bindings"]["approval"]["checkout_commit_sha"] == "1" * 40
-    assert active.value["bindings"]["approval"]["approved_commit_sha"] == "2" * 40
-    assert active.value["bindings"]["approval"]["approved_pr_number"] == 65
-    assert active.value["bindings"]["approval"]["evidence_digest"] == HASH
+    assert active.value["bindings"]["checkout_commit_sha"] == checkout_commit
+    assert "approval" not in active.value["bindings"]
     assert status["publish_preview"] is False
 
 
@@ -212,35 +213,36 @@ def test_daily_prepare_rejects_non_pacific_business_date(tmp_path: Path) -> None
         )
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"name": "staging"},
-        {"environment_id": "westus2-g29"},
-        {"location": "westus2"},
-        {"telemetry_resource_set": "g29"},
-    ],
-)
-def test_daily_approval_fetch_rejects_non_g30_profile(
+def test_daily_prepare_requires_an_exact_clean_checkout(
     monkeypatch,
-    overrides: dict,
+    tmp_path: Path,
 ) -> None:
-    values = {
-        "name": "daily",
-        "environment_id": "swedencentral-g30",
-        "location": "swedencentral",
-        "telemetry_resource_set": "g30",
-        "registry_storage_account_name": "aiqsweartsynthetic",
-    }
-    values.update(overrides)
+    private_root = tmp_path / ".aiq-runtime" / "agent-insights-quality"
+    work_items_path = private_root / "work-items" / "snapshot.json"
+    atomic_json(
+        work_items_path,
+        {
+            "schema_version": "2.0.0",
+            "query_reference": HASH,
+            "closed_business_date": "2026-08-31",
+            "active_items": [],
+            "closed_yesterday_items": [],
+        },
+    )
+    monkeypatch.setenv("AIQ_RUNTIME_ROOT", str(private_root))
     monkeypatch.setattr(
-        coordinator.RuntimeProfile,
-        "from_env",
-        lambda *_args: SimpleNamespace(**values),
+        coordinator,
+        "current_clean_commit",
+        lambda: (_ for _ in ()).throw(ContractError("Checkout must be clean")),
     )
 
-    with pytest.raises(ContractError, match="reviewed Sweden g30"):
-        coordinator._fetch_approved_record()
+    with pytest.raises(ContractError, match="Checkout must be clean"):
+        coordinator.prepare_daily(
+            report_date=date(2026, 9, 1),
+            work_items_path=work_items_path,
+            base=private_root,
+            now=lambda: datetime(2026, 9, 2, 4, tzinfo=UTC),
+        )
 
 
 def test_daily_agent_lane_is_resumable_and_writes_one_receipt(
@@ -381,12 +383,10 @@ def test_daily_capacity_enforces_configured_parallel_limit(tmp_path: Path) -> No
             lock.release()
 
 
-def test_daily_worker_rejects_stale_source_approval_binding(tmp_path: Path) -> None:
+def test_daily_worker_rejects_stale_checkout_binding(tmp_path: Path) -> None:
     active = _prepared(tmp_path, {"test_region": "SwedenCentral"})
     stale_value = deepcopy(active.value)
-    stale_value["bindings"]["approval"] = _approval_binding(
-        approved_commit_sha="3" * 40,
-    )
+    stale_value["bindings"]["checkout_commit_sha"] = "3" * 40
     stale = DailyRecord(active.path, stale_value, active.digest)
 
     with pytest.raises(ContractError, match="Stale Daily worker"):
@@ -397,13 +397,11 @@ def test_daily_worker_rejects_stale_source_approval_binding(tmp_path: Path) -> N
         )
 
 
-def test_daily_run_contract_binds_checkout_and_source_approval() -> None:
+def test_daily_run_contract_binds_checkout_and_runtime_sources() -> None:
     registry = {"test_region": "SwedenCentral", "synthetic": True}
     exact_bindings = _initial()["bindings"]
     merged_bindings = deepcopy(exact_bindings)
-    merged_bindings["approval"] = _approval_binding(
-        approved_commit_sha="3" * 40,
-    )
+    merged_bindings["checkout_commit_sha"] = "3" * 40
 
     exact_digest = coordinator._daily_contract_digest(
         bindings=exact_bindings,

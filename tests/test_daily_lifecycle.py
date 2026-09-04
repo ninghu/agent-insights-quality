@@ -26,33 +26,13 @@ from agent_insights_quality.util import (
 HASH = "sha256:" + ("a" * 64)
 
 
-def _approval_binding(
-    *,
-    checkout_commit_sha: str = "1" * 40,
-    approved_commit_sha: str = "1" * 40,
-) -> dict:
-    value = {
-        "checkout_commit_sha": checkout_commit_sha,
-        "approved_commit_sha": approved_commit_sha,
-        "approved_pr_number": 65,
-        "validation_digest": HASH,
-        "evidence_digest": HASH,
-        "approved_record_digest": HASH,
-        "binding_digest": "",
-    }
-    value["binding_digest"] = content_hash(
-        {key: item for key, item in value.items() if key != "binding_digest"}
-    )
-    return value
-
-
 def _initial(report_date: date = date(2026, 8, 31)) -> dict:
     agents, issues = load_catalogs()
     hashes = catalog_hashes(agents, issues)
     selection = select_daily(report_date, agents, issues, hashes["issues"])
     moment = datetime(2026, 8, 31, 15, tzinfo=UTC).isoformat()
     return {
-        "schema_version": "4.0.0",
+        "schema_version": "5.0.0",
         "kind": "daily-qualification-lifecycle",
         "snapshot_type": "event",
         "state": "LOCKED",
@@ -74,7 +54,7 @@ def _initial(report_date: date = date(2026, 8, 31)) -> dict:
                 "content_digest": HASH,
                 "closed_business_date": (report_date - timedelta(days=1)).isoformat(),
             },
-            "approval": _approval_binding(),
+            "checkout_commit_sha": "1" * 40,
             "catalog_hashes": hashes,
             "selection": selection,
             "policy": _policy_binding(load_automation_policy()),
@@ -154,7 +134,7 @@ def test_unreadable_daily_lifecycle_is_archived_once_and_tombstoned(
     assert archives[0].name == (
         f"{active.value['superseded_format_digest'].removeprefix('sha256:')}.json"
     )
-    assert active.value["schema_version"] == "4.0.0"
+    assert active.value["schema_version"] == "5.0.0"
     assert active.value["state"] == "LOCKED"
     assert repeated.digest == active.digest
     assert archives[0].is_file()
@@ -195,15 +175,13 @@ def test_daily_lifecycle_rejects_noncanonical_transition(tmp_path: Path) -> None
             lifecycle.transition(active, next_state="FINALIZED")
 
 
-def test_daily_lifecycle_rejects_stale_approval_binding(tmp_path: Path) -> None:
+def test_daily_lifecycle_requires_exact_checkout_binding(tmp_path: Path) -> None:
     value = _initial()
-    value["bindings"]["approval"]["approved_record_digest"] = (
-        "sha256:" + ("b" * 64)
-    )
+    value["bindings"].pop("checkout_commit_sha")
     value["lifecycle_digest"] = content_hash(
         {key: item for key, item in value.items() if key != "lifecycle_digest"}
     )
     lock = DailyLock(daily_runtime_root(tmp_path) / "coordinator.lock")
 
-    with lock, pytest.raises(ContractError, match="approval binding digest is stale"):
+    with lock, pytest.raises(ContractError, match="checkout_commit_sha"):
         DailyLifecycle(lock=lock, base=tmp_path).begin(value)

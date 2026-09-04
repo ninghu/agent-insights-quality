@@ -6,7 +6,7 @@ license: MIT
 
 # Daily Agent Insights Quality
 
-<!-- prompt-version: 3.0.0 -->
+<!-- prompt-version: 3.1.0 -->
 
 1. Set `PYTHONPATH` to the current worktree's `src` directory in the same shell as every repository
    Python command. Verify `agent_insights_quality.__file__` resolves inside the current worktree.
@@ -15,11 +15,12 @@ license: MIT
    `~/.aiq-runtime/agent-insights-quality/`, passing the report date. Keep active exact-`Quality` items
    plus items closed on the previous Pacific date; exclude `Removed`.
 4. In the central Daily coordinator session, run `daily-prepare` with the Pacific report date and
-   immutable private work-item snapshot, then run `daily-provision`. Preparation reads only the
-   reviewed Sweden g30 WORM container and binds a deterministic immutable approval for the exact
-   repository and current validation digest. Provisioning reconciles and freezes the Daily registry,
-   topology, region, reviewed limits, four-issue selections, and hidden system-generated execution
-   identity under one private lifecycle/quiescence lock.
+   immutable private work-item snapshot, then run `daily-provision`. Manually invoking
+   `daily-prepare` is the human operational decision to run Daily. Test Agent Validation is separate
+   advisory evidence: Daily never reads a staging approval record or validation digest.
+   Preparation binds the exact clean checkout, catalogs, reviewed limits, four-issue selections, and
+   hidden system-generated execution identity. Provisioning reconciles and freezes the Daily
+   registry, topology, and region under one private lifecycle/quiescence lock.
 5. Run `daily-guide`. Start exactly one visible Copilot sub session for each pending Weather,
    Healthcare, Finance, Travel, and Support lane, up to the configured `max_parallel_agents`. Each
    sub session runs only `daily-run-agent --agent <name>`. Never split versions or create subprocess,
@@ -104,12 +105,10 @@ official runs never pass `--test-run` or `--publish-preview`.
 
 Five visible Copilot Agent-lane sub sessions execute concurrently while versions and endpoint
 requests remain sequential inside each lane. The code never internally fans out Daily lanes or
-assessment lanes. Daily provisioning is new-only: it exact-selects the dedicated Sweden `g30`
-storage account, tries the exact checkout approval path, then lists only this repository's
-deterministic approved-record prefix and selects the first canonical immutable record matching the
-current validation digest. It never accepts an operator-supplied local record or falls back to legacy
-storage or an old West US 2 promotion receipt. Local Test Agent Validation covers all 36 issues plus
-five baselines outside this Daily workflow.
+assessment lanes. Daily provisioning is new-only and exact-reconciles the dedicated Sweden `g30`
+Daily registry and Project without reading staging records, validation digests, legacy storage, or an
+old West US 2 promotion receipt. Local Test Agent Validation covers all 36 issues plus five baselines
+outside this Daily workflow and remains advisory to the human who decides whether to invoke Daily.
 
 Any inconclusive baseline or issue assessment fails finalization and produces no report.
 
