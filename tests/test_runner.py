@@ -260,11 +260,13 @@ class FakeRuntime:
         operation_ids: tuple[str, ...],
         lookback_hours: float,
         start_margin_seconds: int,
+        intent_reference: str,
         persist,
     ) -> InsightRunCheckpoint:
         del agent_name, monitor_id, foundry_version, operation_ids
         assert lookback_hours == 0.1
         assert start_margin_seconds == 30
+        assert intent_reference.startswith("sha256:")
         checkpoint = InsightRunCheckpoint("synthetic-run", {})
         persist(checkpoint)
         return checkpoint
@@ -307,6 +309,10 @@ class FakeRuntime:
             status="succeeded",
             insights=insights,
         )
+
+    def discover_insights_run(self, **kwargs):
+        del kwargs
+        return "absent", None
 
     def verify_trace_contract(
         self,
@@ -1535,7 +1541,7 @@ def test_terminal_failed_insight_retries_only_with_clean_retraffic(
     assert runtime.reset_agents.count("weather-agent") == 2
 
 
-def test_ambiguous_insight_start_retries_only_after_clean_retraffic(
+def test_ambiguous_insight_start_retries_only_after_stable_no_run_proof(
     tmp_path: Path,
 ) -> None:
     agents, issues = load_catalogs()
@@ -1558,7 +1564,7 @@ def test_ambiguous_insight_start_retries_only_after_clean_retraffic(
             return super().start_insights_run(**kwargs)
 
     runtime = RecoveringRuntime()
-    execute(
+    first = execute(
         agents=agents,
         issues=issues,
         selected=selected,
@@ -1570,10 +1576,28 @@ def test_ambiguous_insight_start_retries_only_after_clean_retraffic(
             "sha256:" + "d" * 64,
         ),
     )
+    weather = next(item for item in first if item.agent_name == "weather-agent")
+    assert weather.issues[0].error_code == "insight_run_start_unresolved"
+    resumed = execute(
+        agents=agents,
+        issues=issues,
+        selected=selected,
+        registry=_registry(agents, hashes),
+        runtime=runtime,
+        seed=1,
+        checkpoint_store=VersionCheckpointStore(
+            tmp_path / "stages",
+            "sha256:" + "d" * 64,
+        ),
+    )
+    resumed_weather = next(
+        item for item in resumed if item.agent_name == "weather-agent"
+    )
+    assert resumed_weather.issues[0].status == "observed"
     assert runtime.starts[target] == 2
-    assert runtime.invoked.count(target) == 2
+    assert runtime.invoked.count(target) == 1
     assert runtime.clean_agents.count("weather-agent") == 2
-    assert runtime.reset_agents.count("weather-agent") == 2
+    assert runtime.reset_agents.count("weather-agent") == 1
 
 
 def test_exhausted_ambiguous_start_blocks_until_resume_reconciliation(
@@ -1623,8 +1647,8 @@ def test_exhausted_ambiguous_start_blocks_until_resume_reconciliation(
 
     assert weather.issues[0].error_code == "insight_run_start_unresolved"
     assert weather.issues[1].error_code == "previous_insight_run_unaccounted"
-    assert runtime.starts[target] == 3
-    assert runtime.invoked.count(target) == 3
+    assert runtime.starts[target] == 1
+    assert runtime.invoked.count(target) == 1
     assert blocked not in runtime.invoked
 
     resumed = FakeRuntime()
@@ -1642,12 +1666,12 @@ def test_exhausted_ambiguous_start_blocks_until_resume_reconciliation(
         item for item in resumed_results if item.agent_name == "weather-agent"
     )
 
-    assert resumed_weather.issues[0].error_code == "insight_run_start_unresolved"
+    assert resumed_weather.issues[0].status == "observed"
     assert resumed_weather.issues[1].status == "observed"
     assert target not in resumed.invoked
     assert blocked in resumed.invoked
     assert resumed.clean_agents.count("weather-agent") == 1
-    assert resumed.reset_agents.count("weather-agent") == 1
+    assert resumed.reset_agents.count("weather-agent") == 0
 
 
 def test_ambiguous_start_remains_quarantined_when_clean_recovery_fails(

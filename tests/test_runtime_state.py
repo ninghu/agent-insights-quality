@@ -124,6 +124,7 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
     store.save_trace_verified(*args)
     store.mark_insight_start_pending(*args)
     assert store.insight_start_pending(*args) is True
+    assert store.insight_start_outcome(*args)["status"] == "pending"
     assert store.has_unresolved_insight_state() is True
     store.clear_insight_start_pending(*args)
     assert store.insight_start_pending(*args) is False
@@ -134,6 +135,7 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
     )
     store.save_insight_run(*args, checkpoint)
     assert store.insight_start_pending(*args) is False
+    assert store.insight_start_outcome(*args)["status"] == "started"
     assert store.has_unresolved_insight_state() is False
     store.save_result(*args, result)
     assert store.invocation(*args) == invocation
@@ -161,6 +163,40 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
     )
     with pytest.raises(ContractError, match="current contract"):
         different_contract.result(*args)
+
+
+def test_unknown_insight_start_requires_stable_no_run_before_one_retry(
+    tmp_path: Path,
+) -> None:
+    store = VersionCheckpointStore(
+        tmp_path / "stages",
+        "sha256:" + "d" * 64,
+    )
+    args = (
+        "finance-agent",
+        "issue-019",
+        "19",
+        "sha256:" + "a" * 64,
+    )
+    store.save_operation_ids(*args, ("c" * 32,))
+    store.mark_insight_start_pending(*args)
+    store.record_insight_start_outcome(*args, status="unknown")
+    store.save_result(
+        *args,
+        VersionResult(
+            logical_version="issue-019",
+            foundry_version="19",
+            status="inconclusive",
+            error_code="insight_run_start_unresolved",
+        ),
+    )
+    store.record_insight_start_outcome(*args, status="explicit_no_run")
+    store.prepare_insight_start_retry(*args)
+    store.mark_insight_start_pending(*args)
+
+    assert store.insight_start_outcome(*args)["status"] == "pending"
+    assert store.insight_start_outcome(*args)["retry_count"] == 1
+    assert list((tmp_path / "stages" / "insight-start-history").rglob("*.json"))
 
 
 def test_profile_run_lock_rejects_overlap(tmp_path: Path) -> None:

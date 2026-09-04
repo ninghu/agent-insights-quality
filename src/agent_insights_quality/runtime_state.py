@@ -504,7 +504,133 @@ class VersionCheckpointStore:
             foundry_version,
             content_digest,
         )
+        prior = value.get("insight_start_outcome")
+        retry_count = (
+            int(prior.get("retry_count") or 0)
+            if isinstance(prior, dict)
+            else 0
+        )
+        if isinstance(prior, dict) and prior.get("status") == "explicit_no_run":
+            if retry_count >= 1:
+                raise ContractError("Agent Insights start retry is exhausted")
+            retry_count += 1
+        elif isinstance(prior, dict) and prior.get("status") in {
+            "pending",
+            "unknown",
+            "started",
+        }:
+            raise ContractError("Agent Insights start outcome is unresolved")
+        intent = {
+            "status": "pending",
+            "retry_count": retry_count,
+            "operation_ids_digest": content_hash(value.get("operation_ids") or []),
+            "intent_digest": "",
+        }
+        intent["intent_digest"] = content_hash(
+            {key: item for key, item in intent.items() if key != "intent_digest"}
+        )
+        value["insight_start_outcome"] = intent
         value["insight_start_pending"] = True
+        self._write(agent_name, logical_version, value)
+
+    def insight_start_outcome(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> dict:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        outcome = value.get("insight_start_outcome")
+        if isinstance(outcome, dict):
+            expected = content_hash(
+                {key: item for key, item in outcome.items() if key != "intent_digest"}
+            )
+            if outcome.get("intent_digest") != expected:
+                raise ContractError("Agent Insights start intent digest is stale")
+            return dict(outcome)
+        if value.get("insight_start_pending") is True:
+            return {
+                "status": "pending",
+                "retry_count": 0,
+                "operation_ids_digest": content_hash(
+                    value.get("operation_ids") or []
+                ),
+                "intent_digest": None,
+            }
+        return {"status": "none", "retry_count": 0}
+
+    def record_insight_start_outcome(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+        *,
+        status: str,
+    ) -> None:
+        if status not in {"unknown", "explicit_no_run"}:
+            raise ContractError("Agent Insights start outcome is invalid")
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        prior = self.insight_start_outcome(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        outcome = {
+            "status": status,
+            "retry_count": int(prior.get("retry_count") or 0),
+            "operation_ids_digest": content_hash(value.get("operation_ids") or []),
+            "intent_digest": "",
+        }
+        outcome["intent_digest"] = content_hash(
+            {key: item for key, item in outcome.items() if key != "intent_digest"}
+        )
+        value["insight_start_outcome"] = outcome
+        value["insight_start_pending"] = status == "unknown"
+        self._write(agent_name, logical_version, value)
+
+    def prepare_insight_start_retry(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+    ) -> None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        outcome = value.get("insight_start_outcome")
+        if (
+            not isinstance(outcome, dict)
+            or outcome.get("status") != "explicit_no_run"
+            or "result" not in value
+        ):
+            raise ContractError("Agent Insights start retry proof is incomplete")
+        digest = content_hash(value)
+        immutable_json(
+            self._root
+            / "insight-start-history"
+            / agent_name
+            / logical_version
+            / f"{digest.removeprefix('sha256:')}.json",
+            value,
+        )
+        value.pop("result")
         self._write(agent_name, logical_version, value)
 
     def clear_insight_start_pending(
@@ -538,6 +664,23 @@ class VersionCheckpointStore:
             content_digest,
         )
         value["insight_run"] = asdict(checkpoint)
+        prior = self.insight_start_outcome(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        outcome = {
+            "status": "started",
+            "retry_count": int(prior.get("retry_count") or 0),
+            "operation_ids_digest": content_hash(value.get("operation_ids") or []),
+            "provider_reference_digest": content_hash(checkpoint.run_id),
+            "intent_digest": "",
+        }
+        outcome["intent_digest"] = content_hash(
+            {key: item for key, item in outcome.items() if key != "intent_digest"}
+        )
+        value["insight_start_outcome"] = outcome
         value.pop("insight_start_pending", None)
         self._write(agent_name, logical_version, value)
 

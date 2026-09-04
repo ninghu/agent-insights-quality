@@ -55,6 +55,10 @@ license: MIT
    operation, and writes supplemental ancestry only for results that failed solely because a card
    linked fewer than catalog `minimum_traces`. Every linked operation must be unique, exact-bound,
    in-scope, and claim-relevant. Composition rejects a missing or partial batch.
+   An unresolved Agent Insights start remains pending. Resume the same whole-Agent lane: it performs
+   read-only exact-bound run discovery, attaches exactly one provider match, or stays fenced on
+   ambiguity. Only repeated stable absence around the clean-window wait permits one Insight-start
+   retry from saved endpoint evidence; never repeat endpoint traffic.
 7. Start up to five visible Copilot assessment sub sessions, one per Agent and its five packages.
    Assess each baseline and four issues with GPT-5.6 Sol using the repository assessment prompt. Use
    independent `endpoint_evidence`; never assign `insight_engine` unless

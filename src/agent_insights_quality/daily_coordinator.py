@@ -2592,16 +2592,28 @@ def _lane_recovery_state(
     maximum: int,
 ) -> dict[str, Any] | None:
     reason_code = result.baseline.error_code
+    if reason_code is None:
+        reason_code = next(
+            (
+                item.error_code
+                for item in result.issues
+                if item.error_code == "insight_run_start_unresolved"
+            ),
+            None,
+        )
     if reason_code not in {
         "baseline_evidence_incomplete",
         "baseline_recovery_prepare_failed",
         "baseline_recovery_blocked",
         "baseline_recovery_exhausted",
+        "insight_run_start_unresolved",
     }:
         return None
     claimed = checkpoint_store.agent_recovery_count(agent_name, maximum)
     remaining = maximum - claimed
-    if (
+    if reason_code == "insight_run_start_unresolved":
+        status = "recovery_pending"
+    elif (
         reason_code == "baseline_recovery_blocked"
         or checkpoint_store.has_unresolved_insight_state()
     ):

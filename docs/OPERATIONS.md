@@ -445,6 +445,13 @@ preserves original checkpoints and receipts, writes immutable supplemental resul
 ancestry only where the outcome changes, and leaves semantic card correctness for normal assessment.
 Composition rejects a missing or partial 20-issue batch receipt.
 
+Agent Insights starts persist an exact-bound intent before POST and classify the outcome as started,
+explicit no-run, or unknown. A resume with an unknown legacy/current intent first performs read-only
+run discovery against the exact Agent version, operation set, and evidence window. One match attaches
+the provider reference; multiple matches remain fenced. Only two stable absence reads separated by
+the reviewed clean-window wait prove explicit no-run, after which one Insight-start retry may reuse
+the existing endpoint evidence. Endpoint traffic is never repeated for this reconciliation.
+
 Each lane holds an Agent-specific OS lock, resumes only its exact digest-bound checkpoints, and may
 claim at most three transient incomplete recoveries across all resumes. Exact fresh session, response,
 and operation identities are enforced. Completion writes one immutable receipt; stale workers are

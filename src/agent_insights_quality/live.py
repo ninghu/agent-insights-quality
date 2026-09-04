@@ -1423,6 +1423,7 @@ union traces, dependencies, requests
         operation_ids: tuple[str, ...],
         lookback_hours: float,
         start_margin_seconds: int,
+        intent_reference: str,
         persist: Callable[[InsightRunCheckpoint], None],
     ) -> InsightRunCheckpoint:
         earliest, _ = self._operation_time_bounds(
@@ -1440,6 +1441,7 @@ union traces, dependencies, requests
             monitor_id=monitor_id,
             lookback_hours=lookback_hours,
             start_deadline=start_deadline,
+            intent_reference=intent_reference,
         )
         persist(checkpoint)
         return checkpoint
@@ -1496,12 +1498,66 @@ union traces, dependencies, requests
             self._assert_run_contains_operations(result, earliest, latest)
         return result
 
+    def discover_insights_run(
+        self,
+        *,
+        agent_name: str,
+        monitor_id: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+    ) -> tuple[str, InsightRunCheckpoint | None]:
+        if not operation_ids:
+            return "ambiguous", None
+        earliest, latest = self._operation_time_bounds(
+            agent_name=agent_name,
+            foundry_version=foundry_version,
+            operation_ids=operation_ids,
+        )
+        payload = self._json_request(
+            "GET",
+            self._insights_url(
+                f"/agent_insight_monitors/{urllib.parse.quote(monitor_id, safe='')}"
+                "/runs?limit=100"
+            ),
+        )
+        values = payload.get("data") or payload.get("value") or payload.get("items") or []
+        if not isinstance(values, list):
+            return "ambiguous", None
+        candidates: list[str] = []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            run_id = str(item.get("id") or "")
+            window_start = str(item.get("window_start") or item.get("windowStart") or "")
+            window_end = str(item.get("window_end") or item.get("windowEnd") or "")
+            if not run_id or not window_start or not window_end:
+                continue
+            try:
+                start = datetime.fromisoformat(window_start.replace("Z", "+00:00"))
+                end = datetime.fromisoformat(window_end.replace("Z", "+00:00"))
+            except ValueError:
+                return "ambiguous", None
+            if start.astimezone(UTC) <= earliest and end.astimezone(UTC) >= latest:
+                candidates.append(run_id)
+        if not candidates:
+            return "absent", None
+        if len(set(candidates)) != 1:
+            return "ambiguous", None
+        return (
+            "matched",
+            InsightRunCheckpoint(
+                run_id=candidates[0],
+                before_revisions={},
+            ),
+        )
+
     def _start_insights_once(
         self,
         *,
         monitor_id: str,
         lookback_hours: float,
         start_deadline: datetime | None = None,
+        intent_reference: str | None = None,
     ) -> InsightRunCheckpoint:
         before = self._insight_revisions(monitor_id)
         if start_deadline is not None:
@@ -1524,6 +1580,7 @@ union traces, dependencies, requests
             ),
             {"lookback_hours": service_lookback},
             expected={200, 201, 202},
+            correlation_id=intent_reference,
             timeout_seconds=timeout_seconds,
             request_deadline=start_deadline,
         )

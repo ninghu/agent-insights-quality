@@ -44,7 +44,8 @@
         "baseline_evidence_incomplete",
         "baseline_recovery_prepare_failed",
         "baseline_recovery_blocked",
-        "baseline_recovery_exhausted"
+        "baseline_recovery_exhausted",
+        "insight_run_start_unresolved"
       ]
     },
     "recoveries_claimed": {"type": "integer", "minimum": 0, "maximum": 3},

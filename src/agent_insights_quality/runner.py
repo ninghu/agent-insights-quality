@@ -27,6 +27,7 @@ from agent_insights_quality.util import (
     ContractError,
     InsightWindowExpiredError,
     TraceAssertionActivationError,
+    content_hash,
 )
 from agent_insights_quality.validation_rules import (
     execution_context,
@@ -239,6 +240,7 @@ class RuntimePort(Protocol):
         operation_ids: tuple[str, ...],
         lookback_hours: float,
         start_margin_seconds: int,
+        intent_reference: str,
         persist: Callable[[InsightRunCheckpoint], None],
     ) -> InsightRunCheckpoint: ...
 
@@ -252,6 +254,15 @@ class RuntimePort(Protocol):
         checkpoint: InsightRunCheckpoint,
         validate_window: bool = True,
     ) -> InsightRunEvidence: ...
+
+    def discover_insights_run(
+        self,
+        *,
+        agent_name: str,
+        monitor_id: str,
+        foundry_version: str,
+        operation_ids: tuple[str, ...],
+    ) -> tuple[str, InsightRunCheckpoint | None]: ...
 
 
 def execute(
@@ -849,8 +860,6 @@ def _execute_version_with_recovery(
             if error.code.startswith(
                 "invocation_failed"
             ) or error.code.startswith(
-                "insight_run_start_failed"
-            ) or error.code.startswith(
                 "insight_run_terminal_failed"
             ) or error.code == "insight_window_expired":
                 runtime.wait_for_clean_window(
@@ -882,7 +891,7 @@ def _recoverable(error: _VersionStageError) -> bool:
     if error.code == "invocation_failed":
         return "before a response was received" in str(error.cause)
     if error.code == "insight_run_start_failed":
-        return "before a response was received" in str(error.cause)
+        return False
     return error.code.startswith(
         (
             "telemetry_failed",
@@ -1567,6 +1576,19 @@ def _execute_version(
             return
         if checkpoint_store is not None:
             checkpoint_store.mark_insight_start_pending(*checkpoint_args)
+            intent_reference = str(
+                checkpoint_store.insight_start_outcome(*checkpoint_args)[
+                    "intent_digest"
+                ]
+            )
+        else:
+            intent_reference = content_hash(
+                {
+                    "agent_name": agent["name"],
+                    "foundry_version": foundry_version,
+                    "operation_ids": list(operation_ids),
+                }
+            )
         try:
             insight_checkpoint = runtime.start_insights_run(
                 agent_name=agent["name"],
@@ -1575,6 +1597,7 @@ def _execute_version(
                 operation_ids=operation_ids,
                 lookback_hours=lookback_hours,
                 start_margin_seconds=insight_start_margin_seconds,
+                intent_reference=intent_reference,
                 persist=(
                     lambda checkpoint: checkpoint_store.save_insight_run(
                         *checkpoint_args,
@@ -1585,25 +1608,11 @@ def _execute_version(
                 ),
             )
         except InsightWindowExpiredError as error:
-            if (
-                expected is not None
-                and invocation.usable_response_count == invocation.request_count - 1
-                and int(trace_evidence.get("unhandled_error_count") or 0) != 0
-            ):
-                result = _activation_failure_result(
-                    logical_version=logical_version,
-                    foundry_version=foundry_version,
-                    operation_ids=operation_ids,
-                    invocation=invocation,
-                    trace_evidence=trace_evidence,
+            if checkpoint_store is not None:
+                checkpoint_store.record_insight_start_outcome(
+                    *checkpoint_args,
+                    status="explicit_no_run",
                 )
-                if checkpoint_store is not None:
-                    checkpoint_store.save_rejected_result(
-                        *checkpoint_args,
-                        result,
-                        drain_pending=False,
-                    )
-                return result
             if expected is not None:
                 raise _VersionStageError(
                     "issue_activation_failed",
@@ -1614,6 +1623,15 @@ def _execute_version(
                 ) from error
             raise _VersionStageError("insight_run_start_failed", error) from error
         except Exception as error:
+            if checkpoint_store is not None:
+                persisted = checkpoint_store.insight_run(*checkpoint_args)
+                if persisted is not None:
+                    insight_checkpoint = persisted
+                    return
+                checkpoint_store.record_insight_start_outcome(
+                    *checkpoint_args,
+                    status="unknown",
+                )
             raise _VersionStageError("insight_run_start_failed", error) from error
 
     if agent["type"] != "prompt":
@@ -1818,6 +1836,25 @@ def _execute_version(
                 )
                 return result
 
+    if (
+        expected is not None
+        and invocation.usable_response_count == invocation.request_count - 1
+        and int(trace_evidence.get("unhandled_error_count") or 0) != 0
+    ):
+        result = _activation_failure_result(
+            logical_version=logical_version,
+            foundry_version=foundry_version,
+            operation_ids=operation_ids,
+            invocation=invocation,
+            trace_evidence=trace_evidence,
+        )
+        if checkpoint_store is not None:
+            checkpoint_store.save_rejected_result(
+                *checkpoint_args,
+                result,
+                drain_pending=False,
+            )
+        return result
     if expected is not None:
         activation_complete, issue_trace_gap_acceptance = (
             _issue_activation_decision(issue_context, invocation)
@@ -2027,6 +2064,25 @@ def _reconcile_unresolved_insight_start(
         f"{agent['name']}/{logical_version}: reconciling unresolved "
         "Agent Insights start",
     )
+    operation_ids = checkpoint_store.operation_ids(*checkpoint_args) or ()
+    discovery, discovered = runtime.discover_insights_run(
+        agent_name=agent["name"],
+        monitor_id=monitor_id,
+        foundry_version=registry_entry["foundry_version"],
+        operation_ids=operation_ids,
+    )
+    if discovery == "matched" and discovered is not None:
+        checkpoint_store.save_insight_run(*checkpoint_args, discovered)
+        return
+    if discovery != "absent":
+        checkpoint_store.record_insight_start_outcome(
+            *checkpoint_args,
+            status="unknown",
+        )
+        raise _VersionStageError(
+            "insight_run_start_unresolved",
+            ContractError("Agent Insights start discovery is ambiguous"),
+        )
     runtime.wait_for_clean_window(
         agent["name"],
         lookback_hours,
@@ -2034,5 +2090,26 @@ def _reconcile_unresolved_insight_start(
         ingestion_margin_seconds=clean_window_ingestion_margin_seconds,
         max_wait_seconds=clean_window_max_wait_seconds,
     )
-    runtime.reset_monitor(agent["name"], monitor_id)
-    checkpoint_store.clear_insight_start_pending(*checkpoint_args)
+    repeated, discovered = runtime.discover_insights_run(
+        agent_name=agent["name"],
+        monitor_id=monitor_id,
+        foundry_version=registry_entry["foundry_version"],
+        operation_ids=operation_ids,
+    )
+    if repeated == "matched" and discovered is not None:
+        checkpoint_store.save_insight_run(*checkpoint_args, discovered)
+        return
+    if repeated != "absent":
+        checkpoint_store.record_insight_start_outcome(
+            *checkpoint_args,
+            status="unknown",
+        )
+        raise _VersionStageError(
+            "insight_run_start_unresolved",
+            ContractError("Agent Insights start discovery became ambiguous"),
+        )
+    checkpoint_store.record_insight_start_outcome(
+        *checkpoint_args,
+        status="explicit_no_run",
+    )
+    checkpoint_store.prepare_insight_start_retry(*checkpoint_args)
