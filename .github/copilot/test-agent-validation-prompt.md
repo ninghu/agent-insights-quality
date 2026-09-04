@@ -60,7 +60,8 @@ cyclic, duplicate, conflicting, cross-root, or late contradictory spans.
 
 Persist one immutable generation-fenced authority result immediately after deciding it and before
 claiming another. Keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply baseline `5/5`,
-deterministic `5/5` plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
+deterministic `5/5` or the audited first-mature `3/5 + up to 2 trace-only unknown` issue-side
+exception plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
 Complete stable evidence below threshold is `FAIL`; missing, ambiguous, partial, or unstable evidence
 is `INCOMPLETE`. Later failures never discard completed authority results. Retry only missing,
 `INCOMPLETE`, or exact-binding-changed authorities. Final composition requires exact current results

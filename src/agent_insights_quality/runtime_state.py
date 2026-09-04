@@ -246,9 +246,13 @@ class VersionCheckpointStore:
                             TraceAssertionEvidence(
                                 assertion=str(result["assertion"]),
                                 passed=bool(result["passed"]),
+                                evidence_sufficient=bool(
+                                    result.get("evidence_sufficient", True)
+                                ),
                             )
                             for result in item["trace_assertion_results"]
                         ),
+                        error_code=item.get("error_code"),
                     )
                     for item in payload["request_summaries"]
                 ),
@@ -549,6 +553,9 @@ class VersionCheckpointStore:
                 trace_assertions_passed=int(payload["trace_assertions_passed"]),
                 trace_contract_verified=bool(payload["trace_contract_verified"]),
                 trace_behavior_summary=dict(payload["trace_behavior_summary"]),
+                issue_trace_gap_acceptance=payload.get(
+                    "issue_trace_gap_acceptance"
+                ),
                 endpoint_request_summaries=[
                     RequestCompletionEvidence(
                         request_index=int(item["request_index"]),
@@ -580,9 +587,13 @@ class VersionCheckpointStore:
                             TraceAssertionEvidence(
                                 assertion=str(result["assertion"]),
                                 passed=bool(result["passed"]),
+                                evidence_sufficient=bool(
+                                    result.get("evidence_sufficient", True)
+                                ),
                             )
                             for result in item["trace_assertion_results"]
                         ),
+                        error_code=item.get("error_code"),
                     )
                     for item in payload["endpoint_request_summaries"]
                 ],

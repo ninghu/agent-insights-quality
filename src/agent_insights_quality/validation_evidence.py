@@ -10,6 +10,10 @@ from typing import TYPE_CHECKING, Any
 from jsonschema import Draft202012Validator, FormatChecker
 
 from agent_insights_quality.catalogs import load_catalogs
+from agent_insights_quality.validation_trace_gap_policy import (
+    deterministic_issue_trace_gap_acceptance,
+    issue_side_decided,
+)
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
@@ -448,10 +452,15 @@ def scenario_evidence_complete(
     complete_count: int,
     paired_complete_count: int,
     observation_count: int,
+    issue_trace_gap_accepted: bool = False,
     paired_trace_gap_accepted: bool = False,
 ) -> bool:
     issue_decided = complete_count == n or (
-        authority_kind == "issue" and observation_count >= k
+        authority_kind == "issue"
+        and (
+            observation_count >= k
+            or issue_trace_gap_accepted
+        )
     )
     control_decided = (
         authority_kind == "baseline"
@@ -479,12 +488,18 @@ def paired_trace_gap_attempt_index(
     ]
     if (
         authority_kind != "issue"
-        or _reviewed_required_surfaces(
+        or "trace"
+        not in _reviewed_required_surfaces(
             authority_id,
             str(scenario["scenario_id"]),
         )
-        != {"trace"}
-        or scenario["observation_count"] < k
+        or not issue_side_decided(
+            observation_count=int(scenario["observation_count"]),
+            k=k,
+            trace_gap_acceptance=scenario.get(
+                "issue_trace_gap_acceptance"
+            ),
+        )
         or scenario["paired_complete_count"] != n - 1
         or scenario["paired_observation_count"] != 0
         or len(incomplete_controls) != 1
@@ -493,7 +508,7 @@ def paired_trace_gap_attempt_index(
     attempt = incomplete_controls[0]
     steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
     if (
-        attempt["error_code"] is None
+        attempt["error_code"] != "missing_evidence"
         or any(
             step["endpoint_pass"] is not True
             or step["identity_pass"] is not True
@@ -506,6 +521,17 @@ def paired_trace_gap_attempt_index(
         or any(
             step["complete"] is not True
             and step.get("trace_evidence_complete") is True
+            for step in steps
+        )
+        or any(
+            (
+                step["semantic_evidence_complete"] is True
+                and step["semantic_pass"] is not True
+            )
+            or (
+                step["trace_evidence_complete"] is True
+                and step["trace_pass"] is not True
+            )
             for step in steps
         )
     ):
@@ -603,6 +629,16 @@ def _validate_scenario(
     paired_observation_count = sum(
         attempt["observation"] is True for attempt in v0_attempts
     )
+    issue_acceptance = scenario.get("issue_trace_gap_acceptance")
+    expected_issue_acceptance = _issue_trace_gap_acceptance(
+        authority_kind=authority_kind,
+        authority_id=authority_id,
+        scenario=scenario,
+    )
+    if issue_acceptance != expected_issue_acceptance:
+        raise ContractError(
+            f"{authority_id} issue trace gap acceptance is invalid"
+        )
     acceptance = scenario.get("paired_trace_gap_acceptance")
     accepted_attempt_index = paired_trace_gap_attempt_index(
         authority_kind=authority_kind,
@@ -625,6 +661,7 @@ def _validate_scenario(
         complete_count=complete_count,
         paired_complete_count=paired_complete_count,
         observation_count=observation_count,
+        issue_trace_gap_accepted=issue_acceptance is not None,
         paired_trace_gap_accepted=acceptance is not None,
     )
     if (
@@ -642,13 +679,87 @@ def _validate_scenario(
         )
     ):
         raise ContractError(f"{authority_id} scenario complete count is invalid")
-    expected_pass = scenario["evidence_complete"] and observation_count >= k and (
-        authority_kind == "baseline" or paired_observation_count == 0
+    expected_pass = (
+        scenario["evidence_complete"]
+        and issue_side_decided(
+            observation_count=observation_count,
+            k=k,
+            trace_gap_acceptance=issue_acceptance,
+        )
+        and (
+            authority_kind == "baseline"
+            or paired_observation_count == 0
+        )
     )
     if scenario["pass"] is not expected_pass:
         raise ContractError(
             f"{authority_id} mechanical evidence result is invalid"
         )
+
+
+def _issue_trace_gap_acceptance(
+    *,
+    authority_kind: str,
+    authority_id: str,
+    scenario: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    return deterministic_issue_trace_gap_acceptance(
+        authority_kind=authority_kind,
+        validation_mode=str(scenario["validation_mode"]),
+        n=int(scenario["n"]),
+        k=int(scenario["k"]),
+        required_surfaces=sorted(
+            _reviewed_required_surfaces(
+                authority_id,
+                str(scenario["scenario_id"]),
+            )
+        ),
+        attempts=[
+            _trace_gap_attempt_payload(attempt)
+            for attempt in scenario["issue_attempts"]
+        ],
+    )
+
+
+def _trace_gap_attempt_payload(
+    attempt: Mapping[str, Any],
+) -> dict[str, Any]:
+    steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
+    return {
+        "index": int(attempt["index"]),
+        "complete": attempt["complete"],
+        "observation": attempt["observation"],
+        "error_code": attempt["error_code"],
+        "endpoint_complete": all(
+            step["endpoint_pass"] is True for step in steps
+        ),
+        "identity_complete": all(
+            step["identity_pass"] is True for step in steps
+        ),
+        "semantic_evidence_complete": all(
+            step.get("semantic_evidence_complete", step["complete"])
+            is True
+            for step in steps
+        ),
+        "trace_evidence_complete": all(
+            step.get("trace_evidence_complete", step["complete"])
+            is True
+            for step in steps
+        ),
+        "assertions_contradicted": any(
+            (
+                step.get("semantic_evidence_complete", step["complete"])
+                is True
+                and step["semantic_pass"] is not True
+            )
+            or (
+                step.get("trace_evidence_complete", step["complete"])
+                is True
+                and step["trace_pass"] is not True
+            )
+            for step in steps
+        ),
+    }
 
 
 def _validate_attempts(

@@ -22,6 +22,9 @@ For each step:
 - Treat an absent required operation as definitive only when the package independently proves that
   the response-bound descendant span tree is complete. A partial tree cannot prove absence, even
   when the rows that are present are internally consistent.
+- For a trace-only unknown, keep every semantic assertion evidence-sufficient, mark only the missing
+  trace assertions insufficient, use attempt error `missing_evidence`, and never mark the attempt as
+  an observation. A sufficient failed semantic or trace assertion is a contradiction, not an unknown.
 
 For each attempt, independently evaluate the reviewed healthy or defect predicate and set
 `observation`. For a baseline, `observation` means the reviewed healthy behavior was demonstrated.

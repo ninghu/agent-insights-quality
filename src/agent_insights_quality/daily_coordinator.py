@@ -1432,6 +1432,9 @@ def _version_result(value: Mapping[str, Any]) -> VersionResult:
         trace_assertions_passed=int(value.get("trace_assertions_passed") or 0),
         trace_contract_verified=bool(value.get("trace_contract_verified")),
         trace_behavior_summary=dict(value.get("trace_behavior_summary") or {}),
+        issue_trace_gap_acceptance=value.get(
+            "issue_trace_gap_acceptance"
+        ),
         endpoint_request_summaries=[
             RequestCompletionEvidence(
                 request_index=int(item["request_index"]),
@@ -1457,9 +1460,13 @@ def _version_result(value: Mapping[str, Any]) -> VersionResult:
                     TraceAssertionEvidence(
                         assertion=str(result["assertion"]),
                         passed=bool(result["passed"]),
+                        evidence_sufficient=bool(
+                            result.get("evidence_sufficient", True)
+                        ),
                     )
                     for result in item["trace_assertion_results"]
                 ),
+                error_code=item.get("error_code"),
             )
             for item in value.get("endpoint_request_summaries", [])
         ],

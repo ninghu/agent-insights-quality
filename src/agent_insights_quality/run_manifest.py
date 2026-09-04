@@ -19,6 +19,9 @@ from agent_insights_quality.validation_rules import (
     execution_context,
     issue_observation_context,
 )
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_issue_side_decision,
+)
 
 OFFICIAL_DELIVERY = "official"
 TEST_EMAIL_ONLY_DELIVERY = "test_email_only"
@@ -142,6 +145,7 @@ def _result_payload(result: Any) -> dict[str, Any]:
         "trace_assertions_passed": result.trace_assertions_passed,
         "trace_contract_verified": result.trace_contract_verified,
         "trace_behavior_summary": result.trace_behavior_summary,
+        "issue_trace_gap_acceptance": result.issue_trace_gap_acceptance,
         "endpoint_request_summaries": [
             request_completion_payload(item)
             for item in result.endpoint_request_summaries
@@ -256,6 +260,30 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                     f"{agent['name']}/{logical_version} manifest execution "
                     "contract is not current"
                 )
+            if logical_version == "v0":
+                if version.get("issue_trace_gap_acceptance") is not None:
+                    raise ContractError(
+                        f"{agent['name']}/v0 cannot accept an issue trace gap"
+                    )
+                continue
+            observations = [
+                item
+                for item in version["endpoint_request_summaries"]
+                if item["activation_gate"] is True
+            ]
+            _, acceptance = daily_issue_side_decision(
+                validation_mode=str(version["validation_mode"]),
+                n=int(version["n"]),
+                k=int(version["k"]),
+                required_surfaces=version["required_surfaces"],
+                summaries=observations,
+                identity_verified=version["trace_contract_verified"] is True,
+            )
+            if version.get("issue_trace_gap_acceptance") != acceptance:
+                raise ContractError(
+                    f"{agent['name']}/{logical_version} issue trace gap "
+                    "acceptance is not current"
+                )
     actual_selection = {
         agent["name"]: [issue["issue_id"] for issue in agent["issues"]]
         for agent in manifest["agents"]
@@ -320,6 +348,12 @@ def _validate_version_evidence(value: dict[str, Any], label: str) -> None:
             or sum(result["passed"] for result in trace_results)
             != item["trace_assertions_passed"]
             or item["trace_assertions_passed"] > item["trace_assertion_count"]
+            or any(
+                result.get("evidence_sufficient") not in {True, False}
+                for result in trace_results
+            )
+            or item.get("error_code")
+            not in {None, "missing_evidence", "assertion_failed"}
         ):
             raise ContractError(
                 f"{label} request trace assertion evidence is inconsistent"

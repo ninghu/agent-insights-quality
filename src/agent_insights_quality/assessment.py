@@ -18,6 +18,9 @@ from agent_insights_quality.scoring import (
     ATTRIBUTABLE_FINDING_TYPES,
     scoring_fields_pass,
 )
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_issue_side_decision,
+)
 from agent_insights_quality.util import ROOT, ContractError, atomic_json, content_hash, read_json
 
 
@@ -189,6 +192,9 @@ def rehydrate_packages(
                 "evidence_reference": value.get("evidence_reference"),
                 "runtime_status": value["status"],
                 "error_code": value.get("error_code"),
+                "issue_trace_gap_acceptance": value.get(
+                    "issue_trace_gap_acceptance"
+                ),
                 "operation_count": len(value.get("operation_ids") or []),
                 "endpoint_evidence": issue_endpoint_evidence,
                 "full_request_trace_proof": issue_full_trace_proof,
@@ -275,6 +281,9 @@ def _checkpoint_result(
             trace_behavior_summary=dict(
                 value.get("trace_behavior_summary") or {}
             ),
+            issue_trace_gap_acceptance=value.get(
+                "issue_trace_gap_acceptance"
+            ),
             endpoint_request_summaries=[
                 RequestCompletionEvidence(
                     request_index=int(item["request_index"]),
@@ -304,9 +313,13 @@ def _checkpoint_result(
                         TraceAssertionEvidence(
                             assertion=str(result["assertion"]),
                             passed=bool(result["passed"]),
+                            evidence_sufficient=bool(
+                                result.get("evidence_sufficient", True)
+                            ),
                         )
                         for result in item["trace_assertion_results"]
                     ),
+                    error_code=item.get("error_code"),
                 )
                 for item in value.get("endpoint_request_summaries", [])
             ],
@@ -329,6 +342,8 @@ def _checkpoint_result(
         or result.trace_assertions_passed != value["trace_assertions_passed"]
         or result.trace_contract_verified != value["trace_contract_verified"]
         or result.trace_behavior_summary != value["trace_behavior_summary"]
+        or result.issue_trace_gap_acceptance
+        != value.get("issue_trace_gap_acceptance")
         or [
             request_completion_payload(item)
             for item in result.endpoint_request_summaries
@@ -474,11 +489,14 @@ def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
                 and isinstance(result.get("assertion"), str)
                 and result.get("assertion")
                 and isinstance(result.get("passed"), bool)
+                and isinstance(result.get("evidence_sufficient"), bool)
                 for result in trace_results
             )
             or len(trace_results) != summary.get("trace_assertion_count")
             or sum(result["passed"] for result in trace_results)
             != summary.get("trace_assertions_passed")
+            or summary.get("error_code")
+            not in {None, "missing_evidence", "assertion_failed"}
         ):
             return False
         semantic_count += summary["semantic_assertion_count"]
@@ -505,33 +523,22 @@ def _issue_activation_complete(package: dict[str, Any]) -> bool:
         if summary.get("activation_gate") is True
     ]
     required_surfaces = set(package.get("required_surfaces") or [])
+    decided, acceptance = daily_issue_side_decision(
+        validation_mode=str(package.get("validation_mode") or ""),
+        n=int(package.get("n") or 0),
+        k=int(package.get("k") or 0),
+        required_surfaces=sorted(required_surfaces),
+        summaries=gates,
+        identity_verified=endpoint.get("trace_contract_verified") is True,
+    )
     return (
         package.get("source_integrity", {}).get("verified") is True
         and isinstance(
             package.get("source_integrity", {}).get("contract_digest"),
             str,
         )
-        and len(gates) == package.get("n")
-        and sum(
-            (
-                "semantic" not in required_surfaces
-                or (
-                    int(summary.get("semantic_assertion_count") or 0) > 0
-                    and summary.get("semantic_assertions_passed")
-                    == summary.get("semantic_assertion_count")
-                )
-            )
-            and (
-                "trace" not in required_surfaces
-                or (
-                    int(summary.get("trace_assertion_count") or 0) > 0
-                    and summary.get("trace_assertions_passed")
-                    == summary.get("trace_assertion_count")
-                )
-            )
-            for summary in gates
-        )
-        >= package.get("k", 0)
+        and decided
+        and package.get("issue_trace_gap_acceptance") == acceptance
     )
 
 

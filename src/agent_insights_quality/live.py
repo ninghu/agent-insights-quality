@@ -1873,6 +1873,7 @@ union withsource=telemetry_type traces, dependencies, requests
         on_first_pass: Callable[[], None],
         requests: list[dict[str, Any]] | None = None,
         minimum_passing_trace_observations: int | None = None,
+        allow_deterministic_trace_gap: bool = False,
         on_stable: Callable[[dict[str, Any]], None] | None = None,
         on_stable_output_messages: (
             Callable[[tuple[tuple[bool, bool], ...]], None] | None
@@ -1897,6 +1898,7 @@ union withsource=telemetry_type traces, dependencies, requests
             minimum_passing_trace_observations=(
                 minimum_passing_trace_observations
             ),
+            allow_deterministic_trace_gap=allow_deterministic_trace_gap,
             on_stable=on_stable,
             on_stable_output_messages=on_stable_output_messages,
         )
@@ -1928,6 +1930,7 @@ union withsource=telemetry_type traces, dependencies, requests
         ) = None,
         allow_shared_operations: bool = False,
         minimum_passing_trace_observations: int | None = None,
+        allow_deterministic_trace_gap: bool = False,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
         if poll_seconds is None:
             poll_seconds = TRACE_ASSERTION_POLL_SECONDS
@@ -2090,15 +2093,23 @@ union withsource=telemetry_type traces, dependencies, requests
                         for assertion in request_results
                     )
                     if minimum_passing_trace_observations is None
-                    else sum(
-                        bool(last_results[index])
-                        and all(
-                            assertion.passed
-                            for assertion in last_results[index]
+                    else (
+                        _deterministic_trace_gap_batch_passes(
+                            last_results,
+                            observation_indexes,
+                            minimum_passing_trace_observations,
                         )
-                        for index in observation_indexes
+                        if allow_deterministic_trace_gap
+                        else sum(
+                            bool(last_results[index])
+                            and all(
+                                assertion.passed
+                                for assertion in last_results[index]
+                            )
+                            for index in observation_indexes
+                        )
+                        >= minimum_passing_trace_observations
                     )
-                    >= minimum_passing_trace_observations
                 )
                 signature = _trace_assertion_stability_signature(
                     rows,
@@ -3638,7 +3649,7 @@ def _trace_assertion_stability_signature(
     results: tuple[tuple[TraceAssertionEvidence, ...], ...],
 ) -> tuple[
     tuple[tuple[str, str], ...],
-    tuple[tuple[tuple[str, bool], ...], ...],
+    tuple[tuple[tuple[str, bool, bool], ...], ...],
     tuple[str, ...],
 ]:
     correlation = tuple(
@@ -3653,7 +3664,14 @@ def _trace_assertion_stability_signature(
         )
     )
     assertion_results = tuple(
-        tuple((assertion.assertion, assertion.passed) for assertion in request_results)
+        tuple(
+            (
+                assertion.assertion,
+                assertion.passed,
+                assertion.evidence_sufficient,
+            )
+            for assertion in request_results
+        )
         for request_results in results
     )
     return correlation, assertion_results, _trace_rows_signature(
@@ -4247,9 +4265,74 @@ def _trace_assertion_result(
             TraceAssertionEvidence(
                 assertion=str(assertion["name"]),
                 passed=bool(passed),
+                evidence_sufficient=bool(
+                    passed
+                    or _failed_trace_assertion_is_decisive(
+                        kind=kind,
+                        rows=rows,
+                        tools=tools,
+                    )
+                ),
             )
         )
     return tuple(results)
+
+
+def _failed_trace_assertion_is_decisive(
+    *,
+    kind: str,
+    rows: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> bool:
+    any_tool = any(
+        row.get("operation_name") == "execute_tool" for row in rows
+    )
+    if kind in {
+        "tool_call_count",
+        "tool_argument_presence",
+        "scope_relation",
+        "tool_result_class",
+        "retry_sequence",
+    }:
+        return bool(tools or any_tool)
+    if kind == "terminal_claim_relation":
+        return bool(_terminal_text(rows)) and bool(tools or any_tool)
+    if kind == "payload_multiplicity":
+        return bool(tools or any_tool or _terminal_text(rows))
+    if kind == "span_relation":
+        return any_tool
+    if kind == "operation_sequence":
+        return bool(_terminal_text(rows))
+    return False
+
+
+def _deterministic_trace_gap_batch_passes(
+    results: tuple[tuple[TraceAssertionEvidence, ...], ...],
+    observation_indexes: list[int],
+    minimum_observations: int,
+) -> bool:
+    passed = 0
+    unknown = 0
+    for index in observation_indexes:
+        assertions = results[index]
+        if assertions and all(assertion.passed for assertion in assertions):
+            passed += 1
+            continue
+        if assertions and all(
+            assertion.passed or not assertion.evidence_sufficient
+            for assertion in assertions
+        ) and any(
+            not assertion.evidence_sufficient
+            for assertion in assertions
+        ):
+            unknown += 1
+            continue
+        return False
+    return passed == len(observation_indexes) or (
+        passed >= minimum_observations
+        and 0 < unknown <= 2
+        and passed + unknown == len(observation_indexes)
+    )
 
 
 def _usable_response(response: dict[str, Any], expected_status: int) -> bool:

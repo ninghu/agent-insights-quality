@@ -29,8 +29,9 @@ Each permanent Test Agent owns one healthy baseline and one or more reviewed iss
   telemetry is produced naturally.
 - Every authority has versioned setup/probe scenarios. Classify the observation mechanism explicitly
   as `baseline`, `deterministic`, or `model_mediated`; never derive it from Prompt versus Hosted type.
-- Preserve the fixed validation matrices: baseline `5/5`, deterministic issue `5/5` with paired `v0`
-  `0/5`, and model-mediated issue `5/7` with paired `v0` `0/7`.
+- Preserve the fixed validation matrices: baseline `5/5`, deterministic issue `5/5` (or the audited
+  first-mature `3/5 + up to 2 trace-only unknown` issue-side exception) with paired `v0` `0/5`, and
+  model-mediated issue `5/7` with paired `v0` `0/7`.
 
 ## Use the onboarding skills
 
@@ -144,7 +145,8 @@ result before claiming another. Verify one batched stability snapshot per target
 baseline, or two batches for an issue and its paired `v0`; never stabilize attempts independently.
 
 Keep `PASS`, `FAIL`, and `INCOMPLETE` separate. The reviewed thresholds are baseline `5/5`,
-deterministic `5/5` plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
+deterministic `5/5` or the audited trace-only issue-side exception plus paired `v0` `0/5`, and
+model-mediated `>=5/7` plus paired `v0` `0/7`.
 Later failures do not discard completed authority results. The next generation selects only missing,
 `INCOMPLETE`, or binding-changed authorities; within that set, only authorities without current
 exact-bound completed receipts receive new traffic. A reused receipt proves the

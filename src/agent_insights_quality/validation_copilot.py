@@ -18,6 +18,10 @@ from agent_insights_quality.util import (
     read_json,
 )
 from agent_insights_quality.validation_assignments import verification_assignment
+from agent_insights_quality.validation_trace_gap_policy import (
+    deterministic_issue_trace_gap_acceptance,
+    issue_side_decided,
+)
 from agent_insights_quality.validation_evidence import (
     attempt_observation,
     digest_without_field,
@@ -744,6 +748,16 @@ def authority_evidence_from_evaluation(
         paired_observation_count = sum(
             item["observation"] is True for item in v0_attempts
         )
+        issue_trace_gap_acceptance = _issue_trace_gap_acceptance(
+            authority=authority,
+            rule=rule,
+            issue_attempts=issue_attempts,
+        )
+        issue_decided = issue_side_decided(
+            observation_count=observation_count,
+            k=k,
+            trace_gap_acceptance=issue_trace_gap_acceptance,
+        )
         trace_gap_acceptance = _paired_trace_gap_acceptance(
             authority=authority,
             rule=rule,
@@ -751,6 +765,7 @@ def authority_evidence_from_evaluation(
             issue_attempts=issue_attempts,
             v0_attempts=v0_attempts,
             history_digest=paired_trace_gap_history_digest,
+            issue_side_decided=issue_decided,
         )
         evidence_complete = scenario_evidence_complete(
             authority_kind=authority.authority_kind,
@@ -759,6 +774,7 @@ def authority_evidence_from_evaluation(
             complete_count=complete_count,
             paired_complete_count=paired_complete_count,
             observation_count=observation_count,
+            issue_trace_gap_accepted=issue_trace_gap_acceptance is not None,
             paired_trace_gap_accepted=trace_gap_acceptance is not None,
         )
         scenario = {
@@ -773,7 +789,7 @@ def authority_evidence_from_evaluation(
                 "paired_observation_count": paired_observation_count,
                 "evidence_complete": evidence_complete,
                 "pass": evidence_complete
-                and observation_count >= k
+                and issue_decided
                 and (
                     authority.authority_kind == "baseline"
                     or paired_observation_count == 0
@@ -781,6 +797,8 @@ def authority_evidence_from_evaluation(
                 "issue_attempts": issue_attempts,
                 "v0_attempts": v0_attempts,
             }
+        if issue_trace_gap_acceptance is not None:
+            scenario["issue_trace_gap_acceptance"] = issue_trace_gap_acceptance
         if trace_gap_acceptance is not None:
             scenario["paired_trace_gap_acceptance"] = trace_gap_acceptance
         scenarios.append(scenario)
@@ -1323,6 +1341,7 @@ def _paired_trace_gap_acceptance(
     issue_attempts: Sequence[Mapping[str, Any]],
     v0_attempts: Sequence[Mapping[str, Any]],
     history_digest: str | None,
+    issue_side_decided: bool | None = None,
 ) -> dict[str, Any] | None:
     predicate = rule["defect_predicate"]
     incomplete = [
@@ -1338,8 +1357,15 @@ def _paired_trace_gap_acceptance(
         history_digest is None
         or authority.authority_kind != "issue"
         or "trace" not in set(predicate.get("required_surfaces", []))
-        or sum(item["observation"] is True for item in issue_attempts)
-        < int(rule["k"])
+        or (
+            issue_side_decided
+            if issue_side_decided is not None
+            else sum(
+                item["observation"] is True for item in issue_attempts
+            )
+            >= int(rule["k"])
+        )
+        is not True
         or sum(item["complete"] is True for item in v0_attempts)
         != int(rule["n"]) - 1
         or any(item["observation"] is True for item in v0_attempts)
@@ -1355,7 +1381,7 @@ def _paired_trace_gap_acceptance(
             for step in steps
         )
         or evaluation["evidence_sufficient"] is not False
-        or evaluation["error_code"] is None
+        or evaluation["error_code"] != "missing_evidence"
     ):
         return None
     trace_gap = False
@@ -1363,6 +1389,13 @@ def _paired_trace_gap_acceptance(
         if any(
             assertion["evidence_sufficient"] is not True
             for assertion in step["semantic_assertions"]
+        ) or any(
+            assertion["evidence_sufficient"] is True
+            and assertion["passed"] is not True
+            for assertion in [
+                *step["semantic_assertions"],
+                *step["trace_assertions"],
+            ]
         ):
             return None
         missing_trace = any(
@@ -1378,6 +1411,67 @@ def _paired_trace_gap_acceptance(
         "policy": "single_paired_trace_gap_after_fresh_verify_v1",
         "attempt_index": attempt["index"],
         "history_digest": history_digest,
+    }
+
+
+def _issue_trace_gap_acceptance(
+    *,
+    authority: AuthoritySpec,
+    rule: Mapping[str, Any],
+    issue_attempts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    required_surfaces = rule["defect_predicate"].get(
+        "required_surfaces",
+        [],
+    )
+    attempts = [
+        _trace_gap_attempt_payload(attempt)
+        for attempt in issue_attempts
+    ]
+    return deterministic_issue_trace_gap_acceptance(
+        authority_kind=authority.authority_kind,
+        validation_mode=str(rule["validation_mode"]),
+        n=int(rule["n"]),
+        k=int(rule["k"]),
+        required_surfaces=required_surfaces,
+        attempts=attempts,
+    )
+
+
+def _trace_gap_attempt_payload(
+    attempt: Mapping[str, Any],
+) -> dict[str, Any]:
+    steps = [*attempt["setup_steps"], *attempt["probe_steps"]]
+    return {
+        "index": int(attempt["index"]),
+        "complete": attempt["complete"],
+        "observation": attempt["observation"],
+        "error_code": attempt["error_code"],
+        "endpoint_complete": all(
+            step["endpoint_pass"] is True for step in steps
+        ),
+        "identity_complete": all(
+            step["identity_pass"] is True for step in steps
+        ),
+        "semantic_evidence_complete": all(
+            step["semantic_evidence_complete"] is True
+            for step in steps
+        ),
+        "trace_evidence_complete": all(
+            step["trace_evidence_complete"] is True
+            for step in steps
+        ),
+        "assertions_contradicted": any(
+            (
+                step["semantic_evidence_complete"] is True
+                and step["semantic_pass"] is not True
+            )
+            or (
+                step["trace_evidence_complete"] is True
+                and step["trace_pass"] is not True
+            )
+            for step in steps
+        ),
     }
 
 

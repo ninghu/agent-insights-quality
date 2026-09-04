@@ -216,8 +216,9 @@ class FakeRuntime:
         on_stable,
         requests: list[dict] | None = None,
         minimum_passing_trace_observations: int | None = None,
+        allow_deterministic_trace_gap: bool = False,
     ) -> tuple[tuple[TraceAssertionEvidence, ...], ...]:
-        del minimum_passing_trace_observations
+        del minimum_passing_trace_observations, allow_deterministic_trace_gap
         requests = requests or execution_requests(traffic_path)
         assert agent_name.endswith("-agent")
         assert foundry_version

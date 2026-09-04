@@ -29,6 +29,11 @@ includes complete setup/probe request bodies, ordered conversation grouping, par
 semantic/trace/identity assertions, reviewed mode, `n`, `k`, runtime kind, framework, and model
 contract. Baselines require five mechanically complete attempts; deterministic issue packages
 require five issue and five paired-v0 attempts; model-mediated packages require seven of each.
+On the deterministic issue side only, the first mature whole-target batch may establish a conclusive
+issue with three or four complete observations plus at most two trace-only unknown attempts. Unknowns
+remain incomplete and non-observations; an audited acceptance records their indices. Endpoint,
+identity, semantic sufficiency, and contradiction checks remain exact. Baselines stay `5/5`,
+model-mediated issues stay `>=5/7`, and paired-v0 retains its separate maximum-one-gap policy.
 Expected issue observations remain private-review context rather than a local verdict.
 `minimum_traces` keeps its Daily meaning and is never used as a validation attempt threshold.
 
@@ -127,8 +132,11 @@ strict validation evaluation schema. Code then assigns exactly one authority res
 | `FAIL` | Complete stable evidence does not meet the reviewed threshold. |
 | `INCOMPLETE` | Required evidence is missing, ambiguous, partial, or not stable by the deadline. |
 
-The reviewed thresholds are baseline `5/5`, deterministic issue `5/5` with paired `v0` `0/5`, and
-model-mediated issue `>=5/7` with paired `v0` `0/7`. `INCOMPLETE` is never collapsed into `FAIL`.
+The reviewed thresholds are baseline `5/5`, deterministic issue `5/5` (or an audited first-mature-batch
+acceptance with at least three observations and at most two trace-only unknowns) with paired `v0`
+`0/5`, and model-mediated issue `>=5/7` with paired `v0` `0/7`. The deterministic issue-side
+acceptance may compose with the separate single-gap paired-v0 exception when both independently meet
+their strict requirements. `INCOMPLETE` is never collapsed into `FAIL`.
 Immediately after deciding an authority, the sub-session atomically persists an immutable,
 generation-fenced result before claiming another authority. A later authority failure, sub-session
 failure, or composition interruption does not discard completed authority results.

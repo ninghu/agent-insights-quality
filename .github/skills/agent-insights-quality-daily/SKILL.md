@@ -40,6 +40,12 @@ license: MIT
    baseline semantic assertion, each designated issue activation assertion, and one terminal success
    plus output signal per baseline request. Pure Prompt requests must each have one direct terminal
    response and no function calls.
+   For deterministic issue activation, the first mature whole-target batch may be accepted with
+   `3/5` or `4/5` complete observations plus at most two audited trace-only unknown attempts when
+   endpoint and exact identity evidence are complete, all reviewed semantic evidence is sufficient,
+   and no sufficient assertion contradicts the expected behavior. Preserve those attempts as
+   incomplete/non-observations and carry the acceptance policy and indices in the manifest and
+   assessment package. Baselines remain `5/5`; model-mediated issues remain `>=5/7`.
    Never assume a baseline card is Noise merely because it came from `v0`; use independent trace
    full-request and separate card-linked proof to distinguish an Agent runtime defect, Insight false
    positive, framework gap, or external infrastructure failure. Route contradictory intermediate

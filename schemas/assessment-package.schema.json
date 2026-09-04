@@ -51,6 +51,12 @@
       "uniqueItems": true,
       "items": {"enum": ["semantic", "trace"]}
     },
+    "issue_trace_gap_acceptance": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/issueTraceGapAcceptance"}
+      ]
+    },
     "runtime_status": {"enum": ["passed", "not_at_bar", "observed", "inconclusive", "skipped_baseline"]},
     "error_code": {"type": ["string", "null"]},
     "operation_count": {"type": "integer", "minimum": 0},
@@ -178,7 +184,7 @@
         }
       },
       "else": {
-        "required": ["issue_id", "evidence_reference", "instructions", "required_surfaces"],
+        "required": ["issue_id", "evidence_reference", "instructions", "required_surfaces", "issue_trace_gap_acceptance"],
         "not": {"required": ["behavior_summary"]},
         "properties": {
           "validation_mode": {
@@ -214,7 +220,8 @@
             },
             "then": {
               "properties": {
-                "n": {"const": 7}
+                "n": {"const": 7},
+                "issue_trace_gap_acceptance": {"type": "null"}
               }
             },
             "else": {
@@ -311,7 +318,8 @@
         "trace_assertion_results",
         "activation_gate",
         "direct_terminal_response_count",
-        "function_call_count"
+        "function_call_count",
+        "error_code"
       ],
       "properties": {
         "request_index": {"type": "integer", "minimum": 0},
@@ -324,10 +332,11 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["assertion", "passed"],
+            "required": ["assertion", "passed", "evidence_sufficient"],
             "properties": {
               "assertion": {"type": "string", "minLength": 1},
-              "passed": {"type": "boolean"}
+              "passed": {"type": "boolean"},
+              "evidence_sufficient": {"type": "boolean"}
             }
           }
         },
@@ -348,7 +357,29 @@
         },
         "activation_gate": {"type": "boolean"},
         "direct_terminal_response_count": {"type": "integer", "minimum": 0, "maximum": 1},
-        "function_call_count": {"type": "integer", "minimum": 0}
+        "function_call_count": {"type": "integer", "minimum": 0},
+        "error_code": {
+          "type": ["string", "null"],
+          "enum": [null, "missing_evidence", "assertion_failed"]
+        }
+      }
+    },
+    "issueTraceGapAcceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "observation_count", "unknown_attempt_indices"],
+      "properties": {
+        "policy": {
+          "const": "deterministic_issue_trace_gap_first_mature_batch_v1"
+        },
+        "observation_count": {"type": "integer", "minimum": 3, "maximum": 4},
+        "unknown_attempt_indices": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 1, "maximum": 5}
+        }
       }
     }
   }

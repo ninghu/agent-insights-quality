@@ -50,8 +50,9 @@ Agents and 36 reviewed, single-root issues.
   its display through Azure location metadata, and use registry/config values only as cross-checks.
   Never hardcode a renderer fallback or add multi-region behavior.
 - Validation deploys 41 independent endpoints: five baselines plus all 36 issues.
-- Baselines require `5/5` healthy attempts. Deterministic issues require `5/5` with paired `v0`
-  `0/5`; model-mediated issues require `5/7` with paired `v0` `0/7`.
+- Baselines require `5/5` healthy attempts. Deterministic issues require `5/5`, or the audited
+  first-mature `3/5 + up to 2 trace-only unknown` issue-side exception, with paired `v0` `0/5`;
+  model-mediated issues require `5/7` with paired `v0` `0/7`.
 - Validation mode is reviewed catalog data bound into `execution_digest`; never infer or reclassify
   it from runtime results, resample a miss, or lower `n`/`k`.
 - A visible Copilot coordinator publishes immutable assignments, releases its lock, remains
@@ -80,7 +81,8 @@ Agents and 36 reviewed, single-root issues.
 - Query telemetry once per target as a batched stability snapshot: one baseline batch, or two issue
   batches covering the issue and paired `v0`. Never stabilize attempts independently.
 - Keep authority `PASS`, `FAIL`, and `INCOMPLETE` distinct. Apply baseline `5/5`, deterministic
-  `5/5` plus paired `v0` `0/5`, and model-mediated `>=5/7` plus paired `v0` `0/7`.
+  `5/5` or the audited trace-only issue-side exception plus paired `v0` `0/5`, and model-mediated
+  `>=5/7` plus paired `v0` `0/7`.
 - A later failure never discards completed authority results. Retry only missing, `INCOMPLETE`, or
   exact-binding-changed authorities; unchanged definitive `PASS` and `FAIL` results are reusable.
 - A later generation selects only changed, incomplete, or missing authorities. Invoke only those

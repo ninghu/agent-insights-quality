@@ -907,6 +907,64 @@ def test_single_paired_trace_gap_rejects_semantic_insufficiency() -> None:
     )
 
 
+def test_issue_and_paired_trace_gap_acceptances_compose(
+    tmp_path,
+) -> None:
+    package, pointer, prepared, plan, context = _package(
+        tmp_path,
+        "issue-022",
+    )
+    package = _load_bound(
+        package,
+        pointer,
+        prepared,
+        plan,
+        context,
+        root=tmp_path,
+    )
+    evaluation = _evaluation(
+        package,
+        issue_observations={1, 2, 3, 4},
+    )
+    scenario = evaluation["scenarios"][0]
+    for attempt in (
+        scenario["issue_attempts"][4],
+        scenario["v0_attempts"][0],
+    ):
+        attempt["evidence_sufficient"] = False
+        attempt["error_code"] = "missing_evidence"
+        step = next(
+            item for item in attempt["steps"] if item["trace_assertions"]
+        )
+        step["evidence_sufficient"] = False
+        for assertion in step["trace_assertions"]:
+            assertion["evidence_sufficient"] = False
+
+    evidence = authority_evidence_from_evaluation(
+        package=package,
+        evaluation=evaluation,
+        authority=context["authority"],
+        runtime=context["runtime"],
+        validated_commit_sha=HEAD,
+        paired_trace_gap_history_digest=HASH,
+    )
+    composed = evidence["scenarios"][0]
+
+    assert (evidence["evidence_complete"], evidence["pass"]) == (True, True)
+    assert composed["issue_trace_gap_acceptance"] == {
+        "policy": "deterministic_issue_trace_gap_first_mature_batch_v1",
+        "observation_count": 4,
+        "unknown_attempt_indices": [5],
+    }
+    assert composed["paired_trace_gap_acceptance"] == {
+        "policy": "single_paired_trace_gap_after_fresh_verify_v1",
+        "attempt_index": 1,
+        "history_digest": HASH,
+    }
+    assert composed["issue_attempts"][4]["complete"] is False
+    assert composed["v0_attempts"][0]["complete"] is False
+
+
 def test_baseline_health_uses_copilot_attempt_judgments(tmp_path) -> None:
     package, pointer, prepared, plan, context = _package(
         tmp_path,

@@ -63,12 +63,17 @@ def _manifest(*, full: bool = False) -> dict:
                 "trace_assertion_count": len(trace_names),
                 "trace_assertions_passed": len(trace_names),
                 "trace_assertion_results": [
-                    {"assertion": name, "passed": True}
+                    {
+                        "assertion": name,
+                        "passed": True,
+                        "evidence_sufficient": True,
+                    }
                     for name in trace_names
                 ],
                 "activation_gate": fixture["activation_gate"],
                 "direct_terminal_response_count": int(prompt),
                 "function_call_count": 0,
+                "error_code": None,
             })
         request_count = len(summaries)
         return {
@@ -93,6 +98,7 @@ def _manifest(*, full: bool = False) -> dict:
                 item["trace_assertions_passed"] for item in summaries
             ),
             "trace_contract_verified": True,
+            "issue_trace_gap_acceptance": None,
             "trace_behavior_summary": (
                 {
                     "operation_count": request_count,

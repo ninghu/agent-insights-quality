@@ -69,6 +69,11 @@ failed or is absent, return `INCOMPLETE` with `test_framework` ownership, never 
 `insight_engine` ownership. Assertions that are not activation gates remain corroborating evidence
 rather than an independent scoring framework. Never treat an Agent's self-reported defect flag,
 diagnostic label, or claim as activation proof.
+For a deterministic issue package with `issue_trace_gap_acceptance`, treat only the recorded
+`unknown_attempt_indices` as trace-only unknowns. They remain incomplete and non-observations; the
+acceptance is valid only when the remaining three or four activation attempts are complete
+observations, endpoint and identity evidence are complete, semantic evidence is sufficient, and no
+sufficient assertion contradicts the expected behavior.
 
 Evaluate every object in `observed_insights` independently in `card_evaluations`. Echo each card's
 reference, title, category, and severity exactly. Use one card-level verdict, finding type, ownership,

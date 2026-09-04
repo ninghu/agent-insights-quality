@@ -33,6 +33,9 @@ from agent_insights_quality.azure_regions import (
     regions_match,
 )
 from agent_insights_quality.validation_rules import issue_observation_context
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_issue_side_decision,
+)
 
 REQUIRED_FIELDS = set(ASSESSMENT_FIELDS)
 _QUALITY_SCORE_DOC_URL = (
@@ -101,6 +104,12 @@ def _request_summaries_complete(value: dict[str, Any]) -> bool:
             or len(trace_results) != summary.get("trace_assertion_count")
             or sum(item.get("passed") is True for item in trace_results)
             != summary.get("trace_assertions_passed")
+            or any(
+                not isinstance(item.get("evidence_sufficient"), bool)
+                for item in trace_results
+            )
+            or summary.get("error_code")
+            not in {None, "missing_evidence", "assertion_failed"}
         ):
             return False
         results = summary.get("assertion_results")
@@ -150,26 +159,18 @@ def _runtime_evidence_complete(
         for item in value["endpoint_request_summaries"]
         if item.get("activation_gate") is True
     ]
-    required_surfaces = set(context["required_surfaces"])
-    return len(observations) == int(context["n"]) and sum(
-        (
-            "semantic" not in required_surfaces
-            or (
-                int(item.get("semantic_assertion_count") or 0) > 0
-                and item.get("semantic_assertions_passed")
-                == item.get("semantic_assertion_count")
-            )
-        )
-        and (
-            "trace" not in required_surfaces
-            or (
-                int(item.get("trace_assertion_count") or 0) > 0
-                and item.get("trace_assertions_passed")
-                == item.get("trace_assertion_count")
-            )
-        )
-        for item in observations
-    ) >= int(context["k"])
+    decided, acceptance = daily_issue_side_decision(
+        validation_mode=str(context["validation_mode"]),
+        n=int(context["n"]),
+        k=int(context["k"]),
+        required_surfaces=context["required_surfaces"],
+        summaries=observations,
+        identity_verified=value.get("trace_contract_verified") is True,
+    )
+    return (
+        decided
+        and value.get("issue_trace_gap_acceptance") == acceptance
+    )
 
 
 def _baseline_runtime_evidence_complete(

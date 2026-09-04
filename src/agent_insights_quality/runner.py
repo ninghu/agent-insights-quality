@@ -14,6 +14,10 @@ from agent_insights_quality.models import (
     InvocationEvidence,
     VersionResult,
     linked_operations_match_scope,
+    request_completion_payload,
+)
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_issue_side_decision,
 )
 from agent_insights_quality.registry import version_entry
 from agent_insights_quality.runtime_state import VersionCheckpointStore
@@ -217,6 +221,7 @@ class RuntimePort(Protocol):
         stabilization_seconds: int,
         on_first_pass: Callable[[], None],
         minimum_passing_trace_observations: int,
+        allow_deterministic_trace_gap: bool,
         on_stable: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[tuple[Any, ...], ...]: ...
 
@@ -670,6 +675,7 @@ def _execute_version_with_recovery(
                     logical_version=logical_version,
                     registry_entry=registry_entry,
                     error=error,
+                    traffic_path=traffic_path,
                     checkpoint_store=checkpoint_store,
                 )
                 if quarantined is not None:
@@ -838,6 +844,19 @@ def _with_trace_assertions(
             trace_assertion_count=len(assertions),
             trace_assertions_passed=sum(item.passed for item in assertions),
             trace_assertion_results=assertions,
+            error_code=(
+                "assertion_failed"
+                if any(
+                    item.evidence_sufficient and not item.passed
+                    for item in assertions
+                )
+                else "missing_evidence"
+                if any(
+                    not item.evidence_sufficient
+                    for item in assertions
+                )
+                else None
+            ),
         )
         for summary, assertions in zip(
             invocation.request_summaries,
@@ -859,26 +878,30 @@ def _issue_activation_evidence_complete(
     context: dict[str, Any],
     invocation: InvocationEvidence,
 ) -> bool:
+    complete, _ = _issue_activation_decision(context, invocation)
+    return complete
+
+
+def _issue_activation_decision(
+    context: dict[str, Any],
+    invocation: InvocationEvidence,
+) -> tuple[bool, dict[str, Any] | None]:
     gates = [item for item in invocation.request_summaries if item.activation_gate]
-    required_surfaces = set(context["required_surfaces"])
-    return len(gates) == int(context["n"]) and sum(
-        (
-            "semantic" not in required_surfaces
-            or (
-                item.semantic_assertion_count > 0
-                and item.semantic_assertions_passed
-                == item.semantic_assertion_count
-            )
-        )
-        and (
-            "trace" not in required_surfaces
-            or (
-                item.trace_assertion_count > 0
-                and item.trace_assertions_passed == item.trace_assertion_count
-            )
-        )
-        for item in gates
-    ) >= int(context["k"])
+    return daily_issue_side_decision(
+        validation_mode=str(context["validation_mode"]),
+        n=int(context["n"]),
+        k=int(context["k"]),
+        required_surfaces=context["required_surfaces"],
+        summaries=[
+            request_completion_payload(item)
+            for item in gates
+        ],
+        identity_verified=(
+            len(invocation.response_references)
+            == invocation.request_count
+            and invocation.allow_window_correlation is False
+        ),
+    )
 
 
 def _issue_execution_context(traffic_path: Path) -> dict[str, Any]:
@@ -891,7 +914,10 @@ def _minimum_passing_trace_observations(
 ) -> int:
     if issue_context is not None:
         return (
-            int(issue_context["k"])
+            3
+            if issue_context["validation_mode"] == "deterministic"
+            and "trace" in issue_context["required_surfaces"]
+            else int(issue_context["k"])
             if "trace" in issue_context["required_surfaces"]
             else 0
         )
@@ -991,6 +1017,7 @@ def _activation_failure_result(
     trace_evidence: dict[str, Any],
     error_code: str = "issue_activation_failed",
     trace_contract_verified: bool = True,
+    issue_trace_gap_acceptance: dict[str, Any] | None = None,
 ) -> VersionResult:
     return VersionResult(
         logical_version=logical_version,
@@ -1009,6 +1036,7 @@ def _activation_failure_result(
         trace_assertions_passed=invocation.trace_assertions_passed,
         trace_contract_verified=trace_contract_verified,
         trace_behavior_summary=trace_evidence,
+        issue_trace_gap_acceptance=issue_trace_gap_acceptance,
         endpoint_request_summaries=list(invocation.request_summaries),
     )
 
@@ -1334,6 +1362,12 @@ def _execute_version(
                             issue_context,
                         )
                     ),
+                    allow_deterministic_trace_gap=bool(
+                        issue_context is not None
+                        and issue_context["validation_mode"]
+                        == "deterministic"
+                        and "trace" in issue_context["required_surfaces"]
+                    ),
                     on_stable=capture_stable_trace_evidence,
                 ),
             )
@@ -1404,7 +1438,10 @@ def _execute_version(
                 return result
 
     if expected is not None:
-        if not _issue_activation_evidence_complete(issue_context, invocation):
+        activation_complete, issue_trace_gap_acceptance = (
+            _issue_activation_decision(issue_context, invocation)
+        )
+        if not activation_complete:
             result = _activation_failure_result(
                 logical_version=logical_version,
                 foundry_version=foundry_version,
@@ -1425,6 +1462,8 @@ def _execute_version(
                 reason="required observation surfaces did not reach the reviewed threshold",
             )
             return result
+    else:
+        issue_trace_gap_acceptance = None
     if insight_checkpoint is None:
         start_insight_run_once()
     assert insight_checkpoint is not None
@@ -1470,6 +1509,7 @@ def _execute_version(
         trace_assertions_passed=invocation.trace_assertions_passed,
         trace_contract_verified=True,
         trace_behavior_summary=trace_evidence,
+        issue_trace_gap_acceptance=issue_trace_gap_acceptance,
         endpoint_request_summaries=list(invocation.request_summaries),
     )
     if insight_run.status != "succeeded":
@@ -1511,6 +1551,7 @@ def _quarantine_started_insight(
     logical_version: str,
     registry_entry: dict[str, str],
     error: _VersionStageError,
+    traffic_path: Path,
     checkpoint_store: VersionCheckpointStore | None,
 ) -> VersionResult | None:
     if checkpoint_store is None:
@@ -1526,6 +1567,13 @@ def _quarantine_started_insight(
     operation_ids = checkpoint_store.operation_ids(*checkpoint_args)
     if invocation is None or operation_ids is None:
         return None
+    issue_trace_gap_acceptance = None
+    if logical_version != "v0":
+        context = _issue_execution_context(traffic_path)
+        _, issue_trace_gap_acceptance = _issue_activation_decision(
+            context,
+            invocation,
+        )
     if insight_checkpoint is None:
         if not checkpoint_store.insight_start_pending(*checkpoint_args):
             return None
@@ -1536,6 +1584,7 @@ def _quarantine_started_insight(
             invocation=invocation,
             trace_evidence={},
             trace_contract_verified=checkpoint_store.trace_verified(*checkpoint_args),
+            issue_trace_gap_acceptance=issue_trace_gap_acceptance,
         )
         result.error_code = "insight_run_start_unresolved"
         checkpoint_store.save_result(*checkpoint_args, result)
@@ -1547,6 +1596,7 @@ def _quarantine_started_insight(
         invocation=invocation,
         trace_evidence={},
         trace_contract_verified=checkpoint_store.trace_verified(*checkpoint_args),
+        issue_trace_gap_acceptance=issue_trace_gap_acceptance,
     )
     result.error_code = error.code
     _save_and_drain_rejected_insight_run(

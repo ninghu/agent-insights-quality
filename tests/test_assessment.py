@@ -136,6 +136,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
         "k": 5,
         "execution_digest": "sha256:" + "1" * 64,
         "required_surfaces": ["semantic"],
+        "issue_trace_gap_acceptance": None,
         "evidence_reference": "sha256:" + "b" * 64,
         "runtime_status": "observed",
         "error_code": None,
@@ -179,6 +180,7 @@ def test_assessment_must_match_current_package(tmp_path: Path) -> None:
                     "activation_gate": True,
                     "direct_terminal_response_count": 1,
                     "function_call_count": 0,
+                    "error_code": None,
                 }
                 for index in range(5)
             ],
@@ -452,6 +454,7 @@ def _complete_prompt_baseline_package() -> dict:
             "activation_gate": True,
             "direct_terminal_response_count": 1,
             "function_call_count": 0,
+            "error_code": None,
         }
         for index in range(5)
     ]
@@ -630,7 +633,11 @@ def test_issue_activation_requires_every_designated_assertion() -> None:
     summaries[0]["trace_assertion_count"] = 1
     summaries[0]["trace_assertions_passed"] = 1
     summaries[0]["trace_assertion_results"] = [
-        {"assertion": "synthetic_trace_contract", "passed": True}
+        {
+            "assertion": "synthetic_trace_contract",
+            "passed": True,
+            "evidence_sufficient": True,
+        }
     ]
     package["endpoint_evidence"]["trace_assertion_count"] = 1
     package["endpoint_evidence"]["trace_assertions_passed"] = 1

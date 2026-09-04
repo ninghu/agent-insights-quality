@@ -14,6 +14,7 @@ class SemanticAssertionEvidence:
 class TraceAssertionEvidence:
     assertion: str
     passed: bool
+    evidence_sufficient: bool = True
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class RequestCompletionEvidence:
     trace_assertion_count: int = 0
     trace_assertions_passed: int = 0
     trace_assertion_results: tuple[TraceAssertionEvidence, ...] = ()
+    error_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,7 @@ class VersionResult:
     trace_assertions_passed: int = 0
     trace_contract_verified: bool = False
     trace_behavior_summary: dict[str, object] = field(default_factory=dict)
+    issue_trace_gap_acceptance: dict[str, object] | None = None
     endpoint_request_summaries: list[RequestCompletionEvidence] = field(
         default_factory=list
     )
@@ -132,6 +135,7 @@ def request_completion_payload(
             {
                 "assertion": assertion.assertion,
                 "passed": assertion.passed,
+                "evidence_sufficient": assertion.evidence_sufficient,
             }
             for assertion in value.assertion_results
         ],
@@ -147,4 +151,5 @@ def request_completion_payload(
         "activation_gate": value.activation_gate,
         "direct_terminal_response_count": value.direct_terminal_response_count,
         "function_call_count": value.function_call_count,
+        "error_code": value.error_code,
     }

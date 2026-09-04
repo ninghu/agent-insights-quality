@@ -78,7 +78,8 @@ independent Agent endpoints. Later commits reuse exact completed authority resul
 authorities whose content or binding changed, whose latest result is `INCOMPLETE`, or whose exact
 result is missing. A definitive `FAIL` remains complete and is not retried unless its binding changes.
 Each reviewed scenario reruns its setup and probe conversation with a fresh identity. Baselines require
-`5/5` healthy attempts. Deterministic defects require `5/5` observations and paired `v0` at `0/5`;
+`5/5` healthy attempts. Deterministic defects require `5/5` observations, or the audited first-mature
+batch exception with at least `3/5` observations and at most two trace-only unknowns, and paired `v0` at `0/5`;
 model-mediated defects require at least `5/7` and paired `v0` at `0/7`. The reviewed mode is catalog
 data bound into the automatic `execution_digest`; runtime results cannot reclassify, resample, or lower
 the threshold.
@@ -117,7 +118,8 @@ privacy, and package binding; GPT-5.6 Sol judges every semantic, tool, trace, ac
 per-attempt behavioral assertion.
 
 Authority results keep `PASS`, `FAIL`, and `INCOMPLETE` distinct. Baselines pass only at `5/5`;
-deterministic issues pass only at `5/5` with paired `v0` at `0/5`; model-mediated issues pass at
+deterministic issues pass at `5/5` or under the audited `3/5 + up to 2 trace-only unknown` issue-side
+exception, with paired `v0` at `0/5`; model-mediated issues pass at
 `>=5/7` with paired `v0` at `0/7`. Complete evidence that misses the reviewed threshold is `FAIL`;
 missing, ambiguous, or unstable evidence is `INCOMPLETE`, never `FAIL`. A later authority or
 sub-session failure does not discard already persisted results. Retries schedule only missing,

@@ -47,6 +47,7 @@ def _manifest(
         "trace_assertions_passed": 0,
         "trace_contract_verified": False,
         "trace_behavior_summary": {},
+        "issue_trace_gap_acceptance": None,
         "endpoint_request_summaries": [],
         "evidence_reference": None,
     }
