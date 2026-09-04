@@ -19,13 +19,20 @@ from agent_insights_quality.provisioning import (
     _support_build_context_digest,
     _support_build_context_digest_at_commit,
     _support_build_context_manifest,
+    _support_image_tag,
     _support_wheelhouse,
     _version_from_response,
+    build_artifact,
     deterministic_zip,
 )
 from agent_insights_quality.profiles import RuntimeProfile
 from agent_insights_quality.progress import ProgressReporter
-from agent_insights_quality.util import ROOT
+from agent_insights_quality.util import (
+    ROOT,
+    ContractError,
+    atomic_json,
+    read_json,
+)
 
 
 def test_hosted_package_is_deterministic_and_issue_specific(tmp_path: Path) -> None:
@@ -740,12 +747,14 @@ def test_support_images_skip_build_when_source_digest_tags_exist(
         ),
         (
             "v0/container.yaml",
-            {"v0", *{f"issue-{index:03d}" for index in range(29, 37)}},
+            set(),
         ),
         (
             "v0/package.py",
-            {"v0", *{f"issue-{index:03d}" for index in range(29, 37)}},
+            set(),
         ),
+        ("v0/traffic.json", set()),
+        ("issues/issue-029/traffic.json", set()),
     ],
 )
 def test_support_build_context_dependencies_are_isolated(
@@ -769,6 +778,67 @@ def test_support_build_context_dependencies_are_isolated(
     assert {
         version for version in versions if before[version] != after[version]
     } == changed_versions
+
+
+@pytest.mark.parametrize(
+    ("logical_version", "traffic_path"),
+    [
+        ("v0", "v0/traffic.json"),
+        ("issue-029", "issues/issue-029/traffic.json"),
+    ],
+)
+def test_support_traffic_contract_does_not_change_image_or_provider_content(
+    tmp_path: Path,
+    logical_version: str,
+    traffic_path: str,
+) -> None:
+    root = tmp_path / "support-ticket-agent"
+    shutil.copytree(ROOT / "agents" / "support-ticket-agent", root)
+    agents, issues = load_catalogs()
+    support = next(
+        item for item in agents["agents"]
+        if item["name"] == "support-ticket-agent"
+    )
+    issue_by_id = {item["id"]: item for item in issues["issues"]}
+    versions = ["v0", *support["issue_ids"]]
+
+    def snapshot() -> tuple[dict[str, str], dict[str, str]]:
+        tags = {
+            version: _support_image_tag(root, version)
+            for version in versions
+        }
+        images = {
+            version: (
+                "synthetic.azurecr.io/agent-insights-quality-support@sha256:"
+                + tag
+            )
+            for version, tag in tags.items()
+        }
+        provider = {
+            version: build_artifact(
+                support,
+                issue_by_id.get(version),
+                support_images=images,
+            )["content_digest"]
+            for version in versions
+        }
+        return tags, provider
+
+    before_tags, before_provider = snapshot()
+    path = root / traffic_path
+    traffic = read_json(path)
+    old_execution = traffic["validation_rules"]["execution_digest"]
+    traffic["validation_rules"]["execution_digest"] = (
+        "sha256:" + ("f" * 64)
+        if old_execution != "sha256:" + ("f" * 64)
+        else "sha256:" + ("e" * 64)
+    )
+    atomic_json(path, traffic)
+    after_tags, after_provider = snapshot()
+
+    assert traffic["validation_rules"]["execution_digest"] != old_execution
+    assert after_tags == before_tags
+    assert after_provider == before_provider
 
 
 def test_support_issue_build_context_uses_complete_source_authority(
@@ -801,6 +871,46 @@ def test_support_issue_build_context_uses_complete_source_authority(
         for path in context.rglob("*")
         if path.is_file()
     } == set(manifest)
+    assert set(manifest) == {
+        "v0/Dockerfile",
+        "v0/requirements.txt",
+        "v0/implementation.yaml",
+        *{
+            f"v0/source/{path.relative_to(issue_root / 'source').as_posix()}"
+            for path in (issue_root / "source").rglob("*")
+            if path.is_file()
+            and "__pycache__" not in path.parts
+            and path.suffix.casefold() not in {".pyc", ".pyo"}
+        },
+    }
+    assert all(
+        excluded not in manifest
+        for excluded in (
+            "v0/traffic.json",
+            "v0/package.py",
+            "v0/container.yaml",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "v0/Dockerfile",
+        "v0/requirements.txt",
+        "issues/issue-029/implementation.yaml",
+    ],
+)
+def test_support_build_context_missing_required_input_fails_closed(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    root = tmp_path / "support-ticket-agent"
+    shutil.copytree(ROOT / "agents" / "support-ticket-agent", root)
+    (root / relative_path).unlink()
+
+    with pytest.raises(ContractError, match="build authority.*incomplete"):
+        _support_build_context_manifest(root, "issue-029")
 
 
 def test_support_context_commit_requires_exact_git_tree_membership(

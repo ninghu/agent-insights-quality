@@ -989,6 +989,8 @@ def _support_build_context_manifest(
     logical_version: str,
 ) -> dict[str, Path]:
     baseline = root / "v0"
+    dockerfile = baseline / "Dockerfile"
+    requirements = baseline / "requirements.txt"
     implementation = (
         baseline / "implementation.yaml"
         if logical_version == "v0"
@@ -999,21 +1001,23 @@ def _support_build_context_manifest(
         if logical_version == "v0"
         else root / "issues" / logical_version / "source"
     )
-    if not implementation.is_file() or not source.is_dir():
+    if (
+        not dockerfile.is_file()
+        or not requirements.is_file()
+        or not implementation.is_file()
+        or not source.is_dir()
+    ):
         raise ContractError(
             f"Support build authority for {logical_version} is incomplete"
         )
     manifest = {
-        f"v0/{path.relative_to(baseline).as_posix()}": path
-        for path in sorted(baseline.rglob("*"))
-        if _is_package_file(path)
-        and path != baseline / "implementation.yaml"
-        and (
-            logical_version == "v0"
-            or (baseline / "source") not in path.parents
-        )
+        "v0/Dockerfile": dockerfile,
+        "v0/requirements.txt": requirements,
+        "v0/implementation.yaml": implementation,
     }
-    source_files = [path for path in sorted(source.rglob("*")) if _is_package_file(path)]
+    source_files = [
+        path for path in sorted(source.rglob("*")) if _is_package_file(path)
+    ]
     if not source_files:
         raise ContractError(f"Support source authority for {logical_version} is empty")
     manifest.update(
@@ -1022,7 +1026,6 @@ def _support_build_context_manifest(
             for path in source_files
         }
     )
-    manifest["v0/implementation.yaml"] = implementation
     return dict(sorted(manifest.items()))
 
 
@@ -1046,14 +1049,17 @@ def _support_build_context_digest_at_commit(
         relative_root = root.resolve().relative_to(ROOT.resolve()).as_posix()
     except ValueError as error:
         raise ContractError("Support build authority escapes the repository") from error
-    positive_paths = [f"{relative_root}/v0"]
-    if logical_version != "v0":
-        positive_paths.extend(
-            [
-                f"{relative_root}/issues/{logical_version}/source",
-                f"{relative_root}/issues/{logical_version}/implementation.yaml",
-            ]
-        )
+    selected_root = (
+        f"{relative_root}/v0"
+        if logical_version == "v0"
+        else f"{relative_root}/issues/{logical_version}"
+    )
+    positive_paths = [
+        f"{relative_root}/v0/Dockerfile",
+        f"{relative_root}/v0/requirements.txt",
+        f"{selected_root}/source",
+        f"{selected_root}/implementation.yaml",
+    ]
     listed = subprocess.run(
         [
             "git",
@@ -1077,14 +1083,6 @@ def _support_build_context_digest_at_commit(
         for item in listed.stdout.split(b"\0")
         if item
     }
-    if logical_version != "v0":
-        baseline_source = f"{relative_root}/v0/source/"
-        retained_paths = {
-            path
-            for path in retained_paths
-            if not path.startswith(baseline_source)
-            and path != f"{relative_root}/v0/implementation.yaml"
-        }
     manifest = _support_build_context_manifest(root, logical_version)
     current_paths = {
         source.resolve().relative_to(ROOT.resolve()).as_posix()
@@ -1092,16 +1090,8 @@ def _support_build_context_digest_at_commit(
     }
     if retained_paths != current_paths:
         return None
-    paths = [*positive_paths]
-    if logical_version != "v0":
-        paths.extend(
-            [
-                f":(exclude){relative_root}/v0/source",
-                f":(exclude){relative_root}/v0/implementation.yaml",
-            ]
-        )
     compared = subprocess.run(
-        ["git", "diff", "--quiet", commit_sha, "--", *paths],
+        ["git", "diff", "--quiet", commit_sha, "--", *positive_paths],
         cwd=ROOT,
         capture_output=True,
         timeout=120,
