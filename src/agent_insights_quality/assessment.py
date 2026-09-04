@@ -703,7 +703,7 @@ def _baseline_behavior_summary(
         trace_evidence=trace_proof,
         strict_evidence=strict_terminal_evidence,
     )
-    terminal_complete = terminal_decision.status in {
+    terminal_complete = proof_complete and terminal_decision.status in {
         "complete",
         "accepted_unknown",
     }
@@ -1010,12 +1010,7 @@ def _validate_issue_cards(
         linked_operations = card.get("linked_operation_ids")
         if (
             not isinstance(card_proof, dict)
-            or not isinstance(linked_operations, list)
-            or not linked_operations
-            or len(linked_operations) != len(set(linked_operations))
-            or int(card.get("trace_count") or 0) != len(linked_operations)
-            or int(card_proof.get("operation_count") or 0)
-            != len(linked_operations)
+            or int(card_proof.get("operation_count") or 0) < 1
         ):
             raise ContractError("Issue card-linked trace proof is incomplete")
         terminal_proven = (
@@ -1029,6 +1024,17 @@ def _validate_issue_cards(
         ):
             raise ContractError(
                 "Issue card without terminal proof must remain INCOMPLETE"
+            )
+        if package.get("target_kind") == "issue" and (
+            not isinstance(linked_operations, list)
+            or not linked_operations
+            or len(linked_operations) != len(set(linked_operations))
+            or int(card.get("trace_count") or 0) != len(linked_operations)
+            or int(card_proof.get("operation_count") or 0)
+            != len(linked_operations)
+        ):
+            raise ContractError(
+                "Issue card-linked trace identity is incomplete"
             )
         if evaluation["finding_type"] not in allowed_types[evaluation["verdict"]]:
             raise ContractError("Card evaluation finding type is inconsistent")

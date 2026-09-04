@@ -1740,7 +1740,7 @@ def test_ambiguous_start_remains_quarantined_when_clean_recovery_fails(
     )
 
 
-def test_pending_insight_start_from_crash_forces_clean_retraffic(
+def test_pending_insight_start_from_crash_reuses_endpoint_evidence(
     tmp_path: Path,
 ) -> None:
     agents, issues = load_catalogs()
@@ -1810,6 +1810,18 @@ def test_pending_insight_start_from_crash_forces_clean_retraffic(
     )
     store.save_trace_verified(*checkpoint_args)
     store.mark_insight_start_pending(*checkpoint_args)
+    store.save_result(
+        *checkpoint_args,
+        VersionResult(
+            logical_version="v0",
+            foundry_version=entry["foundry_version"],
+            status="inconclusive",
+            operation_ids=[
+                f"{index + 1:032x}" for index in range(request_count)
+            ],
+            error_code="insight_run_start_unresolved",
+        ),
+    )
 
     class RecordingRuntime(FakeRuntime):
         def __init__(self) -> None:
@@ -1832,9 +1844,9 @@ def test_pending_insight_start_from_crash_forces_clean_retraffic(
         seed=1,
         checkpoint_store=store,
     )
-    assert ("weather-agent", "v0") in runtime.invoked_pairs
+    assert ("weather-agent", "v0") not in runtime.invoked_pairs
     assert runtime.clean_agents.count("weather-agent") == 1
-    assert runtime.reset_agents.count("weather-agent") == 1
+    assert runtime.reset_agents.count("weather-agent") == 0
 
 
 def test_resume_waits_before_first_version_without_checkpoint(

@@ -1423,7 +1423,7 @@ union traces, dependencies, requests
         operation_ids: tuple[str, ...],
         lookback_hours: float,
         start_margin_seconds: int,
-        intent_reference: str,
+        intent_reference: str | None = None,
         persist: Callable[[InsightRunCheckpoint], None],
     ) -> InsightRunCheckpoint:
         earliest, _ = self._operation_time_bounds(

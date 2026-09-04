@@ -256,7 +256,7 @@ rerun.
 
 Daily and staging registries remain isolated: no process may read both as an admission source.
 Daily run-scoped lifecycle and evidence bind only the exact Daily registry selected during
-provisioning.
+provisioning. The coordinator quiescence lock remains independent of advisory staging state.
 
 The old West US 2 resources remain unchanged after cutover; retirement requires a separate reviewed
 authorization. That old environment is never a staging fallback.

@@ -485,6 +485,7 @@ def _reopen_finance_fixture(
         trace_contract_verified=True,
         trace_behavior_summary={
             "operation_count": 10,
+            "assistant_response_count": 9,
             "terminal_response_count": 9,
             "terminal_success_count": 9,
             "terminal_output_count": 9,

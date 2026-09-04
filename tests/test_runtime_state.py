@@ -128,6 +128,7 @@ def test_version_checkpoint_round_trips_private_stages(tmp_path: Path) -> None:
     assert store.has_unresolved_insight_state() is True
     store.clear_insight_start_pending(*args)
     assert store.insight_start_pending(*args) is False
+    store.record_insight_start_outcome(*args, status="explicit_no_run")
     store.mark_insight_start_pending(*args)
     checkpoint = InsightRunCheckpoint(
         "private-run-id",
