@@ -25,10 +25,10 @@ from agent_insights_quality.validation_runtime import (
 )
 
 _FIXED_AUTHORITY_BASELINE_DIGEST = (
-    "sha256:b8ddd86ce8aec5524dcdc8c0fbe9de0f8683bf1ef26bd1a1964e178c532eee38"
+    "sha256:4037eb5cfe738107a14bfb3b7c4e354a35e62569504efcf94f8af276ec96a6f4"
 )
 _FIXED_AUTHORITY_VALIDATION_DIGEST = (
-    "sha256:8a1ad5cf06fab6925d2997937c9f7346441d227579986c9c69f88b357fb28b44"
+    "sha256:6494c286d0b2302a1290c965263b54694ddf72c25470176232ec69e5efd1ade3"
 )
 
 

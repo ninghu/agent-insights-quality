@@ -25,7 +25,7 @@ issues:
     middleware_kind: ChatMiddleware
   issue-017:
     declared_delta: "Issue-specific orchestration labels a mixed-result aggregate complete."
-    expected_app_diff_digest: sha256:fc1e627364c44f2408879b420ecba489f64b45c514e9d4604a218e94a2b8e424
+    expected_app_diff_digest: sha256:d3963a847f22909dcacc1f67525bcb0f605ca11c59ae96dc6b3feb6f54dfc0e7
     expected_class: CompletePartialAggregate
     middleware_kind: ChatMiddleware
   issue-018:

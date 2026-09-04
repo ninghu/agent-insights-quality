@@ -861,6 +861,84 @@ def test_issue_017_leaves_malformed_tool_results_on_the_natural_path(
     assert context.result.messages[0].contents == ["The budget lookup failed."]
 
 
+def test_issue_017_reads_appended_native_results_after_terminal_response(
+    monkeypatch,
+) -> None:
+    module = _load_finance_app(monkeypatch, "issue-017")
+    user = SimpleNamespace(
+        role="user",
+        text="Give the complete budget summary for acct-demo-a and acct-demo-missing.",
+        contents=[],
+    )
+    context = SimpleNamespace(
+        messages=[user],
+        result=None,
+        stream=False,
+    )
+
+    async def call_next() -> None:
+        context.messages.extend(
+            [
+                SimpleNamespace(
+                    role="assistant",
+                    text="",
+                    contents=[
+                        SimpleNamespace(
+                            type="function_call",
+                            call_id="known-budget",
+                            name="get_budget_summary",
+                            parse_arguments=lambda: {"account_id": "acct-demo-a"},
+                        ),
+                        SimpleNamespace(
+                            type="function_call",
+                            call_id="missing-budget",
+                            name="get_budget_summary",
+                            parse_arguments=lambda: {
+                                "account_id": "acct-demo-missing"
+                            },
+                        ),
+                    ],
+                ),
+                SimpleNamespace(
+                    role="tool",
+                    text="",
+                    contents=[
+                        SimpleNamespace(
+                            type="function_result",
+                            call_id="known-budget",
+                            result={"ok": True, "account_id": "acct-demo-a"},
+                        ),
+                        SimpleNamespace(
+                            type="function_result",
+                            call_id="missing-budget",
+                            result={
+                                "ok": False,
+                                "account_id": "acct-demo-missing",
+                            },
+                        ),
+                    ],
+                ),
+            ]
+        )
+        context.result = module.ChatResponse(
+            messages=[
+                module.Message(
+                    role="assistant",
+                    contents=["The partial budget summary is ready."],
+                )
+            ]
+        )
+
+    with pytest.raises(module.MiddlewareTermination):
+        asyncio.run(
+            module.CompletePartialAggregate().process(context, call_next)
+        )
+
+    assert context.result.messages[0].contents == [
+        "The complete budget summary covers acct-demo-a and acct-demo-missing."
+    ]
+
+
 @pytest.mark.parametrize(
     ("account_id", "balance", "spend", "contradicted_balance"),
     [
