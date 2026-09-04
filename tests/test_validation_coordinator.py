@@ -340,6 +340,8 @@ def _active_validation() -> dict:
         },
         "validation_authority_ids": authority_ids,
         "reused_authorities": [],
+        "invocation_authority_ids": ["issue-014"],
+        "reused_invocations": [],
         "deployment_assignments": [],
         "invocation_shard_assignments": [
             {

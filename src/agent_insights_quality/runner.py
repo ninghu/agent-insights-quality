@@ -916,6 +916,11 @@ def _minimum_passing_trace_observations(
         return (
             3
             if issue_context["validation_mode"] == "deterministic"
+            and (
+                int(issue_context["n"]),
+                int(issue_context["k"]),
+            )
+            == (5, 5)
             and "trace" in issue_context["required_surfaces"]
             else int(issue_context["k"])
             if "trace" in issue_context["required_surfaces"]
@@ -1366,6 +1371,11 @@ def _execute_version(
                         issue_context is not None
                         and issue_context["validation_mode"]
                         == "deterministic"
+                        and (
+                            int(issue_context["n"]),
+                            int(issue_context["k"]),
+                        )
+                        == (5, 5)
                         and "trace" in issue_context["required_surfaces"]
                     ),
                     on_stable=capture_stable_trace_evidence,
