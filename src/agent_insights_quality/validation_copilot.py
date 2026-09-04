@@ -1337,7 +1337,7 @@ def _paired_trace_gap_acceptance(
     if (
         history_digest is None
         or authority.authority_kind != "issue"
-        or set(predicate.get("required_surfaces", [])) != {"trace"}
+        or "trace" not in set(predicate.get("required_surfaces", []))
         or sum(item["observation"] is True for item in issue_attempts)
         < int(rule["k"])
         or sum(item["complete"] is True for item in v0_attempts)

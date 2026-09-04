@@ -17,6 +17,7 @@ from agent_insights_quality.util import (
 )
 from agent_insights_quality.validation_copilot import (
     EVALUATION_PROMPT,
+    _paired_trace_gap_acceptance,
     assessment_path,
     attach_private_package_to_active_pointer,
     authority_evidence_from_evaluation,
@@ -810,6 +811,100 @@ def test_single_paired_trace_gap_requires_fresh_verify_history(
         "history_digest": HASH,
     }
     assert scenario["v0_attempts"][0]["complete"] is False
+
+
+def _semantic_and_trace_gap_inputs():
+    authority = _authority("issue-021")
+    rule = authority.validation_rules["scenarios"][0]
+    issue_attempts = [
+        {"observation": index <= rule["k"]}
+        for index in range(1, rule["n"] + 1)
+    ]
+    v0_attempts = [
+        {
+            "index": index,
+            "complete": index != 1,
+            "observation": False,
+            "setup_steps": (
+                [{"endpoint_pass": True, "identity_pass": True}]
+                if index == 1
+                else []
+            ),
+            "probe_steps": (
+                [{"endpoint_pass": True, "identity_pass": True}]
+                if index == 1
+                else []
+            ),
+        }
+        for index in range(1, rule["n"] + 1)
+    ]
+    gap_evaluation = {
+        "evidence_sufficient": False,
+        "error_code": "missing_evidence",
+        "steps": [
+            {
+                "evidence_sufficient": True,
+                "semantic_assertions": [],
+                "trace_assertions": [],
+            },
+            {
+                "evidence_sufficient": False,
+                "semantic_assertions": [
+                    {"evidence_sufficient": True},
+                ],
+                "trace_assertions": [
+                    {"evidence_sufficient": False},
+                ],
+            },
+        ],
+    }
+    assessed = {
+        "v0_attempts": [
+            gap_evaluation,
+            *({} for _ in range(rule["n"] - 1)),
+        ]
+    }
+    return authority, rule, assessed, issue_attempts, v0_attempts
+
+
+def test_single_paired_trace_gap_accepts_semantic_and_trace_predicate() -> None:
+    authority, rule, assessed, issue_attempts, v0_attempts = (
+        _semantic_and_trace_gap_inputs()
+    )
+
+    assert _paired_trace_gap_acceptance(
+        authority=authority,
+        rule=rule,
+        assessed=assessed,
+        issue_attempts=issue_attempts,
+        v0_attempts=v0_attempts,
+        history_digest=HASH,
+    ) == {
+        "policy": "single_paired_trace_gap_after_fresh_verify_v1",
+        "attempt_index": 1,
+        "history_digest": HASH,
+    }
+
+
+def test_single_paired_trace_gap_rejects_semantic_insufficiency() -> None:
+    authority, rule, assessed, issue_attempts, v0_attempts = (
+        _semantic_and_trace_gap_inputs()
+    )
+    assessed["v0_attempts"][0]["steps"][1]["semantic_assertions"][0][
+        "evidence_sufficient"
+    ] = False
+
+    assert (
+        _paired_trace_gap_acceptance(
+            authority=authority,
+            rule=rule,
+            assessed=assessed,
+            issue_attempts=issue_attempts,
+            v0_attempts=v0_attempts,
+            history_digest=HASH,
+        )
+        is None
+    )
 
 
 def test_baseline_health_uses_copilot_attempt_judgments(tmp_path) -> None:
