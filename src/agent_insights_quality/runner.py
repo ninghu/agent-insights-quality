@@ -1911,7 +1911,7 @@ def _execute_version(
             checkpoint_store.save_result(*checkpoint_args, result)
         return result
     insight = matching[0]
-    if insight.trace_count < int(expected["trace_contract"]["minimum_traces"]):
+    if insight.trace_count < 1:
         result.status = "not_at_bar"
         result.error_code = "insufficient_trace_evidence"
         if checkpoint_store is not None:

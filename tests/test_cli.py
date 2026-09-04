@@ -95,6 +95,17 @@ def test_daily_version_reopen_and_run_commands_are_explicit() -> None:
     assert run.issue == "issue-006"
 
 
+def test_daily_card_linkage_reclassification_is_human_confirmed() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "daily-reclassify-card-linkage",
+            "--confirm",
+        ]
+    )
+
+    assert args.confirm is True
+
+
 @pytest.mark.parametrize("publish_preview", [False, True])
 def test_test_finalization_stays_private_and_skips_adx(
     monkeypatch,

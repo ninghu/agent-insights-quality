@@ -608,6 +608,35 @@ class VersionCheckpointStore:
         payload = value.get("result")
         if not isinstance(payload, dict):
             return None
+        supplemental_path = self._supplemental_result_path(
+            agent_name,
+            logical_version,
+        )
+        if supplemental_path.is_file():
+            supplemental = read_json(supplemental_path)
+            replacement = supplemental.get("result")
+            if (
+                supplemental.get("schema_version") != "1.0.0"
+                or supplemental.get("run_contract_digest")
+                != self._run_contract_digest
+                or supplemental.get("agent_name") != agent_name
+                or supplemental.get("logical_version") != logical_version
+                or supplemental.get("foundry_version") != foundry_version
+                or supplemental.get("content_digest") != content_digest
+                or supplemental.get("supersedes_result_digest")
+                != content_hash(payload)
+                or not isinstance(replacement, dict)
+                or supplemental.get("supplemental_digest")
+                != content_hash(
+                    {
+                        key: item
+                        for key, item in supplemental.items()
+                        if key != "supplemental_digest"
+                    }
+                )
+            ):
+                raise ContractError("Supplemental version result is invalid")
+            payload = replacement
         try:
             observed = [
                 _insight_from_json(item)
@@ -710,6 +739,49 @@ class VersionCheckpointStore:
         value["result"] = asdict(result)
         self._write(agent_name, logical_version, value)
 
+    def save_supplemental_result(
+        self,
+        agent_name: str,
+        logical_version: str,
+        foundry_version: str,
+        content_digest: str,
+        result: VersionResult,
+        *,
+        event_digest: str,
+    ) -> None:
+        value = self._load(
+            agent_name,
+            logical_version,
+            foundry_version,
+            content_digest,
+        )
+        original = value.get("result")
+        if not isinstance(original, dict):
+            raise ContractError("Original version result is missing")
+        supplemental = {
+            "schema_version": "1.0.0",
+            "run_contract_digest": self._run_contract_digest,
+            "agent_name": agent_name,
+            "logical_version": logical_version,
+            "foundry_version": foundry_version,
+            "content_digest": content_digest,
+            "event_digest": event_digest,
+            "supersedes_result_digest": content_hash(original),
+            "result": asdict(result),
+            "supplemental_digest": "",
+        }
+        supplemental["supplemental_digest"] = content_hash(
+            {
+                key: item
+                for key, item in supplemental.items()
+                if key != "supplemental_digest"
+            }
+        )
+        immutable_json(
+            self._supplemental_result_path(agent_name, logical_version),
+            supplemental,
+        )
+
     def save_rejected_result(
         self,
         agent_name: str,
@@ -801,6 +873,18 @@ class VersionCheckpointStore:
         ):
             raise ContractError("Recovery checkpoint identity is invalid")
         return self._root / "recovery" / f"{agent_name}.json"
+
+    def _supplemental_result_path(
+        self,
+        agent_name: str,
+        logical_version: str,
+    ) -> Path:
+        self._path(agent_name, logical_version)
+        return (
+            self._root
+            / "supplemental-results"
+            / f"{agent_name}-{logical_version}.json"
+        )
 
     def _validate_header(
         self,

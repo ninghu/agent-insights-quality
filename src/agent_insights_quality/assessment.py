@@ -845,7 +845,7 @@ def load_assessments(
                 or not isinstance(observed, list)
                 or len(observed) != 1
                 or not isinstance(minimum_traces, int)
-                or int(observed[0].get("trace_count") or 0) < minimum_traces
+                or int(observed[0].get("trace_count") or 0) < 1
                 or not isinstance(endpoint, dict)
                 or not _endpoint_evidence_complete(
                     endpoint,
@@ -1007,9 +1007,15 @@ def _validate_issue_cards(
         card = cards[evaluation["reference"]]
         _validate_card_identity(evaluation, card)
         card_proof = card.get("card_linked_trace_proof")
+        linked_operations = card.get("linked_operation_ids")
         if (
             not isinstance(card_proof, dict)
-            or int(card_proof.get("operation_count") or 0) < 1
+            or not isinstance(linked_operations, list)
+            or not linked_operations
+            or len(linked_operations) != len(set(linked_operations))
+            or int(card.get("trace_count") or 0) != len(linked_operations)
+            or int(card_proof.get("operation_count") or 0)
+            != len(linked_operations)
         ):
             raise ContractError("Issue card-linked trace proof is incomplete")
         terminal_proven = (

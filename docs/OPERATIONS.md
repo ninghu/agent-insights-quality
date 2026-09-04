@@ -35,7 +35,10 @@ remain incomplete and non-observations; an audited acceptance records their indi
 identity, semantic sufficiency, and contradiction checks remain exact. Baselines stay `5/5`,
 model-mediated issues stay `>=5/7`, and paired-v0 retains its separate maximum-one-gap policy.
 Expected issue observations remain private-review context rather than a local verdict.
-`minimum_traces` keeps its Daily meaning and is never used as a validation attempt threshold.
+`minimum_traces` is the independent full-request natural trace proof threshold and is never used as
+a validation attempt threshold or card-link coverage threshold. After independent Agent activation
+is proven, one unique exact-version, response-bound, claim-relevant linked operation is sufficient to
+prove card linkage; semantic correctness still depends on the card title, description, and category.
 
 Before any topology mutation, acquire the Sweden-environment OS file lock and record measured RPM/TPM,
 25-percent and absolute headroom, the complete endpoint envelope, inner model fan-out, and bounded
@@ -427,6 +430,20 @@ assertion contradiction, no Prompt function calls, and no unhandled error. The u
 remains unknown. Reopen validates unchanged Agent, traffic, provider, and registry bindings; its
 fenced worker is prohibited from invoking the endpoint and continues from the earliest missing
 telemetry or trace stage through Agent Insights and the supplemental receipt.
+
+When an issue completed every independent evidence stage and was marked `not_at_bar` only because a
+card linked fewer traces than catalog `minimum_traces`, reclassify it without endpoint or Agent
+Insights execution:
+
+```powershell
+python -m agent_insights_quality daily-reclassify-card-linkage --confirm
+```
+
+The idempotent command deterministically reviews all 20 selected issues and requires at least one
+unique exact-version linked operation while rejecting any duplicate or out-of-scope link. It
+preserves original checkpoints and receipts, writes immutable supplemental result and receipt
+ancestry only where the outcome changes, and leaves semantic card correctness for normal assessment.
+Composition rejects a missing or partial 20-issue batch receipt.
 
 Each lane holds an Agent-specific OS lock, resumes only its exact digest-bound checkpoints, and may
 claim at most three transient incomplete recoveries across all resumes. Exact fresh session, response,

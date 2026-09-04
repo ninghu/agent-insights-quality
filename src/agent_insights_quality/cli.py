@@ -44,6 +44,7 @@ from agent_insights_quality.daily_coordinator import (
     provision_daily,
     reopen_incomplete_daily_lane,
     reopen_incomplete_daily_version,
+    reclassify_daily_card_linkage,
     record_daily_email_receipt,
     record_daily_finalization,
     record_daily_improvement_input,
@@ -241,6 +242,8 @@ def build_parser() -> argparse.ArgumentParser:
     daily_version_run = commands.add_parser("daily-run-reopened-version")
     daily_version_run.add_argument("--agent", required=True)
     daily_version_run.add_argument("--issue", required=True)
+    daily_reclassify = commands.add_parser("daily-reclassify-card-linkage")
+    daily_reclassify.add_argument("--confirm", action="store_true")
     daily_publication = commands.add_parser("daily-complete-publication")
     daily_publication.add_argument("--pr-number", type=int, required=True)
     daily_publication.add_argument("--path", action="append", required=True)
@@ -442,6 +445,11 @@ def _dispatch(args: argparse.Namespace) -> str | None:
     if args.command == "daily-run-reopened-version":
         return json.dumps(
             run_reopened_daily_version(args.agent, args.issue),
+            sort_keys=True,
+        )
+    if args.command == "daily-reclassify-card-linkage":
+        return json.dumps(
+            reclassify_daily_card_linkage(confirmed=args.confirm),
             sort_keys=True,
         )
     if args.command == "daily-complete-publication":

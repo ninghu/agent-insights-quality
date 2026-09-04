@@ -16,6 +16,10 @@ a score-correct card to an incorrect card. There is no weighted or partial score
 Linked traces pass when at least one exact-run, exact-version linked trace independently supports the
 Insight's core conclusion. Extra linked traces are acceptable unless they are attributed to the wrong
 run or version, or they contradict the conclusion.
+When a card links multiple traces, every link must be unique, response-bound, in the package operation
+set, and independently relevant to that same card claim. One valid link never masks an invalid link.
+The catalog `minimum_traces` threshold applies to independent full-request proof, not to the number
+of traces linked by an individual card.
 
 Classify ownership independently:
 

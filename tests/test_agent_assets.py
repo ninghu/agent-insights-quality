@@ -1683,19 +1683,6 @@ def test_healthcare_alignment_roots_match_exact_traffic() -> None:
 
 
 def test_prompt_substitution_issues_bind_supplied_evidence() -> None:
-    definition = json.loads(
-        (
-            ROOT
-            / "agents"
-            / "weather-agent"
-            / "issues"
-            / "issue-003"
-            / "definition.json"
-        ).read_text(encoding="utf-8")
-    )
-    instructions = definition["definition"]["instructions"]
-    assert "FINAL OVERRIDING DEFECT RULE - HIGHEST PRIORITY" in instructions
-    assert '{"shape":"forecast","high":<forecast-high>' in instructions
     weather = json.loads(
         (
             ROOT

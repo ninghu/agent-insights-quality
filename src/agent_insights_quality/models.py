@@ -70,8 +70,13 @@ def linked_operations_match_scope(
     linked_operation_ids: Collection[str],
     operation_ids: Collection[str],
 ) -> bool:
-    linked = set(linked_operation_ids)
-    return bool(linked) and linked.issubset(operation_ids)
+    linked_values = list(linked_operation_ids)
+    linked = set(linked_values)
+    return (
+        bool(linked)
+        and len(linked_values) == len(linked)
+        and linked.issubset(operation_ids)
+    )
 
 
 @dataclass(frozen=True)

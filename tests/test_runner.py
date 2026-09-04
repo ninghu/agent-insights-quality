@@ -20,6 +20,7 @@ from agent_insights_quality.models import (
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
     VersionResult,
+    linked_operations_match_scope,
 )
 from agent_insights_quality.runner import (
     _RecoveryBudget,
@@ -2584,6 +2585,58 @@ def test_foreign_operation_card_is_not_persisted(tmp_path: Path) -> None:
     assert issue.observed_insights == []
     assert issue.observed_insight is None
     assert persisted == issue
+
+
+def test_card_linkage_does_not_require_catalog_minimum_trace_count() -> None:
+    agents, issues = load_catalogs()
+    hashes = catalog_hashes(agents, issues)
+
+    class ThreeLinkCardRuntime(FakeRuntime):
+        def finish_insights_run(self, **kwargs) -> InsightRunEvidence:
+            result = super().finish_insights_run(**kwargs)
+            if kwargs["foundry_version"] != "issue-009":
+                return result
+            card = result.insights[0]
+            return replace(
+                result,
+                insights=(
+                    replace(
+                        card,
+                        linked_operation_ids=card.linked_operation_ids[:3],
+                        trace_count=3,
+                    ),
+                ),
+            )
+
+    result = execute_agent(
+        agent_name="healthcare-agent",
+        agents=agents,
+        issues=issues,
+        selected={"healthcare-agent": ["issue-009"]},
+        registry=_registry(agents, hashes),
+        runtime=ThreeLinkCardRuntime(),
+        seed=1,
+    )
+
+    assert result.issues[0].status == "observed"
+    assert result.issues[0].observed_insight is not None
+    assert result.issues[0].observed_insight.trace_count == 3
+
+
+@pytest.mark.parametrize(
+    ("linked", "expected"),
+    [
+        (("a",), True),
+        (("a", "b"), True),
+        (("a", "outside"), False),
+        (("a", "a"), False),
+    ],
+)
+def test_every_card_link_must_be_unique_and_in_scope(
+    linked: tuple[str, ...],
+    expected: bool,
+) -> None:
+    assert linked_operations_match_scope(linked, {"a", "b"}) is expected
 
 
 def test_baseline_operational_failure_stops_only_one_agent() -> None:

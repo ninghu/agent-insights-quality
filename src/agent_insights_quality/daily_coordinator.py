@@ -48,9 +48,11 @@ from agent_insights_quality.models import (
     SemanticAssertionEvidence,
     TraceAssertionEvidence,
     VersionResult,
+    linked_operations_match_scope,
+    request_completion_payload,
 )
 from agent_insights_quality.profiles import RuntimeProfile
-from agent_insights_quality.provisioning import provision_profile
+from agent_insights_quality.provisioning import build_artifact, provision_profile
 from agent_insights_quality.registry import (
     load_registry,
     sync_registry,
@@ -71,6 +73,10 @@ from agent_insights_quality.runner import (
 )
 from agent_insights_quality.runtime_state import VersionCheckpointStore
 from agent_insights_quality.selection import select_daily
+from agent_insights_quality.validation_rules import issue_observation_context
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_issue_side_decision,
+)
 from agent_insights_quality.util import (
     ROOT,
     ContractError,
@@ -522,6 +528,28 @@ def _compose_daily_locked(
     active = lifecycle.read_active()
     if active.value["state"] != "TRAFFIC":
         raise ContractError("Daily lifecycle is not ready for composition")
+    linkage_batch = _run_root(
+        active,
+        private_root,
+    ) / "card-linkage-reclassification.json"
+    if not linkage_batch.is_file():
+        raise ContractError(
+            "Daily composition requires complete 20-issue card linkage reclassification"
+        )
+    linkage_value = read_json(linkage_batch)
+    if (
+        linkage_value.get("execution_id") != active.value["execution_id"]
+        or len(linkage_value.get("issue_ids") or []) != 20
+        or linkage_value.get("batch_digest")
+        != content_hash(
+            {
+                key: item
+                for key, item in linkage_value.items()
+                if key != "batch_digest"
+            }
+        )
+    ):
+        raise ContractError("Daily card linkage batch receipt is stale")
     _assert_checkout_binding(
         active,
         private_root,
@@ -1533,6 +1561,288 @@ def run_reopened_daily_version(
         return _lane_result(receipt, resumed=False)
 
 
+def _reclassify_completed_daily_version(
+    agent_name: str,
+    issue_id: str,
+    *,
+    confirmed: bool,
+    base: Path | None = None,
+) -> dict[str, Any]:
+    if not confirmed:
+        raise ContractError("Daily version reclassification requires explicit --confirm")
+    private_root = (base or runtime_root()).resolve()
+    active = _read_active(private_root, allowed_states={"TRAFFIC"})
+    if agent_name not in AGENT_ORDER or issue_id not in active.value["bindings"][
+        "selection"
+    ][agent_name]:
+        raise ContractError("Daily version reclassification assignment is invalid")
+    lane_lock = DailyLock(_lane_root(active, private_root, agent_name) / "lane.lock")
+    with lane_lock:
+        if _read_active_reopen(active, private_root, agent_name) is not None:
+            raise ContractError("Daily Agent already has an active reopen event")
+        agents, issues = load_catalogs()
+        current_hashes = catalog_hashes(agents, issues)
+        active_hashes = active.value["bindings"]["catalog_hashes"]
+        if (
+            current_hashes["agents"] != active_hashes["agents"]
+            or current_hashes["issues"] != active_hashes["issues"]
+        ):
+            raise ContractError("Daily reclassification catalog contract changed")
+        agent = next(item for item in agents["agents"] if item["name"] == agent_name)
+        issue = next(item for item in issues["issues"] if item["id"] == issue_id)
+        profile = RuntimeProfile.from_env("daily")
+        registry = load_registry(
+            profile.registry_path,
+            profile="daily",
+            catalog_hashes=active_hashes,
+        )
+        registry_binding = active.value["bindings"]["registry"]
+        entry = version_entry(registry, agent_name, issue_id)
+        if (
+            registry_binding is None
+            or content_hash(registry) != registry_binding["content_digest"]
+            or build_artifact(agent, issue)["content_digest"]
+            != entry["content_digest"]
+        ):
+            raise ContractError("Daily reclassification Agent or deployment changed")
+        original = _read_lane_receipt(
+            _lane_receipt_path(active, private_root, agent_name),
+            active,
+            agent_name,
+        )
+        original_result = _agent_result(original["result"])
+        target = next(
+            item for item in original_result.issues if item.logical_version == issue_id
+        )
+        store = _checkpoint_store(active, private_root)
+        checkpoint_args = (
+            agent_name,
+            issue_id,
+            entry["foundry_version"],
+            entry["content_digest"],
+        )
+        checkpoint_result = store.result(*checkpoint_args)
+        invocation = store.invocation(*checkpoint_args)
+        insight = (
+            target.observed_insight
+            if target.observed_insight is not None
+            else target.observed_insights[0]
+            if len(target.observed_insights) == 1
+            else None
+        )
+        linked = list(insight.linked_operation_ids) if insight is not None else []
+        context = issue_observation_context(
+            ROOT / issue["implementation"] / "traffic.json"
+        )
+        decided, acceptance = daily_issue_side_decision(
+            validation_mode=str(context["validation_mode"]),
+            n=int(context["n"]),
+            k=int(context["k"]),
+            required_surfaces=context["required_surfaces"],
+            summaries=[
+                request_completion_payload(item)
+                for item in target.endpoint_request_summaries
+                if item.activation_gate
+            ],
+            identity_verified=target.trace_contract_verified,
+        )
+        if (
+            target.status != "not_at_bar"
+            or target.error_code != "insufficient_trace_evidence"
+            or checkpoint_result is None
+            or asdict(checkpoint_result) != asdict(target)
+            or invocation is None
+            or invocation.request_count != invocation.response_count
+            or invocation.request_count != invocation.usable_response_count
+            or len(invocation.response_references) != invocation.request_count
+            or len(set(invocation.response_references))
+            != len(invocation.response_references)
+            or not decided
+            or acceptance is not None
+            or insight is None
+            or insight.agent_version != entry["foundry_version"]
+            or not linked_operations_match_scope(linked, target.operation_ids)
+            or insight.trace_count != len(linked)
+            or int(target.trace_behavior_summary.get("operation_count") or 0)
+            < int(issue["trace_contract"]["minimum_traces"])
+            or target.trace_behavior_summary.get("unhandled_error_count", 0) != 0
+        ):
+            raise ContractError("Daily completed issue is not safely reclassifiable")
+        replacement = replace(
+            target,
+            status="observed",
+            error_code=None,
+            observed_insight=insight,
+        )
+        event = {
+            "schema_version": "1.0.0",
+            "kind": "daily-version-reopen",
+            "execution_id": active.value["execution_id"],
+            "run_contract_digest": active.value["bindings"]["run_contract_digest"],
+            "agent_name": agent_name,
+            "issue_id": issue_id,
+            "original_checkout_commit_sha": active.value["bindings"][
+                "checkout_commit_sha"
+            ],
+            "recovery_commit_sha": current_clean_commit(),
+            "catalog_hashes": active_hashes,
+            "registry_digest": content_hash(registry),
+            "original_receipt_digest": original["receipt_digest"],
+            "accepted_baseline_digest": content_hash(original["result"]["baseline"]),
+            "invocation_digest": content_hash(asdict(invocation)),
+            "recovery_verifier_digest": _lane_recovery_verifier_digest(),
+            "event_digest": "",
+        }
+        event["event_digest"] = content_hash(
+            {key: item for key, item in event.items() if key != "event_digest"}
+        )
+        _validate_version_reopen(event, active, agent_name, issue_id)
+        event_path = _version_reopen_event_path(
+            active,
+            private_root,
+            agent_name,
+            event["event_digest"],
+        )
+        immutable_json(event_path, event)
+        store.save_supplemental_result(
+            *checkpoint_args,
+            replacement,
+            event_digest=event["event_digest"],
+        )
+        merged = AgentResult(
+            agent_name,
+            original_result.baseline,
+            [
+                replacement if item.logical_version == issue_id else item
+                for item in original_result.issues
+            ],
+        )
+        receipt = _stamp_lane_recovery_receipt(
+            active,
+            agent_name,
+            merged,
+            event,
+        )
+        _validate_lane_receipt(
+            receipt,
+            active,
+            agent_name,
+            reopen=event,
+        )
+        immutable_json(
+            _lane_recovery_receipt_path(active, private_root, agent_name),
+            receipt,
+        )
+        immutable_json(
+            _version_reopen_pointer_path(active, private_root, agent_name),
+            {
+                "schema_version": "1.0.0",
+                "event_path": event_path.relative_to(
+                    daily_runtime_root(private_root)
+                ).as_posix(),
+                "event_digest": event["event_digest"],
+            },
+        )
+    return {
+        **_status(active, private_root),
+        "agent": agent_name,
+        "issue": issue_id,
+        "status": "reclassified",
+        "endpoint_requests": 0,
+        "insight_runs": 0,
+    }
+
+
+def reclassify_daily_card_linkage(
+    *,
+    confirmed: bool,
+    base: Path | None = None,
+) -> dict[str, Any]:
+    if not confirmed:
+        raise ContractError("Daily card linkage reclassification requires --confirm")
+    private_root = (base or runtime_root()).resolve()
+    active = _read_active(private_root, allowed_states={"TRAFFIC"})
+    batch_path = _run_root(active, private_root) / "card-linkage-reclassification.json"
+    if batch_path.is_file():
+        value = read_json(batch_path)
+        if value.get("batch_digest") != content_hash(
+            {key: item for key, item in value.items() if key != "batch_digest"}
+        ):
+            raise ContractError("Daily card linkage batch receipt is invalid")
+        return {
+            **_status(active, private_root),
+            "status": "already_complete",
+            "changed_issue_ids": value["changed_issue_ids"],
+            "unchanged_issue_ids": value["unchanged_issue_ids"],
+            "endpoint_requests": 0,
+            "insight_runs": 0,
+        }
+    records = {
+        agent_name: _effective_lane_receipt(active, private_root, agent_name)[1]
+        for agent_name in AGENT_ORDER
+    }
+    issue_results = [
+        (agent_name, item)
+        for agent_name, receipt in records.items()
+        for item in _agent_result(receipt["result"]).issues
+    ]
+    if (
+        len(issue_results) != 20
+        or {item.logical_version for _, item in issue_results}
+        != {
+            issue_id
+            for issue_ids in active.value["bindings"]["selection"].values()
+            for issue_id in issue_ids
+        }
+    ):
+        raise ContractError("Daily card linkage batch does not cover 20 issues")
+    changed: list[str] = []
+    unchanged: list[str] = []
+    reasons: dict[str, str] = {}
+    for agent_name, item in issue_results:
+        issue_id = item.logical_version
+        if (
+            item.status == "not_at_bar"
+            and item.error_code == "insufficient_trace_evidence"
+        ):
+            _reclassify_completed_daily_version(
+                agent_name,
+                issue_id,
+                confirmed=True,
+                base=private_root,
+            )
+            changed.append(issue_id)
+            reasons[issue_id] = "card_linkage_threshold_corrected"
+        else:
+            unchanged.append(issue_id)
+            reasons[issue_id] = "classification_unchanged"
+    value = {
+        "schema_version": "1.0.0",
+        "kind": "daily-card-linkage-reclassification",
+        "execution_id": active.value["execution_id"],
+        "run_contract_digest": active.value["bindings"]["run_contract_digest"],
+        "issue_ids": sorted(item.logical_version for _, item in issue_results),
+        "changed_issue_ids": sorted(changed),
+        "unchanged_issue_ids": sorted(unchanged),
+        "reasons": reasons,
+        "endpoint_requests": 0,
+        "insight_runs": 0,
+        "batch_digest": "",
+    }
+    value["batch_digest"] = content_hash(
+        {key: item for key, item in value.items() if key != "batch_digest"}
+    )
+    immutable_json(batch_path, value)
+    return {
+        **_status(active, private_root),
+        "status": "reclassified",
+        "changed_issue_ids": value["changed_issue_ids"],
+        "unchanged_issue_ids": value["unchanged_issue_ids"],
+        "endpoint_requests": 0,
+        "insight_runs": 0,
+    }
+
+
 def daily_status(*, base: Path | None = None) -> dict[str, Any]:
     private_root = (base or runtime_root()).resolve()
     try:
@@ -2124,8 +2434,11 @@ def _lane_recovery_verifier_digest() -> str:
             path.relative_to(ROOT).as_posix(): file_hash(path)
             for path in (
                 ROOT / "src" / "agent_insights_quality" / "baseline_policy.py",
+                ROOT / "src" / "agent_insights_quality" / "assessment.py",
                 ROOT / "src" / "agent_insights_quality" / "daily_coordinator.py",
+                ROOT / "src" / "agent_insights_quality" / "models.py",
                 ROOT / "src" / "agent_insights_quality" / "runner.py",
+                ROOT / "src" / "agent_insights_quality" / "runtime_state.py",
                 ROOT / "schemas" / "daily-lane-reopen.schema.json",
                 ROOT / "schemas" / "daily-agent-recovery-receipt.schema.json",
                 ROOT / "schemas" / "daily-lane-worker-claim.schema.json",

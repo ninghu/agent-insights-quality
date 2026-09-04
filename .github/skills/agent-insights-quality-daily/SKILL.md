@@ -50,6 +50,11 @@ license: MIT
    The same version command may resume an exact complete saved invocation stopped only at telemetry
    correlation, trace hydration, or trace stability, provided semantic evidence has no contradiction
    and the issue has no ambiguous endpoint outcome.
+   Before composition, run `daily-reclassify-card-linkage --confirm` once to review all 20 selected
+   issues under the current global linkage rule. It is idempotent, runs no endpoint or Agent Insights
+   operation, and writes supplemental ancestry only for results that failed solely because a card
+   linked fewer than catalog `minimum_traces`. Every linked operation must be unique, exact-bound,
+   in-scope, and claim-relevant. Composition rejects a missing or partial batch.
 7. Start up to five visible Copilot assessment sub sessions, one per Agent and its five packages.
    Assess each baseline and four issues with GPT-5.6 Sol using the repository assessment prompt. Use
    independent `endpoint_evidence`; never assign `insight_engine` unless
