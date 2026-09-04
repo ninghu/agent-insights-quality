@@ -38,6 +38,9 @@ from agent_insights_quality.validation_rules import (
     execution_requests,
     issue_observation_context,
 )
+from agent_insights_quality.validation_trace_gap_policy import (
+    daily_target_decision,
+)
 
 
 def _request_summaries(
@@ -116,15 +119,16 @@ def _version_evidence(
             }
         )
     request_count = len(summaries)
-    return {
+    context = (
+        execution_context(traffic_path)
+        if logical_version == "v0"
+        else issue_observation_context(traffic_path)
+    )
+    value = {
         "logical_version": logical_version,
         "foundry_version": foundry_version,
         "content_digest": "sha256:" + "a" * 64,
-        **(
-            execution_context(traffic_path)
-            if logical_version == "v0"
-            else issue_observation_context(traffic_path)
-        ),
+        **context,
         "status": "passed" if logical_version == "v0" else "observed",
         "operation_ids": [f"{index + 1:032x}" for index in range(request_count)],
         "insight_references": (
@@ -169,6 +173,23 @@ def _version_evidence(
             None if logical_version == "v0" else "sha256:" + "c" * 64
         ),
     }
+    _, value["role_pass_summary"] = daily_target_decision(
+        target_role="baseline" if logical_version == "v0" else "issue",
+        validation_mode=str(context["validation_mode"]),
+        n=int(context["n"]),
+        k=int(context["k"]),
+        required_surfaces=(
+            ["semantic", "trace"]
+            if logical_version == "v0"
+            else context["required_surfaces"]
+        ),
+        summaries=[
+            item for item in summaries if item["activation_gate"] is True
+        ],
+        identity_verified=True,
+        direct_prompt_contract=prompt,
+    )
+    return value
 
 
 def test_manifest_request_assertions_are_json_arrays() -> None:
@@ -556,6 +577,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
     first_issue = incomplete_manifest["agents"][0]["issues"][0]
     for summary in first_issue["endpoint_request_summaries"]:
         summary["activation_gate"] = False
+    first_issue["role_pass_summary"] = None
     incomplete_manifest["manifest_hash"] = content_hash(
         {
             key: value
@@ -588,6 +610,7 @@ def test_promotion_receipt_binds_all_staging_versions() -> None:
         if summary["activation_gate"]
     )
     switch_summary["activation_gate"] = False
+    switch_issue["role_pass_summary"] = None
     hosted_manifest["manifest_hash"] = content_hash(
         {
             key: value

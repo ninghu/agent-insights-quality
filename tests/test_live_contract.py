@@ -3346,7 +3346,7 @@ def test_trace_assertion_stable_failure_waits_until_deadline(
     assert poll_times[-1] == 15 * 60
     assert progress
     assert "failing evidence is stabilizing" in progress[-1]
-    assert first_passes == [0]
+    assert first_passes == []
 
 
 def test_trace_only_unknown_binds_maturity_proof_at_deadline(
@@ -3511,7 +3511,7 @@ def test_trace_assertion_observes_span_ingested_after_135_seconds(
 
     assert evidence[0][0].passed is True
     assert monotonic[0] == 135 + 180
-    assert first_passes == [0]
+    assert first_passes == [315]
 
 
 def test_private_trace_batch_waits_for_late_required_surface(
@@ -3888,7 +3888,7 @@ def test_trace_assertion_late_duplicate_invalidates_stabilizing_pass(
 
     assert evidence[0][0].passed is False
     assert monotonic[0] == 15 * 60
-    assert first_passes == [0]
+    assert first_passes == []
 
 
 def test_trace_assertion_late_external_operation_is_ambiguous(
@@ -3937,7 +3937,7 @@ def test_trace_assertion_late_external_operation_is_ambiguous(
         )
 
     assert monotonic[0] == 135
-    assert first_passes == [0]
+    assert first_passes == []
 
 
 def test_trace_assertion_stable_pass_waits_for_ingestion_interval(
@@ -3978,7 +3978,7 @@ def test_trace_assertion_stable_pass_waits_for_ingestion_interval(
 
     assert evidence[0][0].passed is True
     assert monotonic[0] == 180
-    assert first_passes == [0]
+    assert first_passes == [180]
 
 
 def test_hosted_correlation_without_assertions_waits_for_ingestion_interval(
@@ -4024,7 +4024,7 @@ def test_hosted_correlation_without_assertions_waits_for_ingestion_interval(
 
     assert evidence == ((),)
     assert monotonic[0] == 180
-    assert first_mappings == [0]
+    assert first_mappings == [180]
 
 
 def test_trace_assertion_requires_correlation_in_final_snapshot(
@@ -4066,7 +4066,7 @@ def test_trace_assertion_requires_correlation_in_final_snapshot(
             on_first_pass=lambda: first_mappings.append(monotonic[0]),
         )
     assert monotonic[0] == 15 * 60
-    assert first_mappings == [0]
+    assert first_mappings == []
 
 
 def test_trace_assertion_late_pass_without_full_stability_is_incomplete(
@@ -4123,7 +4123,7 @@ def test_trace_assertion_late_pass_without_full_stability_is_incomplete(
     assert caught.value.expected_reference_count == 1
     assert caught.value.missing_reference_count == 0
     assert monotonic[0] == 15 * 60
-    assert first_passes == [0]
+    assert first_passes == []
 
 
 def test_trace_assertion_accepts_stable_final_failure_at_deadline(

@@ -2426,7 +2426,12 @@ union withsource=telemetry_type traces, dependencies, requests
                 )
                 next_progress = now + _TRACE_ASSERTION_PROGRESS_SECONDS
             self._sleep(min(current_poll_seconds, deadline - now))
-        if correlated is not None and last_results is not None and passing:
+        if (
+            age_bounded
+            and correlated is not None
+            and last_results is not None
+            and passing
+        ):
             if not first_pass_published:
                 on_first_pass()
             return publish_stable_results()
