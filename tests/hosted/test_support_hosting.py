@@ -53,7 +53,7 @@ def invoke(monkeypatch):
     providers = []
     packages = []
 
-    def send(version, text=None, *, body=None):
+    def send(version, text=None, *, body=None, model_reply="Local boundary summary."):
         directory = ROOT / "v0" if version == "v0" else ROOT / "issues" / version
         package = "support_hosted_" + uuid4().hex
         packages.append(package)
@@ -89,7 +89,7 @@ def invoke(monkeypatch):
                     "role": "assistant",
                     "status": "completed",
                     "content": [{
-                        "type": "output_text", "text": "Local boundary summary.", "annotations": [],
+                        "type": "output_text", "text": model_reply, "annotations": [],
                     }],
                 }],
             })
@@ -324,6 +324,31 @@ def test_baseline_transient_failure_and_partial_result_are_actual_tool_results(i
     assert tool_data(operations(partial, "read_history")[0])[1]["error"]["code"] == "history_unavailable"
     assert "revision 1; status open; summary Synthetic app access; optional history unavailable" in partial.output
     assert not partial.requests
+
+
+@pytest.mark.parametrize("attempt_index", [2, 7])
+def test_canonical_one_sentence_summary_preserves_request_and_complete_model_reply(invoke, attempt_index):
+    traffic = json.loads((ROOT / "v0" / "traffic.json").read_text(encoding="utf-8"))
+    attempt = next(item for item in traffic["attempts"] if item["index"] == attempt_index)
+    probe = next(item for item in traffic["requests"] if item["id"] == attempt["probe_steps"][0])
+    reply = "Synthetic ticket-demo-2 is open at revision 1 for app access, with no change dispatched."
+    result = invoke("v0", body=probe["request"]["body"], model_reply=reply)
+    reads, models = operations(result, "read_ticket"), model_spans(result)
+    assert len(reads) == len(models) == len(result.requests) == 1
+    arguments, outcome = tool_data(reads[0])
+    assert arguments == {"ticket_id": "ticket-demo-2"}
+    assert outcome["ok"] is True and outcome["ticket"]["revision"] == 1
+    prompt = result.requests[0]["input"]
+    assert "summarize ticket-demo-2 in one sentence." in prompt
+    assert outcome["ticket"]["summary"] in prompt
+    assert "no update was dispatched" in prompt
+    assert json.loads(models[0].attributes["gen_ai.input.messages"])[0]["content"] == prompt
+    assert json.loads(models[0].attributes["gen_ai.output.messages"])[0]["content"] == reply
+    assert result.output == reply
+    assert result.output.count(".") == 1
+    assert len(result.output.split()) <= probe["expected"]["semantic_assertions"]["max_words"]
+    for term in probe["expected"]["semantic_assertions"]["required_terms_all"]:
+        assert term in result.output
 
 
 @pytest.mark.parametrize("version", VERSIONS)

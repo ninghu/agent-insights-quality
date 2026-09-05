@@ -219,11 +219,17 @@ def ticket_text(result: dict) -> str:
 
 async def summarize(session: TicketSession, facts: str, max_output_tokens: int) -> str:
     synthetic = "one deterministic synthetic model failure" in session.request.text
+    requested_summary = session.request.action == "summarize"
+    prompt = (
+        "Follow the requested summary format using only the verified ticket facts.\n"
+        f"Request: {session.request.text}\nVerified ticket facts: {facts}"
+        if requested_summary else facts
+    )
     try:
-        reply = await session.model(facts, max_output_tokens, synthetic=synthetic)
+        reply = await session.model(prompt, max_output_tokens, synthetic=synthetic)
     except SyntheticModelFailure:
-        reply = await session.model(facts, max_output_tokens, synthetic=synthetic)
-    return facts + ". " + reply.text
+        reply = await session.model(prompt, max_output_tokens, synthetic=synthetic)
+    return reply.text if requested_summary else facts + ". " + reply.text
 
 
 async def run(session: TicketSession, max_output_tokens: int) -> str:

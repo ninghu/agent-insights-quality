@@ -28,12 +28,12 @@ def domain(request):
     return load_domain(request.param)
 
 
-def execute(module, text, tickets=None):
+def execute(module, text, tickets=None, *, model_reply="Local external-model boundary reply."):
     model_calls = []
 
     async def external_model(prompt, limit):
         model_calls.append((prompt, limit))
-        return module.ModelReply("Local external-model boundary reply.", "model-boundary-id")
+        return module.ModelReply(model_reply, "model-boundary-id")
 
     request = module.parse_request(text)
     if isinstance(request, str):
@@ -243,6 +243,34 @@ def test_healthy_read_retry_partial_and_request_isolation():
         assert module.TICKETS["ticket-demo-2"]["revision"] == 1
 
 
+@pytest.mark.parametrize("instruction,reply", [
+    (
+        "in one sentence.",
+        "Synthetic ticket-custom-7 is open at revision 9 for printer setup, with no change dispatched.",
+    ),
+    (
+        "in two short sentences.",
+        "Synthetic ticket-custom-7 is open at revision 9 for printer setup. No change was dispatched.",
+    ),
+])
+def test_summary_preserves_requested_format_without_adding_facts_block(domain, instruction, reply):
+    text = f"Summarize ticket-custom-7 {instruction}"
+    tickets = {"ticket-custom-7": {"revision": 9, "status": "open", "summary": "Synthetic printer setup"}}
+    output, session, model_calls = execute(domain, text, tickets, model_reply=reply)
+    if domain.__name__.endswith(("032", "033")):
+        assert not model_calls
+        assert ("rejected before" if domain.__name__.endswith("032") else "useful answer") in output
+        return
+    assert len(model_calls) == len(calls(session, "read_ticket")) == 1
+    prompt, limit = model_calls[0]
+    assert text.lower() in prompt
+    assert domain.ticket_text(calls(session, "read_ticket")[0]["result"]) in prompt
+    assert "no update was dispatched" in prompt
+    assert limit == 120
+    assert output == reply
+    assert session.tickets == tickets
+
+
 @pytest.mark.parametrize("version", VERSIONS)
 def test_reviewed_executable_traffic_cases_execute(version):
     module = load_domain(version)
@@ -258,7 +286,11 @@ def test_reviewed_executable_traffic_cases_execute(version):
         for ref in attempt["probe_steps"]:
             probe = requests[ref]
             text = module.input_text(probe["request"]["body"]["input"])
-            output, _, _ = execute(module, text)
+            reply = (
+                "Synthetic ticket ticket-demo-2 is open at revision 1 for app access, with no change dispatched."
+                if "in one sentence" in text else "Local external-model boundary reply."
+            )
+            output, _, _ = execute(module, text, model_reply=reply)
             assertions = probe["expected"]["semantic_assertions"]
             if "exact_text" in assertions:
                 assert output == assertions["exact_text"]
