@@ -155,6 +155,7 @@ def test_serial_parallel_fixed_outcomes_and_request_binding_are_equivalent(
     serial, parallel = run(1), run(parallel_workers)
     assert serial[:3] == parallel[:3]
     assert serial[3].cloud.global_peak < parallel[3].cloud.global_peak
+    assert parallel[3].cloud.global_peak == 2 * parallel_workers
     assert len(serial[3].sol.calls) == len(parallel[3].sol.calls) == 4
 
 
