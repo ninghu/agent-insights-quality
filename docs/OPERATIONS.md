@@ -24,6 +24,13 @@ fallback. Production readiness still requires the candidate's deployed trial and
 
 ## Recovery
 
+For an explicitly requested new private measurement, use a new nonzero `--rerun` identity
+with `--test-run --fresh-traffic`. This bypasses previous-trial traffic reuse without deleting
+earlier evidence. Repeating the same run resumes its frozen intent and completed checkpoints,
+even when the flag is omitted; it does not generate another fresh measurement. An unfinished
+fresh run cannot silently switch source. Ordinary official new-day runs remain fresh without
+this private-only flag.
+
 Repeat the same command to resume matching work. Do not manually invent generation IDs, clear
 state, delete Agent objects or resend completed traffic. A code/scenario change selects affected
 work; unchanged completed results retain their original provenance.
@@ -77,6 +84,19 @@ Independent repair work can proceed in separate worktrees without modifying the 
 Integrate repairs after the active run ends, then let incremental selection choose affected units.
 
 ## Private performance observations
+
+Daily keeps five Agent lanes and sequential versions within each lane. Independent attempts
+use up to `daily_attempt_workers` (default 4), under the shared `daily_attempt_budget` (default 10).
+Each attempt's setup and verification turns remain ordered. Travel is currently limited to one
+attempt at a time because its graph-wide booking ledger is shared; staging remains serial per target.
+Completed immutable evidence/card snapshots enter the four-worker assessment pipeline immediately,
+while other safe lane work continues. Final aggregation waits for both execution and assessment.
+
+After six attributable verification attempts, Daily can continue batched evidence collection for
+`daily_evidence_grace_seconds` (default 30), within the existing hydration deadline, to allow late
+invocation anchors to arrive. It stops earlier when all completed verification responses have
+anchors. Expiry does not raise readiness to ten or require complete child trees: six remains the
+minimum, and any essential gaps are disclosed. Grace deadlines survive restart.
 
 Live commands return `performance_path` when the private performance artifact was saved.
 It identifies one process segment under the run's `artifacts/performance/` directory.
