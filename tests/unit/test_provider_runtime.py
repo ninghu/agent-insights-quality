@@ -881,15 +881,17 @@ def test_structured_sol_exact_deployment_schema_and_bounded_rejection_retry(
     environment,
 ):
     waits = []
+    now = [0.0]
 
     async def sleep(delay):
         waits.append(delay)
+        now[0] += delay
 
     transport = FakeTransport(
         response({"error": "rate limited"}, 429, {"Retry-After": "2"}),
         response(sol_output()),
     )
-    sol = AzureSol(environment, transport=transport, sleep=sleep)
+    sol = AzureSol(environment, transport=transport, sleep=sleep, monotonic=lambda: now[0])
     result = run(
         sol.complete_json(
             instructions="Judge synthetic input",
@@ -955,20 +957,22 @@ def test_sol_errors_keep_private_response_but_only_safe_exception_text(
 
 
 @pytest.mark.parametrize("header, expected", [
-    ("60", 60), ("120", 120), ("1.5", 1.5), ("0", 0),
-    ("invalid", 1), ("nan", 1), ("inf", 1), ("-1", 1),
+    ("60", 60), ("120", 120), ("1.5", 1.5), ("0", 60),
+    ("invalid", 60), ("nan", 60), ("inf", 60), ("-1", 60),
 ])
 def test_sol_rate_limit_wait_does_not_undercut_server_reset(environment, header, expected):
     waits = []
+    now = [0.0]
 
     async def sleep(delay):
         waits.append(delay)
+        now[0] += delay
 
     transport = FakeTransport(
         response({"error": {"code": "rate_limit_exceeded"}}, 429, {"Retry-After": header}),
         response(sol_output()),
     )
-    result = run(AzureSol(environment, transport=transport, sleep=sleep).complete_json(
+    result = run(AzureSol(environment, transport=transport, sleep=sleep, monotonic=lambda: now[0]).complete_json(
         instructions="Judge synthetic input", payload={}, schema=SCHEMA,
     ))
     assert result == {"verdict": "synthetic"}
@@ -985,7 +989,7 @@ def test_sol_server_wait_beyond_local_budget_is_not_retried_early(environment):
     transport = FakeTransport(
         response({"error": {"code": "rate_limit_exceeded"}}, 429, {"Retry-After": "600"}),
     )
-    with pytest.raises(SolResponseError, match="sol_http_error") as error:
+    with pytest.raises(SolResponseError, match="sol_rate_limit_wait_exhausted") as error:
         run(AzureSol(environment, transport=transport, sleep=sleep).complete_json(
             instructions="Judge synthetic input", payload={}, schema=SCHEMA,
         ))

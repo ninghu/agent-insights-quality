@@ -69,7 +69,7 @@ class AzureLogsReader:
             self._client = LogsQueryClient(
                 self._credential
                 if self._credential is not None
-                else AzureCliCredential()
+                else AzureCliCredential(process_timeout=60)
             )
         try:
             result = self._client.query_resource(

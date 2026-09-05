@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
+from datetime import UTC
+from email.utils import format_datetime, parsedate_to_datetime
 from typing import Any
 
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
@@ -13,11 +17,80 @@ from agent_insights_quality.contracts import Environment, JsonObject
 from agent_insights_quality.errors import QualityError
 from agent_insights_quality.providers.transport import (
     AzureHttpTransport,
+    HttpResponse,
     JsonClient,
     Transport,
     check_status,
     encode,
 )
+
+_FALLBACK_COOLDOWN_SECONDS = 60
+_MAX_RETRY_WAIT_SECONDS = 300
+_MAX_TOTAL_WAIT_SECONDS = 600
+
+
+def _rate_headers(response: HttpResponse) -> dict[str, str]:
+    values = {}
+    for name in (
+        "retry-after", "retry-after-ms",
+        "x-ratelimit-limit-requests", "x-ratelimit-limit-tokens",
+        "x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens",
+        "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens",
+    ):
+        raw = response.header(name)
+        if not isinstance(raw, str) or len(raw) > 64:
+            continue
+        value = raw.strip()
+        if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value):
+            values[name] = value
+        elif name.startswith("x-ratelimit-reset-") and re.fullmatch(
+            r"(?:[0-9]+(?:\.[0-9]+)?(?:ms|s|m|h|d))+", value,
+        ):
+            values[name] = value
+        elif name == "retry-after":
+            try:
+                date = parsedate_to_datetime(value)
+                if date.tzinfo is not None:
+                    values[name] = format_datetime(date.astimezone(UTC), usegmt=True)
+            except (ValueError, TypeError, OverflowError):
+                continue
+    return values
+
+
+def _retry_delay(response: HttpResponse, wall_time: float) -> float:
+    delays = []
+    for name, scale in (("retry-after-ms", 1000), ("retry-after", 1)):
+        raw = response.header(name)
+        if not isinstance(raw, str):
+            continue
+        value = raw.strip()
+        if len(value) > 64:
+            if value.isascii() and value.isdigit() and value.lstrip("0"):
+                return math.inf
+            continue
+        try:
+            delay = float(value) / scale
+        except ValueError:
+            if name != "retry-after":
+                continue
+            try:
+                date = parsedate_to_datetime(value)
+                if date.tzinfo is None:
+                    continue
+                delay = date.timestamp() - wall_time
+            except (ValueError, TypeError, OverflowError, OSError):
+                continue
+        if math.isfinite(delay) and delay > 0:
+            delays.append(delay)
+    # When both headers exist, never retry earlier than either advertised reset.
+    return max(delays, default=_FALLBACK_COOLDOWN_SECONDS)
+
+
+def _response_detail(response: HttpResponse) -> JsonObject:
+    try:
+        return response.object()
+    except QualityError:
+        return {"raw_body": response.body.decode("utf-8", errors="replace")}
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> JsonObject:
@@ -73,11 +146,13 @@ class SolResponseError(QualityError):
         status: int,
         request_accepted: bool | None = True,
         retryable: bool = False,
+        private_detail: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(
             code, request_accepted=request_accepted, status=status, retryable=retryable
         )
         self.response = response
+        self.private_detail = dict(private_detail) if private_detail is not None else None
 
 
 class AzureSol:
@@ -89,6 +164,8 @@ class AzureSol:
         deployment: str = "sol-assessment",
         attempts: int = 3,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         if not deployment or not 1 <= attempts <= 5:
             raise QualityError("sol_configuration_invalid")
@@ -100,6 +177,96 @@ class AzureSol:
         self.deployment = deployment
         self.attempts = attempts
         self.sleep = sleep
+        self._monotonic = monotonic
+        self._wall_clock = wall_clock
+        self._cooldown_until = 0.0
+        self._cooldown_response: HttpResponse | None = None
+        self._recovery_gate = asyncio.Lock()
+        self._recovery_calls = 0
+
+    def _throttled(self, response: HttpResponse) -> None:
+        until = self._monotonic() + _retry_delay(response, self._wall_clock())
+        if self._cooldown_response is None or until >= self._cooldown_until:
+            self._cooldown_until = until
+            self._cooldown_response = response
+
+    def _wait_error(self, reason: str, sent: int) -> SolResponseError:
+        response = self._cooldown_response
+        assert response is not None
+        return SolResponseError(
+            "sol_rate_limit_wait_exhausted", _response_detail(response),
+            status=429, request_accepted=False,
+            private_detail={
+                "rate_limit": {"headers": _rate_headers(response)},
+                "wait_reason": reason, "attempts_sent": sent, "shared_cooldown": True,
+            },
+        )
+
+    async def _wait_for_cooldown(self, deadline: float, sent: int) -> None:
+        # Already-in-flight requests may extend the shared deadline while we sleep.
+        # Cap rechecks as well as elapsed time; a broken injected sleep must not spin.
+        for _ in range(8):
+            now = self._monotonic()
+            if now > deadline:
+                raise self._wait_error("total_wait_budget", sent)
+            delay = self._cooldown_until - now
+            if delay <= 0:
+                return
+            if delay > _MAX_RETRY_WAIT_SECONDS:
+                raise self._wait_error("server_wait_exceeds_limit", sent)
+            if delay > deadline - now:
+                raise self._wait_error("total_wait_budget", sent)
+            await self.sleep(delay)
+            if self._monotonic() <= now:
+                raise self._wait_error("clock_did_not_advance", sent)
+        raise self._wait_error("cooldown_extension_limit", sent)
+
+    async def _request(self, body: JsonObject) -> HttpResponse:
+        deadline = self._monotonic() + _MAX_TOTAL_WAIT_SECONDS
+        sent = 0
+        response = None
+        if self._cooldown_response is None:
+            response = await self._client.request(
+                "POST", "/openai/v1/responses", body, api_version=None,
+            )
+            sent = 1
+            if response.status != 429:
+                return response
+            self._throttled(response)
+        if sent == self.attempts:
+            assert response is not None
+            return response
+
+        # Healthy traffic stays concurrent. Once throttled, FIFO recovery owns its
+        # retries until completion so fresh calls cannot take the retry window.
+        self._recovery_calls += 1
+        acquired = False
+        try:
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                raise self._wait_error("total_wait_budget", sent)
+            try:
+                await asyncio.wait_for(self._recovery_gate.acquire(), timeout=remaining)
+            except TimeoutError:
+                raise self._wait_error("queue_wait_budget", sent) from None
+            acquired = True
+            while sent < self.attempts:
+                await self._wait_for_cooldown(deadline, sent)
+                response = await self._client.request(
+                    "POST", "/openai/v1/responses", body, api_version=None,
+                )
+                sent += 1
+                if response.status != 429:
+                    return response
+                self._throttled(response)
+            assert response is not None
+            return response
+        finally:
+            if acquired:
+                self._recovery_gate.release()
+            self._recovery_calls -= 1
+            if self._recovery_calls == 0 and self._monotonic() >= self._cooldown_until:
+                self._cooldown_response = None
 
     async def complete_json(
         self,
@@ -126,25 +293,7 @@ class AzureSol:
                 }
             },
         }
-        for attempt in range(self.attempts):
-            response = await self._client.request(
-                "POST", "/openai/v1/responses", body, api_version=None
-            )
-            # A received rate-limit rejection is safe to retry; an unknown POST is not.
-            if response.status != 429 or attempt + 1 == self.attempts:
-                break
-            retry_after = response.header("Retry-After")
-            try:
-                delay = float(retry_after) if retry_after is not None else 2**attempt
-            except (ValueError, OverflowError):
-                delay = 2**attempt
-            if not math.isfinite(delay) or delay < 0:
-                delay = 2**attempt
-            # Do not retry before the server's reset. Longer waits remain an
-            # explicit rate-limit failure for checkpointed recovery.
-            if delay > 300:
-                break
-            await self.sleep(delay)
+        response = await self._request(body)
         invalid_json = False
         try:
             value = response.object()
@@ -160,6 +309,7 @@ class AzureSol:
                 status=response.status,
                 request_accepted=error.request_accepted,
                 retryable=error.retryable,
+                private_detail={"rate_limit": {"headers": _rate_headers(response)}},
             ) from None
         if invalid_json:
             raise SolResponseError(

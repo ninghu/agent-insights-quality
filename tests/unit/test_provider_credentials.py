@@ -276,6 +276,7 @@ def test_logs_default_and_injected_credentials_reach_the_query_client(credential
         assert result.complete
     assert clients == [credential]
     assert credentials.constructed == ([] if injected else [credential])
+    assert credentials.options == ([] if injected else [{"process_timeout": 60}])
     assert len(queries) == 2
 
 
