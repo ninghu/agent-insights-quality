@@ -2,9 +2,10 @@
 
 Invocation keys are ``(attempt.index, step.step_id)``. Endpoint citation refs are
 ``endpoint-01-01`` (attempt and one-based turn); trace refs are Snapshot row refs.
-All ten complete conversation groups, including missing execution, go in one
-request. Oversized groups/requests are explicitly incomplete, never truncated.
-The caller persists the returned private detail before completing its checkpoint.
+Staging may batch independent complete conversation groups, including missing
+execution. Daily retains holistic card/root judgment using lossless transport
+deduplication, never isolated-chunk votes. The caller persists returned private
+detail before completing its checkpoint.
 """
 
 from __future__ import annotations
@@ -19,6 +20,13 @@ from typing import Any, Literal
 
 from jsonschema import Draft202012Validator
 
+from .assessment_partition import (
+    Partition,
+    expand_payload,
+    intern_payload,
+    partition_payload,
+    payload_size,
+)
 from .contracts import Attempt, Invocation, SolPort, Target
 from .errors import QualityError
 from .privacy import SUMMARIES
@@ -294,11 +302,14 @@ def _evidence(
 def _fits(payload: dict, limit: int) -> bool:
     if type(limit) is not int or limit <= 0:
         raise AssessmentError("assessment_limit_invalid")
-    return len(json.dumps(payload, ensure_ascii=True, allow_nan=False).encode("utf-8")) <= limit
+    return payload_size(payload) <= limit
 
 
 async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
-    schema = DAILY_SCHEMA if daily else STAGING_SCHEMA
+    indices = [attempt["index"] for attempt in expand_payload(payload)["attempts"]]
+    schema = deepcopy(DAILY_SCHEMA if daily else STAGING_SCHEMA)
+    schema["properties"]["attempts"].update(minItems=len(indices), maxItems=len(indices))
+    schema["properties"]["attempts"]["items"]["properties"]["index"]["enum"] = indices
     instructions = files("agent_insights_quality").joinpath(
         "prompts", "daily.md" if daily else "staging.md",
     ).read_text(encoding="utf-8")
@@ -309,12 +320,22 @@ async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
         raise AssessmentError(
             "assessment_output_invalid", private_detail={"input": payload, "output": output},
         )
-    if sorted(item["index"] for item in output["attempts"]) != list(range(1, 11)):
+    if sorted(item["index"] for item in output["attempts"]) != sorted(indices):
         raise AssessmentError(
             "assessment_attempt_coverage_invalid",
             private_detail={"input": payload, "output": output},
         )
     return _json_copy(output)
+
+
+def _retain_error(error: QualityError, detail: dict) -> None:
+    failure = getattr(error, "private_detail", None)
+    detail["failure"] = {
+        "code": error.code,
+        "detail": failure,
+        "response": getattr(error, "response", None),
+    }
+    error.private_detail = detail
 
 
 def _validate_attempts(evidence: _Evidence, output: dict, *, staging: bool) -> None:
@@ -344,35 +365,60 @@ async def assess_staging(
     issues, sufficiently evidenced permitted nonobservations consume attempts.
     """
     evidence = _evidence(target, attempts, invocations, snapshot)
-    detail = {"input": evidence.payload, "output": None}
-    if not _fits(evidence.payload, max_payload_bytes):
-        judgments = tuple({
-            "index": attempt.index, "sufficient": False, "observed": False,
-            "contract_violation": False, "citations": [],
-            "reason": "assessment_input_too_large",
-        } for attempt in attempts)
-        return StageResult("INCOMPLETE", 0, judgments, ("assessment_input_too_large",), detail)
-    output = await _complete(sol, evidence.payload, daily=False)
+    detail = {"input": evidence.payload, "output": None, "partitions": []}
+    partitions = (
+        (Partition(tuple(range(1, 11)), evidence.payload, False),)
+        if _fits(evidence.payload, max_payload_bytes)
+        else partition_payload(evidence.payload, max_payload_bytes)
+    )
+    output: dict[str, Any] = {"attempts": []}
+    oversized = False
+    for partition in partitions:
+        part = {
+            "indices": list(partition.indices), "input": partition.payload,
+            "output": None, "status": "oversized" if partition.oversized else "pending",
+        }
+        detail["partitions"].append(part)
+        if partition.oversized:
+            oversized = True
+            output["attempts"].extend({
+                "index": index, "sufficient": False, "observed": False,
+                "contract_violation": False, "citations": [],
+                "reason": "assessment_conversation_too_large",
+            } for index in partition.indices)
+            continue
+        try:
+            result = await _complete(sol, partition.payload, daily=False)
+            part["output"] = result
+            _validate_attempts(evidence, result, staging=True)
+        except QualityError as error:
+            part["status"] = "failed"
+            failure_detail = getattr(error, "private_detail", None)
+            if isinstance(failure_detail, dict) and "output" in failure_detail:
+                part["output"] = failure_detail["output"]
+            _retain_error(error, detail)
+            raise
+        part["status"] = "completed"
+        output["attempts"].extend(result["attempts"])
     detail["output"] = output
-    try:
-        _validate_attempts(evidence, output, staging=True)
-    except AssessmentError as error:
-        error.private_detail = detail
-        raise
     judgments = tuple(sorted(output["attempts"], key=lambda item: item["index"]))
     proven = [
         item for item in judgments
         if item["sufficient"] and item["index"] in evidence.ready
     ]
+    eligible = [
+        item for item in proven if item["index"] in evidence.complete
+    ] if snapshot.query_complete else []
+    passing = sum(item["observed"] and not item["contract_violation"] for item in eligible)
+    if oversized:
+        return StageResult(
+            "INCOMPLETE", passing, judgments, ("assessment_conversation_too_large",), detail,
+        )
     if target.validation_mode != "model_mediated" and any(
         item["contract_violation"] for item in proven
     ):
         passing = sum(item["observed"] for item in proven) if snapshot.query_complete else 0
         return StageResult("FAIL", passing, judgments, ("proven_contract_violation",), detail)
-    eligible = [
-        item for item in proven if item["index"] in evidence.complete
-    ] if snapshot.query_complete else []
-    passing = sum(item["observed"] and not item["contract_violation"] for item in eligible)
     if passing >= 6:
         return StageResult("PASS", passing, judgments, (), detail)
     unknown = 10 - len(eligible)
@@ -636,29 +682,48 @@ async def assess_daily(
     if not visible_in_time or len(visible.ready) < 6:
         exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
         reasons.add("pre_insights_evidence_unavailable")
-    if not _fits(payload, max_payload_bytes):
+    transport = payload if _fits(payload, max_payload_bytes) else intern_payload(payload)
+    if transport is not payload:
+        detail["transport_input"] = transport
+    if not _fits(transport, max_payload_bytes):
         exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
-        reasons.add("assessment_input_too_large")
+        reasons.add("assessment_context_incomplete")
+        detail["partition_plan"] = [
+            {
+                "indices": list(partition.indices),
+                "input": partition.payload,
+                "oversized": partition.oversized,
+                "status": "not_submitted_holistic_context_required",
+            }
+            for partition in partition_payload(payload, max_payload_bytes, intern=True)
+        ]
         return _daily_result(target, cards, None, exclusions, reasons, detail)
-    output = await _complete(sol, payload, daily=True)
-    detail["initial"] = deepcopy(output)
     try:
+        output = await _complete(sol, transport, daily=True)
+        detail["initial"] = deepcopy(output)
         _validate_daily(evidence, output, cards, baseline=target.is_baseline)
-    except AssessmentError as error:
-        error.private_detail = detail
+    except QualityError as error:
+        _retain_error(error, detail)
         raise
     candidates = _candidates(output, cards, baseline=target.is_baseline)
     if candidates:
         review_payload = {**payload, "review": {
             "candidate_reasons": candidates, "initial": output,
         }}
-        if _fits(review_payload, max_payload_bytes):
-            reviewed = await _complete(sol, review_payload, daily=True)
-            detail["review"] = reviewed
+        review_transport = (
+            review_payload if _fits(review_payload, max_payload_bytes)
+            else intern_payload(review_payload)
+        )
+        detail["review_input"] = review_payload
+        if review_transport is not review_payload:
+            detail["review_transport_input"] = review_transport
+        if _fits(review_transport, max_payload_bytes):
             try:
+                reviewed = await _complete(sol, review_transport, daily=True)
+                detail["review"] = reviewed
                 _validate_daily(evidence, reviewed, cards, baseline=target.is_baseline)
-            except AssessmentError as error:
-                error.private_detail = detail
+            except QualityError as error:
+                _retain_error(error, detail)
                 raise
             output, disagreement = _merge_review(output, reviewed, cards)
             if disagreement:

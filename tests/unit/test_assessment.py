@@ -1,7 +1,6 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import replace
-import json
 from pathlib import Path
 
 import pytest
@@ -12,6 +11,7 @@ from agent_insights_quality.assessment import (
     assess_staging,
     canonical_cards,
 )
+from agent_insights_quality.assessment_partition import expand_payload, intern_payload, payload_size
 from agent_insights_quality.contracts import Attempt, Invocation, Step, Target
 from agent_insights_quality.results import (
     ExclusionReason,
@@ -106,7 +106,7 @@ class Sol:
     async def complete_json(self, *, instructions, payload, schema):
         self.calls.append(deepcopy(payload))
         factory = self.factories[min(len(self.calls) - 1, len(self.factories) - 1)]
-        return factory(payload)
+        return factory(expand_payload(payload))
 
 
 def stage(data, sol=None, **kwargs):
@@ -386,7 +386,9 @@ def test_visibility_matches_complete_raw_rows_within_scope_not_snapshot_row_numb
 def test_invalid_model_output_and_citations_retain_private_failure_detail():
     with pytest.raises(AssessmentError) as failure:
         stage(evidence(), Sol(lambda payload: {"synthetic_invalid_output": "retained"}))
-    assert failure.value.private_detail["output"]["synthetic_invalid_output"] == "retained"
+    detail = failure.value.private_detail
+    assert detail["partitions"][0]["output"]["synthetic_invalid_output"] == "retained"
+    assert detail["failure"]["detail"]["output"]["synthetic_invalid_output"] == "retained"
     def invalid(payload):
         value = output(payload)
         value["cards"][0]["citations"][0]["refs"].append("nonexistent")
@@ -436,7 +438,7 @@ def test_baseline_noise_uses_current_evidence_and_cannot_become_a_duplicate():
 def test_a_review_that_cannot_fit_does_not_drop_evidence_or_publish_initial_gap():
     data, sol = evidence(), Sol()
     first = daily(data, sol, after=())
-    limit = len(json.dumps(sol.calls[0], ensure_ascii=True, allow_nan=False).encode("utf-8"))
+    limit = payload_size(intern_payload(sol.calls[0]))
     second_sol = Sol()
     assessed = daily(data, second_sol, after=(), max_payload_bytes=limit)
     assert first.private_detail["review"] is not None
