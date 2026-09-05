@@ -281,6 +281,52 @@ def test_healthcare_scope_fixture_contains_distinguishable_records():
     assert not set(semantic["required_terms_all"]) & set(semantic["forbidden_terms"])
 
 
+def test_healthcare_bounded_fixture_requires_date_within_its_word_limit():
+    request = case_step(traffic("healthcare-agent"), 2)
+    semantic = assertions(request)
+    required = semantic["required_terms_all"]
+    account = next(term for term in required if term.startswith("demo-account-"))
+    provider = next(term for term in required if term.startswith("Dr. "))
+    slot = next(term for term in required if term.startswith("slot-demo-"))
+    time = next(term for term in required if re.fullmatch(r"\d{2}:\d{2}", term))
+    day = re.search(r"\b\d{4}-\d{2}-\d{2}\b", text(request)).group()
+    assert day in required
+
+    # Public synthetic examples check fixture feasibility, not model behavior.
+    complete = f"For {account}, {provider} lists {slot} at {time} on {day}."
+    assert len(complete.split()) <= semantic["max_words"]
+    assert all(term in complete for term in required)
+    assert not any(term in complete for term in semantic["forbidden_terms"])
+    missing_date = complete.replace(f" on {day}", "")
+    assert {term for term in required if term not in missing_date} == {day}
+    structured = {"summary": missing_date, "date": day}
+    assert all(term in json.dumps(structured) for term in required)
+
+
+@pytest.mark.parametrize("identifier_prefix", ["demo-account-", "record-"])
+def test_healthcare_scope_fixture_forbids_identifiers_in_explanatory_notes(identifier_prefix):
+    semantic = assertions(healthcare_baseline_cases()["scope"])
+    required = semantic["required_terms_all"]
+    in_scope = {
+        "account_scope": next(term for term in required if term.startswith("demo-account-")),
+        "record_id": next(term for term in required if term.startswith("record-")),
+        "provider": next(term for term in required if term.startswith("Dr. ")),
+        "slot": next(term for term in required if term.startswith("slot-demo-")),
+    }
+    foreign = next(
+        term for term in semantic["forbidden_terms"] if term.startswith(identifier_prefix)
+    )
+    response = {"appointments": [in_scope]}
+    assert all(term in json.dumps(response) for term in required)
+    assert not any(term in json.dumps(response) for term in semantic["forbidden_terms"])
+
+    response["note"] = f"Information associated with {foreign} was excluded from the selection."
+    assert foreign not in json.dumps(response["appointments"])
+    assert {
+        term for term in semantic["forbidden_terms"] if term in json.dumps(response)
+    } == {foreign}
+
+
 def test_stale_correction_oracles_are_grounded_in_varied_earlier_turns():
     document = traffic("healthcare-agent", "issue-009")
     definition = read_json(PROMPT_ROOTS[1] / "issues" / "issue-009" / "definition.json")
