@@ -45,7 +45,7 @@ def table_records(tables: Any) -> tuple[JsonObject, ...]:
 
 
 class AzureLogsReader:
-    """Read-only raw tables; partial data is returned as incomplete, never as success."""
+    """Read-only raw tables using Azure CLI identity unless a credential is injected."""
 
     def __init__(
         self, resource_id: str, *, client: Any = None, credential: Any = None
@@ -61,7 +61,7 @@ class AzureLogsReader:
     def _query(self, query: str, bounds: tuple[datetime, datetime]) -> QueryResult:
         try:
             from azure.core.exceptions import AzureError
-            from azure.identity import DefaultAzureCredential
+            from azure.identity import AzureCliCredential
             from azure.monitor.query import LogsQueryClient
         except ImportError:
             raise QualityError("azure_logs_unavailable") from None
@@ -69,7 +69,7 @@ class AzureLogsReader:
             self._client = LogsQueryClient(
                 self._credential
                 if self._credential is not None
-                else DefaultAzureCredential()
+                else AzureCliCredential()
             )
         try:
             result = self._client.query_resource(

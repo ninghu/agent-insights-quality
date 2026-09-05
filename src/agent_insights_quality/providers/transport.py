@@ -71,7 +71,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class AzureHttpTransport:
-    """Current Azure identity; credentials are acquired only when a request is sent."""
+    """Current Azure CLI identity; credentials are acquired only when a request is sent."""
 
     def __init__(self, credential: Any = None) -> None:
         self._credential = credential
@@ -85,13 +85,13 @@ class AzureHttpTransport:
             raise QualityError("provider_scope_invalid", request_accepted=False)
         try:
             from azure.core.exceptions import AzureError
-            from azure.identity import DefaultAzureCredential
+            from azure.identity import AzureCliCredential
         except ImportError:
             raise QualityError(
                 "azure_identity_unavailable", request_accepted=False
             ) from None
         if self._credential is None:
-            self._credential = DefaultAzureCredential()
+            self._credential = AzureCliCredential()
         try:
             token = self._credential.get_token(request.scope).token
         except AzureError:
