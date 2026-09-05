@@ -1,5 +1,6 @@
 import asyncio
 from copy import deepcopy
+from itertools import product
 import json
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from agent_insights_quality.contracts import Environment
 from agent_insights_quality.providers import AzureSol, HttpResponse, SolResponseError
 from agent_insights_quality.providers.sol import _wire_schema
 from agent_insights_quality.selection import Selection
+import test_assessment as assessment_fake
 import test_runner as fake
 
 
@@ -69,6 +71,51 @@ def test_actual_assessment_wire_omits_only_unsupported_unique_items(schema):
     assert format["schema"] == expected
     assert schema == original
     assert value == result
+
+
+@pytest.mark.parametrize("mode", ["baseline", "deterministic", "model_mediated"])
+def test_daily_outgoing_schema_expresses_attempt_and_card_judgment_contracts(mode):
+    sol = assessment_fake.Sol()
+    assessment = assessment_fake.daily(assessment_fake.evidence(mode), sol)
+    result = assessment.private_detail["initial"]
+    requested = sol.schemas[0]
+    value, body = complete(requested, result)
+    wire = body["text"]["format"]["schema"]
+    assert value == result
+    assert wire == _wire_schema(requested)
+    assert body["text"]["format"]["strict"] is True
+    assert wire["type"] == "object" and "anyOf" not in wire
+    for name in ("attempts", "cards"):
+        for variant in wire["properties"][name]["items"]["anyOf"]:
+            assert variant["type"] == "object"
+            assert variant["additionalProperties"] is False
+            assert variant["required"] == list(variant["properties"])
+            assert "uniqueItems" not in variant["properties"]["citations"]["items"]["properties"]["refs"]
+    attempts = wire["properties"]["attempts"]
+    assert attempts["minItems"] == attempts["maxItems"] == 10
+    for variant in attempts["items"]["anyOf"]:
+        assert variant["properties"]["index"]["enum"] == list(range(1, 11))
+
+    for schema in (requested, wire):
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator(schema)
+        for sufficient, observed, cited in product((False, True), repeat=3):
+            candidate = deepcopy(result)
+            candidate["attempts"][0].update(
+                sufficient=sufficient, observed=observed,
+                citations=result["attempts"][0]["citations"] if cited else [],
+            )
+            assert validator.is_valid(candidate) == (sufficient or not observed)
+        for core, root, matched in product(
+            ("correct", "incorrect", "unknown"), (None, "", "supported root"), (False, True),
+        ):
+            candidate = deepcopy(result)
+            candidate["cards"][0].update(core=core, root_group=root, expected_match=matched)
+            valid = (
+                root == "supported root" and (mode != "baseline" or not matched)
+                if core == "correct" else root is None and not matched
+            )
+            assert validator.is_valid(candidate) == valid, (mode, core, root, matched)
 
 
 @pytest.mark.parametrize("schema", [STAGING_SCHEMA, DAILY_SCHEMA])

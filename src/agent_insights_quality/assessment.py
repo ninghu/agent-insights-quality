@@ -309,15 +309,45 @@ def _fits(payload: dict, limit: int) -> bool:
 
 
 async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
-    indices = [attempt["index"] for attempt in expand_payload(payload)["attempts"]]
+    decoded = expand_payload(payload)
+    indices = [attempt["index"] for attempt in decoded["attempts"]]
     schema = deepcopy(DAILY_SCHEMA if daily else STAGING_SCHEMA)
     schema["properties"]["attempts"].update(minItems=len(indices), maxItems=len(indices))
     schema["properties"]["attempts"]["items"]["properties"]["index"]["enum"] = indices
+    request_schema = deepcopy(schema)
+    if daily:
+        # Express the existing semantic rules using supported nested object unions.
+        attempts = request_schema["properties"]["attempts"]
+        attempt_fields = attempts["items"]["properties"]
+        false = {"type": "boolean", "enum": [False]}
+        attempts["items"] = {"anyOf": [
+            _object({**attempt_fields, "sufficient": {"type": "boolean", "enum": [True]}}),
+            _object({**attempt_fields, "sufficient": false, "observed": false}),
+        ]}
+        cards = request_schema["properties"]["cards"]
+        card_fields = cards["items"]["properties"]
+        cards["items"] = {"anyOf": [
+            _object({
+                **card_fields,
+                "core": {"enum": [CoreVerdict.CORRECT.value]},
+                "root_group": {"type": "string", "minLength": 1},
+                "expected_match": (
+                    false if decoded["target"]["validation_mode"] == "baseline"
+                    else card_fields["expected_match"]
+                ),
+            }),
+            _object({
+                **card_fields,
+                "core": {"enum": [CoreVerdict.INCORRECT.value, CoreVerdict.UNKNOWN.value]},
+                "root_group": {"type": "null"},
+                "expected_match": false,
+            }),
+        ]}
     instructions = files("agent_insights_quality").joinpath(
         "prompts", "daily.md" if daily else "staging.md",
     ).read_text(encoding="utf-8")
     output = await sol.complete_json(
-        instructions=instructions, payload=deepcopy(payload), schema=deepcopy(schema),
+        instructions=instructions, payload=deepcopy(payload), schema=request_schema,
     )
     if not isinstance(output, dict) or not Draft202012Validator(schema).is_valid(output):
         raise AssessmentError(

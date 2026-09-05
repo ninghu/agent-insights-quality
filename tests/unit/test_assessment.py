@@ -7,6 +7,8 @@ import pytest
 
 from agent_insights_quality.assessment import (
     AssessmentError,
+    DAILY_SCHEMA,
+    STAGING_SCHEMA,
     assess_daily,
     assess_staging,
     canonical_cards,
@@ -102,9 +104,11 @@ class Sol:
     def __init__(self, *factories):
         self.factories = factories or (output,)
         self.calls = []
+        self.schemas = []
 
     async def complete_json(self, *, instructions, payload, schema):
         self.calls.append(deepcopy(payload))
+        self.schemas.append(deepcopy(schema))
         factory = self.factories[min(len(self.calls) - 1, len(self.factories) - 1)]
         return factory(expand_payload(payload))
 
@@ -331,6 +335,100 @@ def test_unexpected_real_does_not_inflate_correct_or_noise_and_severity_is_diagn
     assert result.counts.correct_issues == result.counts.noise_cards == 0
     assert result.score == 0.0
     assert result.units[0].findings[0].classification.value == "unexpected_real"
+
+
+def test_correct_unexpected_baseline_card_has_no_healthy_or_expected_detection_credit():
+    baseline, issue = evidence("baseline"), evidence()
+    baseline_sol, issue_sol = Sol(), Sol()
+    baseline_result = daily(baseline, baseline_sol)
+    issue_result = daily(issue, issue_sol)
+    assert not baseline_result.unit_result.exclusion_reasons
+    result = aggregate_results(
+        [
+            PlannedUnit(baseline[0].unit_id),
+            PlannedUnit(issue[0].unit_id, issue[0].unit_id.logical_version),
+        ],
+        [baseline_result.unit_result, issue_result.unit_result],
+    )
+    assert result.units[0].findings[0].classification.value == "unexpected_real"
+    assert (result.counts.expected_issues, result.counts.correct_issues) == (1, 1)
+    assert result.counts.noise_cards == result.counts.duplicate_cards == 0
+    assert result.score == 100.0
+    assert len(baseline_sol.calls) == len(issue_sol.calls) == 1
+
+
+@pytest.mark.parametrize("mode,section,changes", [
+    ("model_mediated", "attempts", {"sufficient": False, "observed": True, "citations": []}),
+    ("baseline", "attempts", {"sufficient": False, "observed": True, "citations": []}),
+    ("baseline", "cards", {"expected_match": True}),
+    ("model_mediated", "cards", {"root_group": None}),
+    ("model_mediated", "cards", {"core": "incorrect", "expected_match": False}),
+    ("model_mediated", "cards", {"core": "unknown", "expected_match": False}),
+    ("model_mediated", "cards", {"core": "incorrect", "root_group": None}),
+    ("model_mediated", "cards", {"core": "unknown", "root_group": None}),
+])
+def test_daily_invalid_judgments_are_retained_not_normalized_or_retried(mode, section, changes):
+    returned = []
+
+    def invalid(payload):
+        value = output(payload)
+        value[section][-1].update(changes)
+        returned.append(deepcopy(value))
+        return value
+
+    sol = Sol(invalid)
+    with pytest.raises(AssessmentError, match="assessment_judgment_invalid") as failure:
+        daily(evidence(mode, no_trace=(10,)), sol)
+    detail = failure.value.private_detail
+    assert detail["initial"] == returned[0]
+    assert detail["review"] is detail["resolved"] is None
+    assert detail["failure"]["code"] == "assessment_judgment_invalid"
+    assert len(sol.calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["baseline", "model_mediated"])
+def test_daily_insufficient_attempt_citations_are_still_validated(mode):
+    def invalid(payload):
+        value = output(payload)
+        value["attempts"][-1].update(
+            sufficient=False, observed=False,
+            citations=[{"attempt": 10, "step_id": "probe", "refs": ["row-1-probe"]}],
+        )
+        return value
+
+    with pytest.raises(AssessmentError, match="assessment_citation_invalid"):
+        daily(evidence(mode), Sol(invalid))
+
+
+def test_daily_request_guidance_leaves_shared_schemas_and_staging_requests_unchanged():
+    originals = deepcopy((DAILY_SCHEMA, STAGING_SCHEMA))
+    before = Sol(lambda payload: output(payload, stage=True))
+    after = Sol(lambda payload: output(payload, stage=True))
+    stage(evidence(), before)
+    daily(evidence("baseline"))
+    daily(evidence())
+    stage(evidence(), after)
+    expected = deepcopy(originals[1])
+    expected["properties"]["attempts"]["items"]["properties"]["index"]["enum"] = list(range(1, 11))
+    assert before.schemas == after.schemas == [expected]
+    assert (DAILY_SCHEMA, STAGING_SCHEMA) == originals
+
+
+def test_lossless_daily_baseline_uses_decoded_target_for_request_schema():
+    data, plain_sol = evidence("baseline"), Sol()
+    original = daily(data, plain_sol)
+    payload = original.private_detail["input"]
+    limit = payload_size(intern_payload(payload))
+    assert limit < payload_size(payload)
+    encoded_sol = Sol()
+    encoded = daily(data, encoded_sol, max_payload_bytes=limit)
+    assert encoded_sol.calls[0]["lossless_encoding"] == "json-path-references-v1"
+    assert expand_payload(encoded_sol.calls[0]) == payload
+    assert encoded_sol.schemas == plain_sol.schemas
+    for variant in encoded_sol.schemas[0]["properties"]["cards"]["items"]["anyOf"]:
+        assert variant["properties"]["expected_match"]["enum"] == [False]
+    assert encoded.unit_result == original.unit_result
+    assert len(encoded_sol.calls) == len(plain_sol.calls) == 1
 
 
 def test_review_disagreement_is_retained_and_not_forced_to_a_favorable_verdict():

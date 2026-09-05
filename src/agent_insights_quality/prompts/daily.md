@@ -19,6 +19,11 @@ or evidence from only one partition.
 Represent all ten attempts. Here sufficient/observed refer to adequate evidence
 and independent activation of the expected defect, not repeated staging
 qualification. On a baseline, observed may describe evidenced healthy behavior.
+For every attempt, observed=true requires sufficient=true and adequate independent
+endpoint/probe trace evidence. If sufficient=false, observed must be false, even
+when the response appears healthy or defective; citations may be empty or cite
+only matching allowed refs. Sufficient=true permits observed=false when adequate
+evidence does not establish the expected defect (or healthy baseline behavior).
 Six distinct attributable probes can support a measurement; do not demand ten
 perfect responses, every child span, or exact list-length versus trace-count
 equality. Mark essential execution/evidence gaps in limitations, but do not mark
@@ -41,12 +46,17 @@ allowed_citation_refs. Cite other relevant setup/probe refs too. Card text,
 request text, anomaly/self-report labels and catalog claims alone cannot prove
 runtime defects. Unrelated sibling/history records are never current proof.
 
-Give otherwise-correct cards the same private root_group iff they describe the
-same root cause. expected_match requires an independently established expected
+Every correct card requires a non-null, nonempty string root_group. Give
+otherwise-correct cards the same private root_group iff they describe the same
+root cause. expected_match requires an independently established expected
 defect, not merely matching card wording. Wrong cards are Noise, never Duplicate.
 Distinct otherwise-correct same-root extras are Duplicate. A real unexpected
 Agent problem is not Noise and cannot add an expected detection. Return null
 root_group and false expected_match for unknown/incorrect cards.
+For a target with validation_mode=baseline, expected_match must always be false,
+including correct cards describing a real unexpected baseline bug. Such a card
+still requires its supported root_group; healthy behavior never earns detection
+credit.
 
 Use observed-at, execution windows, and visible_snapshot to distinguish evidence
 available before engine_started_at from later evidence. Later arrival may inform
