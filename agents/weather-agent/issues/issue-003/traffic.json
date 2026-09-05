@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Separate synthetic forecast evidence: high=28, low=17, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -61,8 +61,8 @@
           },
           "exact_json_fields": {
             "shape": "forecast",
-            "high": 27,
-            "low": 13,
+            "high": 28,
+            "low": 17,
             "unit": "celsius"
           }
         }
@@ -83,7 +83,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=rain, temperature=8, unit=celsius. Separate synthetic forecast evidence: high=15, low=4, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -126,8 +126,8 @@
           },
           "exact_json_fields": {
             "shape": "forecast",
-            "high": 27,
-            "low": 13,
+            "high": 15,
+            "low": 4,
             "unit": "celsius"
           }
         }
@@ -148,7 +148,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=snow, temperature=-2, unit=celsius. Separate synthetic forecast evidence: high=5, low=-6, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -191,8 +191,8 @@
           },
           "exact_json_fields": {
             "shape": "forecast",
-            "high": 27,
-            "low": 13,
+            "high": 5,
+            "low": -6,
             "unit": "celsius"
           }
         }
@@ -213,7 +213,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=cloudy, temperature=16, unit=celsius. Separate synthetic forecast evidence: high=23, low=12, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -256,8 +256,8 @@
           },
           "exact_json_fields": {
             "shape": "forecast",
-            "high": 27,
-            "low": 13,
+            "high": 23,
+            "low": 12,
             "unit": "celsius"
           }
         }
@@ -278,7 +278,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=windy, temperature=12, unit=celsius. Separate synthetic forecast evidence: high=19, low=8, unit=celsius. What are the current conditions?"
                 }
               ]
             }
@@ -321,8 +321,8 @@
           },
           "exact_json_fields": {
             "shape": "forecast",
-            "high": 27,
-            "low": 13,
+            "high": 19,
+            "low": 8,
             "unit": "celsius"
           }
         }
@@ -404,7 +404,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 01. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Separate synthetic forecast evidence: high=28, low=17, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -444,8 +444,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 28,
+                      "low": 17,
                       "unit": "celsius"
                     }
                   },
@@ -521,7 +521,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Public Demo Location 2: condition=rain, temperature=8, unit=celsius. Separate synthetic forecast evidence: high=15, low=4, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -561,8 +561,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 15,
+                      "low": 4,
                       "unit": "celsius"
                     }
                   },
@@ -638,7 +638,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 03. Synthetic current-conditions evidence for Public Demo Location 3: condition=snow, temperature=-2, unit=celsius. Separate synthetic forecast evidence: high=5, low=-6, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -678,8 +678,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 5,
+                      "low": -6,
                       "unit": "celsius"
                     }
                   },
@@ -755,7 +755,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 4: condition=cloudy, temperature=16, unit=celsius. Separate synthetic forecast evidence: high=23, low=12, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -795,8 +795,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 23,
+                      "low": 12,
                       "unit": "celsius"
                     }
                   },
@@ -872,7 +872,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 05. Synthetic current-conditions evidence for Public Demo Location 5: condition=windy, temperature=12, unit=celsius. Separate synthetic forecast evidence: high=19, low=8, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -912,8 +912,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 19,
+                      "low": 8,
                       "unit": "celsius"
                     }
                   },
@@ -989,7 +989,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Separate synthetic forecast evidence: high=28, low=17, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -1029,8 +1029,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 28,
+                      "low": 17,
                       "unit": "celsius"
                     }
                   },
@@ -1106,7 +1106,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Public Demo Location 2: condition=rain, temperature=8, unit=celsius. Separate synthetic forecast evidence: high=15, low=4, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -1146,8 +1146,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 15,
+                      "low": 4,
                       "unit": "celsius"
                     }
                   },
@@ -1223,7 +1223,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Public Demo Location 3: condition=snow, temperature=-2, unit=celsius. Separate synthetic forecast evidence: high=5, low=-6, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -1263,8 +1263,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 5,
+                      "low": -6,
                       "unit": "celsius"
                     }
                   },
@@ -1340,7 +1340,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 4: condition=cloudy, temperature=16, unit=celsius. Separate synthetic forecast evidence: high=23, low=12, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -1380,8 +1380,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 23,
+                      "low": 12,
                       "unit": "celsius"
                     }
                   },
@@ -1457,7 +1457,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=19, unit=celsius. Separate synthetic forecast evidence: high=27, low=13, unit=celsius. What are the current conditions?"
+                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Public Demo Location 5: condition=windy, temperature=12, unit=celsius. Separate synthetic forecast evidence: high=19, low=8, unit=celsius. What are the current conditions?"
                           }
                         ]
                       }
@@ -1497,8 +1497,8 @@
                     },
                     "exact_json_fields": {
                       "shape": "forecast",
-                      "high": 27,
-                      "low": 13,
+                      "high": 19,
+                      "low": 8,
                       "unit": "celsius"
                     }
                   },

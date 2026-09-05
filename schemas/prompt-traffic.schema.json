@@ -108,7 +108,7 @@
                 "minItems": 1,
                 "uniqueItems": true,
                 "items": {
-                  "enum": ["invoke_agent", "execute_tool", "chat"]
+                  "enum": ["invoke_agent", "chat"]
                 }
               },
               "semantic_assertions": {
@@ -273,7 +273,7 @@
         "operations": {
           "type": "array",
           "minItems": 1,
-          "items": {"enum": ["invoke_agent", "execute_tool", "chat"]}
+          "items": {"enum": ["invoke_agent", "chat"]}
         }
       },
       "allOf": [

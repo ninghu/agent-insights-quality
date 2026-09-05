@@ -2,44 +2,6 @@ schema_version: "1.0.0"
 selection:
   issues_per_agent_daily: 4
   weekdays: [Monday, Tuesday, Wednesday, Thursday, Friday]
-  full_run_on_change: true
-source_delta_contracts:
-  issue-001: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-002: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-003: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-004: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-005: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-006: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-007: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-008: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-009: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-010: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-011: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-012: {authority: prompt_definition, changed_paths: [definition.instructions, metadata.logical_version]}
-  issue-013: {authority: hosted_source, changed_files: [app.py]}
-  issue-014: {authority: hosted_source, changed_files: [app.py]}
-  issue-015: {authority: hosted_source, changed_files: [app.py]}
-  issue-016: {authority: hosted_source, changed_files: [app.py]}
-  issue-017: {authority: hosted_source, changed_files: [app.py]}
-  issue-018: {authority: hosted_source, changed_files: [app.py]}
-  issue-019: {authority: hosted_source, changed_files: [app.py]}
-  issue-020: {authority: hosted_source, changed_files: [app.py]}
-  issue-021: {authority: hosted_source, changed_files: [app.py]}
-  issue-022: {authority: hosted_source, changed_files: [app.py]}
-  issue-023: {authority: hosted_source, changed_files: [app.py]}
-  issue-024: {authority: hosted_source, changed_files: [app.py]}
-  issue-025: {authority: hosted_source, changed_files: [app.py]}
-  issue-026: {authority: hosted_source, changed_files: [app.py]}
-  issue-027: {authority: hosted_source, changed_files: [app.py]}
-  issue-028: {authority: hosted_source, changed_files: [app.py]}
-  issue-029: {authority: hosted_source, changed_files: [app.py]}
-  issue-030: {authority: hosted_source, changed_files: [app.py]}
-  issue-031: {authority: hosted_source, changed_files: [app.py]}
-  issue-032: {authority: hosted_source, changed_files: [app.py]}
-  issue-033: {authority: hosted_source, changed_files: [app.py]}
-  issue-034: {authority: hosted_source, changed_files: [app.py]}
-  issue-035: {authority: hosted_source, changed_files: [app.py]}
-  issue-036: {authority: hosted_source, changed_files: [app.py]}
 issues:
   - id: issue-001
     title: Unsupported factual answer

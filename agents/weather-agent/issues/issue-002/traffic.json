@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                 }
               ]
             }
@@ -65,7 +65,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=rain, temperature=8, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                 }
               ]
             }
@@ -84,8 +84,8 @@
         "semantic_assertions": {
           "response_format": "non_json",
           "required_terms_all": [
-            "clear",
-            "21",
+            "rain",
+            "8",
             "celsius"
           ],
           "forbidden_terms": [
@@ -112,7 +112,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=snow, temperature=-2, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                 }
               ]
             }
@@ -131,8 +131,8 @@
         "semantic_assertions": {
           "response_format": "non_json",
           "required_terms_all": [
-            "clear",
-            "21",
+            "snow",
+            "-2",
             "celsius"
           ],
           "forbidden_terms": [
@@ -159,7 +159,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=cloudy, temperature=16, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                 }
               ]
             }
@@ -178,8 +178,8 @@
         "semantic_assertions": {
           "response_format": "non_json",
           "required_terms_all": [
-            "clear",
-            "21",
+            "cloudy",
+            "16",
             "celsius"
           ],
           "forbidden_terms": [
@@ -206,7 +206,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=windy, temperature=12, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                 }
               ]
             }
@@ -225,8 +225,8 @@
         "semantic_assertions": {
           "response_format": "non_json",
           "required_terms_all": [
-            "clear",
-            "21",
+            "windy",
+            "12",
             "celsius"
           ],
           "forbidden_terms": [
@@ -314,7 +314,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 01. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -413,7 +413,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Public Demo Location 2: condition=rain, temperature=8, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -429,8 +429,8 @@
                   "semantic_assertions": {
                     "response_format": "non_json",
                     "required_terms_all": [
-                      "clear",
-                      "21",
+                      "rain",
+                      "8",
                       "celsius"
                     ],
                     "forbidden_terms": [
@@ -512,7 +512,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 03. Synthetic current-conditions evidence for Public Demo Location 3: condition=snow, temperature=-2, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -528,8 +528,8 @@
                   "semantic_assertions": {
                     "response_format": "non_json",
                     "required_terms_all": [
-                      "clear",
-                      "21",
+                      "snow",
+                      "-2",
                       "celsius"
                     ],
                     "forbidden_terms": [
@@ -611,7 +611,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 4: condition=cloudy, temperature=16, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -627,8 +627,8 @@
                   "semantic_assertions": {
                     "response_format": "non_json",
                     "required_terms_all": [
-                      "clear",
-                      "21",
+                      "cloudy",
+                      "16",
                       "celsius"
                     ],
                     "forbidden_terms": [
@@ -710,7 +710,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 05. Synthetic current-conditions evidence for Public Demo Location 5: condition=windy, temperature=12, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -726,8 +726,8 @@
                   "semantic_assertions": {
                     "response_format": "non_json",
                     "required_terms_all": [
-                      "clear",
-                      "21",
+                      "windy",
+                      "12",
                       "celsius"
                     ],
                     "forbidden_terms": [
@@ -809,7 +809,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -908,7 +908,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Public Demo Location 2: condition=rain, temperature=8, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -924,8 +924,8 @@
                   "semantic_assertions": {
                     "response_format": "non_json",
                     "required_terms_all": [
-                      "clear",
-                      "21",
+                      "rain",
+                      "8",
                       "celsius"
                     ],
                     "forbidden_terms": [
@@ -1007,7 +1007,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Public Demo Location 3: condition=snow, temperature=-2, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -1023,8 +1023,8 @@
                   "semantic_assertions": {
                     "response_format": "non_json",
                     "required_terms_all": [
-                      "clear",
-                      "21",
+                      "snow",
+                      "-2",
                       "celsius"
                     ],
                     "forbidden_terms": [
@@ -1106,7 +1106,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 4: condition=cloudy, temperature=16, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -1122,8 +1122,8 @@
                   "semantic_assertions": {
                     "response_format": "non_json",
                     "required_terms_all": [
-                      "clear",
-                      "21",
+                      "cloudy",
+                      "16",
                       "celsius"
                     ],
                     "forbidden_terms": [
@@ -1205,7 +1205,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=21, unit=celsius. Return JSON with condition, temperature, and unit."
+                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Public Demo Location 5: condition=windy, temperature=12, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string)."
                           }
                         ]
                       }
@@ -1221,8 +1221,8 @@
                   "semantic_assertions": {
                     "response_format": "non_json",
                     "required_terms_all": [
-                      "clear",
-                      "21",
+                      "windy",
+                      "12",
                       "celsius"
                     ],
                     "forbidden_terms": [

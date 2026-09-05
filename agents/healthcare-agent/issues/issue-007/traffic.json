@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-21. Prepare a handoff for a scheduling specialist about the unavailable date."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-21. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                 }
               ]
             }
@@ -58,7 +58,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-22. Prepare a handoff for a scheduling specialist about the unavailable date."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-22. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                 }
               ]
             }
@@ -98,7 +98,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-23. Prepare a handoff for a scheduling specialist about the unavailable date."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-23. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                 }
               ]
             }
@@ -138,7 +138,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-24. Prepare a handoff for a scheduling specialist about the unavailable date."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-24. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                 }
               ]
             }
@@ -178,7 +178,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-25. Prepare a handoff for a scheduling specialist about the unavailable date."
+                  "text": "Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-25. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                 }
               ]
             }
@@ -279,7 +279,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-21. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 01. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-21. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }
@@ -371,7 +371,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-22. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 02. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-22. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }
@@ -463,7 +463,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-23. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 03. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-23. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }
@@ -555,7 +555,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-24. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 04. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-24. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }
@@ -647,7 +647,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-25. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 05. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-25. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }
@@ -739,7 +739,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-21. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 06. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-21. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }
@@ -831,7 +831,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-22. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 07. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-22. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }
@@ -923,7 +923,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-23. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 08. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-23. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }
@@ -1015,7 +1015,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-24. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 09. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-24. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }
@@ -1107,7 +1107,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-25. Prepare a handoff for a scheduling specialist about the unavailable date."
+                            "text": "Fixed synthetic case 10. Synthetic schedule evidence for demo-account-a: Dr. Rivera has no open slots on 2026-09-25. Prepare a handoff for a scheduling specialist about the unavailable date. Scheduling desk owns follow-up: request alternative dates by 17:00 on the requested date and validate any selection against newly supplied schedule evidence. The handoff must include owner, next_action, deadline, and validation."
                           }
                         ]
                       }

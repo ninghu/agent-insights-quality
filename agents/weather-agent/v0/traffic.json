@@ -59,7 +59,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Denver: condition=snow, temperature=25. What is the weather now?"
+                  "text": "Synthetic current-conditions evidence for Denver: condition=snow, temperature_celsius=-4, temperature_fahrenheit=24.8. What is the weather now?"
                 }
               ]
             }
@@ -74,7 +74,7 @@
         "http_status": 200,
         "behavior": "Applies the retained Fahrenheit preference and returns only the deterministic grounded current-conditions sentence.",
         "semantic_assertions": {
-          "exact_text": "Denver: snow, 25 Fahrenheit."
+          "exact_text": "Denver: snow, 24.8 Fahrenheit."
         }
       }
     },
@@ -127,7 +127,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return exactly this bare JSON object with no prose or Markdown fences: {\"condition\":\"clear\",\"temperature\":21,\"unit\":\"celsius\"}"
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string), using the evidence."
                 }
               ]
             }
@@ -204,6 +204,253 @@
         "behavior": "Returns only the deterministic partial forecast sentence and marks day two unavailable.",
         "semantic_assertions": {
           "exact_text": "Reykjavik day one: windy, high 9 Celsius, low 5 Celsius. Day two: unavailable."
+        }
+      }
+    },
+    {
+      "id": "weather-v0-competing-evidence",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Synthetic current-conditions evidence for Bergen: condition=rain, temperature=8, unit=celsius. Separate synthetic forecast evidence: high=16, low=4, unit=celsius. Give the current conditions in at most 10 words."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-competing-evidence"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses the current evidence and active units, respecting the requested output bound.",
+        "semantic_assertions": {
+          "exact_text": "Bergen: rain, 8 Celsius.",
+          "max_words": 10
+        }
+      }
+    },
+    {
+      "id": "weather-v0-current-missing",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Synthetic current-conditions evidence for Dublin is unavailable. Separate synthetic forecast evidence: condition=clear, high=18, low=9, unit=celsius. What is the weather now?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-current-missing"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses the current evidence and active units, respecting the requested output bound.",
+        "semantic_assertions": {
+          "required_claims": [
+            "Current conditions are unavailable."
+          ],
+          "forbidden_claims": [
+            "Forecast values establish the current weather.",
+            "The current condition is clear."
+          ],
+          "max_words": 30
+        }
+      }
+    },
+    {
+      "id": "weather-v0-celsius-establish",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Use Celsius for this conversation. Synthetic current-conditions evidence for Helsinki: condition=clear, temperature_celsius=10, temperature_fahrenheit=50. Give the current weather."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-units"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses the current evidence and active units, respecting the requested output bound.",
+        "semantic_assertions": {
+          "exact_text": "Helsinki: clear, 10 Celsius."
+        }
+      }
+    },
+    {
+      "id": "weather-v0-celsius-followup",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Synthetic current-conditions evidence for Tallinn: condition=cloudy, temperature_celsius=15, temperature_fahrenheit=59. What is the weather there?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-units"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses the current evidence and active units, respecting the requested output bound.",
+        "semantic_assertions": {
+          "exact_text": "Tallinn: cloudy, 15 Celsius."
+        }
+      }
+    },
+    {
+      "id": "weather-v0-units-correction",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Change my standing units preference to Fahrenheit. Synthetic current-conditions evidence for Helsinki: condition=clear, temperature_celsius=10, temperature_fahrenheit=50. Give the current weather."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-units"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses the current evidence and active units, respecting the requested output bound.",
+        "semantic_assertions": {
+          "exact_text": "Helsinki: clear, 50 Fahrenheit."
+        }
+      }
+    },
+    {
+      "id": "weather-v0-corrected-followup",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Synthetic current-conditions evidence for Tallinn: condition=cloudy, temperature_celsius=15, temperature_fahrenheit=59. What is the weather there?"
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-units"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses the current evidence and active units, respecting the requested output bound.",
+        "semantic_assertions": {
+          "exact_text": "Tallinn: cloudy, 59 Fahrenheit."
+        }
+      }
+    },
+    {
+      "id": "weather-v0-concise",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Synthetic current-conditions evidence for Riga: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                }
+              ]
+            }
+          ],
+          "conversation": {
+            "id": "conv-weather-v0-concise"
+          },
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "behavior": "Uses the current evidence and active units, respecting the requested output bound.",
+        "semantic_assertions": {
+          "exact_text": "Riga: clear, 22 Celsius.",
+          "max_words": 10
         }
       }
     }
@@ -374,7 +621,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Denver: condition=snow, temperature=25. What is the weather now?"
+                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Denver: condition=snow, temperature_celsius=-4, temperature_fahrenheit=24.8. What is the weather now?"
                           }
                         ]
                       }
@@ -388,7 +635,7 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "exact_text": "Denver: snow, 25 Fahrenheit."
+                    "exact_text": "Denver: snow, 24.8 Fahrenheit."
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -550,7 +797,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return exactly this bare JSON object with no prose or Markdown fences: {\"condition\":\"clear\",\"temperature\":21,\"unit\":\"celsius\"}"
+                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return only JSON with exactly condition (string), temperature (number), and unit (string), using the evidence."
                           }
                         ]
                       }
@@ -696,7 +943,7 @@
             "parameters": {
               "case_id": "case-06",
               "source_request_ids": [
-                "weather-v0-grounded"
+                "weather-v0-competing-evidence"
               ]
             },
             "setup_steps": [
@@ -753,7 +1000,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Use Fahrenheit for the rest of this conversation. Synthetic current-conditions evidence for Austin: condition=sunny, temperature=86, unit=fahrenheit. What is the current weather?"
+                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Bergen: condition=rain, temperature=8, unit=celsius. Separate synthetic forecast evidence: high=16, low=4, unit=celsius. Give the current conditions in at most 10 words."
                           }
                         ]
                       }
@@ -767,7 +1014,8 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "exact_text": "Austin: sunny, 86 Fahrenheit."
+                    "exact_text": "Bergen: rain, 8 Celsius.",
+                    "max_words": 10
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -784,8 +1032,7 @@
             "parameters": {
               "case_id": "case-07",
               "source_request_ids": [
-                "weather-v0-grounded",
-                "weather-v0-memory-followup"
+                "weather-v0-current-missing"
               ]
             },
             "setup_steps": [
@@ -804,7 +1051,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Use Fahrenheit for the rest of this conversation. Synthetic current-conditions evidence for Austin: condition=sunny, temperature=86, unit=fahrenheit. What is the current weather?"
+                            "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
                           }
                         ]
                       }
@@ -812,14 +1059,12 @@
                     "conversation": {
                       "id": "$validation_conversation"
                     },
-                    "max_output_tokens": 400
+                    "max_output_tokens": 200
                   }
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {
-                    "exact_text": "Austin: sunny, 86 Fahrenheit."
-                  },
+                  "semantic_assertions": {},
                   "trace_assertions": [],
                   "identity_assertions": {
                     "agent_name": "$runtime_agent_name",
@@ -844,7 +1089,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Denver: condition=snow, temperature=25. What is the weather now?"
+                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Dublin is unavailable. Separate synthetic forecast evidence: condition=clear, high=18, low=9, unit=celsius. What is the weather now?"
                           }
                         ]
                       }
@@ -858,7 +1103,14 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "exact_text": "Denver: snow, 25 Fahrenheit."
+                    "required_claims": [
+                      "Current conditions are unavailable."
+                    ],
+                    "forbidden_claims": [
+                      "Forecast values establish the current weather.",
+                      "The current condition is clear."
+                    ],
+                    "max_words": 30
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -875,7 +1127,8 @@
             "parameters": {
               "case_id": "case-08",
               "source_request_ids": [
-                "weather-v0-bounded"
+                "weather-v0-celsius-establish",
+                "weather-v0-celsius-followup"
               ]
             },
             "setup_steps": [
@@ -894,7 +1147,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                            "text": "Fixed synthetic case 08. Use Celsius for this conversation. Synthetic current-conditions evidence for Helsinki: condition=clear, temperature_celsius=10, temperature_fahrenheit=50. Give the current weather."
                           }
                         ]
                       }
@@ -902,12 +1155,14 @@
                     "conversation": {
                       "id": "$validation_conversation"
                     },
-                    "max_output_tokens": 200
+                    "max_output_tokens": 400
                   }
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "exact_text": "Helsinki: clear, 10 Celsius."
+                  },
                   "trace_assertions": [],
                   "identity_assertions": {
                     "agent_name": "$runtime_agent_name",
@@ -932,7 +1187,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Synthetic forecast evidence for Oslo tomorrow: condition=cloudy, high=12, low=7, unit=celsius. Give the one-day forecast in at most 20 words."
+                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Tallinn: condition=cloudy, temperature_celsius=15, temperature_fahrenheit=59. What is the weather there?"
                           }
                         ]
                       }
@@ -946,7 +1201,7 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "exact_text": "Oslo tomorrow: cloudy, high 12 Celsius, low 7 Celsius."
+                    "exact_text": "Tallinn: cloudy, 15 Celsius."
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -963,7 +1218,7 @@
             "parameters": {
               "case_id": "case-09",
               "source_request_ids": [
-                "weather-v0-json"
+                "weather-v0-concise"
               ]
             },
             "setup_steps": [
@@ -1020,7 +1275,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=21, unit=celsius. Return exactly this bare JSON object with no prose or Markdown fences: {\"condition\":\"clear\",\"temperature\":21,\"unit\":\"celsius\"}"
+                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Riga: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -1034,34 +1289,8 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "condition",
-                        "temperature",
-                        "unit"
-                      ],
-                      "properties": {
-                        "condition": {
-                          "type": "string"
-                        },
-                        "temperature": {
-                          "type": "integer"
-                        },
-                        "unit": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "temperature": 21
-                    },
-                    "casefold_json_fields": {
-                      "condition": "clear",
-                      "unit": "celsius"
-                    }
+                    "exact_text": "Riga: clear, 22 Celsius.",
+                    "max_words": 10
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -1078,7 +1307,9 @@
             "parameters": {
               "case_id": "case-10",
               "source_request_ids": [
-                "weather-v0-partial"
+                "weather-v0-celsius-establish",
+                "weather-v0-units-correction",
+                "weather-v0-corrected-followup"
               ]
             },
             "setup_steps": [
@@ -1097,7 +1328,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                            "text": "Fixed synthetic case 10. Use Celsius for this conversation. Synthetic current-conditions evidence for Helsinki: condition=clear, temperature_celsius=10, temperature_fahrenheit=50. Give the current weather."
                           }
                         ]
                       }
@@ -1105,12 +1336,52 @@
                     "conversation": {
                       "id": "$validation_conversation"
                     },
-                    "max_output_tokens": 200
+                    "max_output_tokens": 400
                   }
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "exact_text": "Helsinki: clear, 10 Celsius."
+                  },
+                  "trace_assertions": [],
+                  "identity_assertions": {
+                    "agent_name": "$runtime_agent_name",
+                    "agent_version": "$runtime_agent_version"
+                  }
+                }
+              },
+              {
+                "id": "weather-agent-v0-setup-10-02",
+                "request": {
+                  "method": "POST",
+                  "path": "/responses",
+                  "headers": {
+                    "content-type": "application/json"
+                  },
+                  "body": {
+                    "input": [
+                      {
+                        "role": "user",
+                        "content": [
+                          {
+                            "type": "input_text",
+                            "text": "Fixed synthetic case 10. Change my standing units preference to Fahrenheit. Synthetic current-conditions evidence for Helsinki: condition=clear, temperature_celsius=10, temperature_fahrenheit=50. Give the current weather."
+                          }
+                        ]
+                      }
+                    ],
+                    "conversation": {
+                      "id": "$validation_conversation"
+                    },
+                    "max_output_tokens": 400
+                  }
+                },
+                "expected": {
+                  "http_status": 200,
+                  "semantic_assertions": {
+                    "exact_text": "Helsinki: clear, 50 Fahrenheit."
+                  },
                   "trace_assertions": [],
                   "identity_assertions": {
                     "agent_name": "$runtime_agent_name",
@@ -1135,7 +1406,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Synthetic forecast evidence for Reykjavik: day one condition=windy, high=9, low=5, unit=celsius; day two evidence is unavailable. Give the two-day forecast."
+                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Tallinn: condition=cloudy, temperature_celsius=15, temperature_fahrenheit=59. What is the weather there?"
                           }
                         ]
                       }
@@ -1149,7 +1420,7 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "exact_text": "Reykjavik day one: windy, high 9 Celsius, low 5 Celsius. Day two: unavailable."
+                    "exact_text": "Tallinn: cloudy, 59 Fahrenheit."
                   },
                   "trace_assertions": [],
                   "identity_assertions": {

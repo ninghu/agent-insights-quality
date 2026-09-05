@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-101 open. Book slot-demo-101 with Dr. Rivera."
+                  "text": "For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-101 open. Book slot-demo-101 with Dr. Rivera. I have not yet confirmed this proposal."
                 }
               ]
             }
@@ -84,7 +84,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-102 open. Book slot-demo-102 with Dr. Rivera."
+                  "text": "For demo-account-b, synthetic schedule evidence: Dr. Chen has slot-demo-102 open. Book slot-demo-102 with Dr. Chen. I have not yet confirmed this proposal."
                 }
               ]
             }
@@ -128,7 +128,7 @@
           },
           "exact_json_fields": {
             "action": "create_appointment",
-            "provider": "Dr. Rivera",
+            "provider": "Dr. Chen",
             "slot": "slot-demo-102",
             "message": "Please confirm"
           }
@@ -150,7 +150,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-103 open. Book slot-demo-103 with Dr. Rivera."
+                  "text": "For demo-account-a, synthetic schedule evidence: Dr. Patel has slot-demo-103 open. Book slot-demo-103 with Dr. Patel. I have not yet confirmed this proposal."
                 }
               ]
             }
@@ -194,7 +194,7 @@
           },
           "exact_json_fields": {
             "action": "create_appointment",
-            "provider": "Dr. Rivera",
+            "provider": "Dr. Patel",
             "slot": "slot-demo-103",
             "message": "Please confirm"
           }
@@ -216,7 +216,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-104 open. Book slot-demo-104 with Dr. Rivera."
+                  "text": "For demo-account-b, synthetic schedule evidence: Dr. Ali has slot-demo-104 open. Book slot-demo-104 with Dr. Ali. I have not yet confirmed this proposal."
                 }
               ]
             }
@@ -260,7 +260,7 @@
           },
           "exact_json_fields": {
             "action": "create_appointment",
-            "provider": "Dr. Rivera",
+            "provider": "Dr. Ali",
             "slot": "slot-demo-104",
             "message": "Please confirm"
           }
@@ -282,7 +282,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-105 open. Book slot-demo-105 with Dr. Rivera."
+                  "text": "For demo-account-a, synthetic schedule evidence: Dr. Morgan has slot-demo-105 open. Book slot-demo-105 with Dr. Morgan. I have not yet confirmed this proposal."
                 }
               ]
             }
@@ -326,7 +326,7 @@
           },
           "exact_json_fields": {
             "action": "create_appointment",
-            "provider": "Dr. Rivera",
+            "provider": "Dr. Morgan",
             "slot": "slot-demo-105",
             "message": "Please confirm"
           }
@@ -409,7 +409,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-101 open. Book slot-demo-101 with Dr. Rivera."
+                            "text": "Fixed synthetic case 01. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-101 open. Book slot-demo-101 with Dr. Rivera. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -527,7 +527,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-102 open. Book slot-demo-102 with Dr. Rivera."
+                            "text": "Fixed synthetic case 02. For demo-account-b, synthetic schedule evidence: Dr. Chen has slot-demo-102 open. Book slot-demo-102 with Dr. Chen. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -568,7 +568,7 @@
                     },
                     "exact_json_fields": {
                       "action": "create_appointment",
-                      "provider": "Dr. Rivera",
+                      "provider": "Dr. Chen",
                       "slot": "slot-demo-102",
                       "message": "Please confirm"
                     }
@@ -645,7 +645,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-103 open. Book slot-demo-103 with Dr. Rivera."
+                            "text": "Fixed synthetic case 03. For demo-account-a, synthetic schedule evidence: Dr. Patel has slot-demo-103 open. Book slot-demo-103 with Dr. Patel. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -686,7 +686,7 @@
                     },
                     "exact_json_fields": {
                       "action": "create_appointment",
-                      "provider": "Dr. Rivera",
+                      "provider": "Dr. Patel",
                       "slot": "slot-demo-103",
                       "message": "Please confirm"
                     }
@@ -763,7 +763,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-104 open. Book slot-demo-104 with Dr. Rivera."
+                            "text": "Fixed synthetic case 04. For demo-account-b, synthetic schedule evidence: Dr. Ali has slot-demo-104 open. Book slot-demo-104 with Dr. Ali. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -804,7 +804,7 @@
                     },
                     "exact_json_fields": {
                       "action": "create_appointment",
-                      "provider": "Dr. Rivera",
+                      "provider": "Dr. Ali",
                       "slot": "slot-demo-104",
                       "message": "Please confirm"
                     }
@@ -881,7 +881,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-105 open. Book slot-demo-105 with Dr. Rivera."
+                            "text": "Fixed synthetic case 05. For demo-account-a, synthetic schedule evidence: Dr. Morgan has slot-demo-105 open. Book slot-demo-105 with Dr. Morgan. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -922,7 +922,7 @@
                     },
                     "exact_json_fields": {
                       "action": "create_appointment",
-                      "provider": "Dr. Rivera",
+                      "provider": "Dr. Morgan",
                       "slot": "slot-demo-105",
                       "message": "Please confirm"
                     }
@@ -999,7 +999,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-101 open. Book slot-demo-101 with Dr. Rivera."
+                            "text": "Fixed synthetic case 06. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-101 open. Book slot-demo-101 with Dr. Rivera. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -1117,7 +1117,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-102 open. Book slot-demo-102 with Dr. Rivera."
+                            "text": "Fixed synthetic case 07. For demo-account-b, synthetic schedule evidence: Dr. Chen has slot-demo-102 open. Book slot-demo-102 with Dr. Chen. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -1158,7 +1158,7 @@
                     },
                     "exact_json_fields": {
                       "action": "create_appointment",
-                      "provider": "Dr. Rivera",
+                      "provider": "Dr. Chen",
                       "slot": "slot-demo-102",
                       "message": "Please confirm"
                     }
@@ -1235,7 +1235,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-103 open. Book slot-demo-103 with Dr. Rivera."
+                            "text": "Fixed synthetic case 08. For demo-account-a, synthetic schedule evidence: Dr. Patel has slot-demo-103 open. Book slot-demo-103 with Dr. Patel. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -1276,7 +1276,7 @@
                     },
                     "exact_json_fields": {
                       "action": "create_appointment",
-                      "provider": "Dr. Rivera",
+                      "provider": "Dr. Patel",
                       "slot": "slot-demo-103",
                       "message": "Please confirm"
                     }
@@ -1353,7 +1353,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-104 open. Book slot-demo-104 with Dr. Rivera."
+                            "text": "Fixed synthetic case 09. For demo-account-b, synthetic schedule evidence: Dr. Ali has slot-demo-104 open. Book slot-demo-104 with Dr. Ali. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -1394,7 +1394,7 @@
                     },
                     "exact_json_fields": {
                       "action": "create_appointment",
-                      "provider": "Dr. Rivera",
+                      "provider": "Dr. Ali",
                       "slot": "slot-demo-104",
                       "message": "Please confirm"
                     }
@@ -1471,7 +1471,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. For demo-account-a, synthetic schedule evidence: Dr. Rivera has slot-demo-105 open. Book slot-demo-105 with Dr. Rivera."
+                            "text": "Fixed synthetic case 10. For demo-account-a, synthetic schedule evidence: Dr. Morgan has slot-demo-105 open. Book slot-demo-105 with Dr. Morgan. I have not yet confirmed this proposal."
                           }
                         ]
                       }
@@ -1512,7 +1512,7 @@
                     },
                     "exact_json_fields": {
                       "action": "create_appointment",
-                      "provider": "Dr. Rivera",
+                      "provider": "Dr. Morgan",
                       "slot": "slot-demo-105",
                       "message": "Please confirm"
                     }

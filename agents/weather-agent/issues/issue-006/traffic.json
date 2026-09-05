@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -37,7 +37,7 @@
         "semantic_assertions": {
           "minimum_term_occurrences": {
             "clear": 3,
-            "22": 3,
+            "21": 3,
             "celsius": 3
           },
           "min_words": 40,
@@ -65,7 +65,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=rain, temperature=8, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -83,8 +83,8 @@
         "activation_gate": true,
         "semantic_assertions": {
           "minimum_term_occurrences": {
-            "clear": 3,
-            "22": 3,
+            "rain": 3,
+            "8": 3,
             "celsius": 3
           },
           "min_words": 40,
@@ -112,7 +112,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=snow, temperature=-2, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -130,8 +130,8 @@
         "activation_gate": true,
         "semantic_assertions": {
           "minimum_term_occurrences": {
-            "clear": 3,
-            "22": 3,
+            "snow": 3,
+            "-2": 3,
             "celsius": 3
           },
           "min_words": 40,
@@ -159,7 +159,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=cloudy, temperature=16, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -177,8 +177,8 @@
         "activation_gate": true,
         "semantic_assertions": {
           "minimum_term_occurrences": {
-            "clear": 3,
-            "22": 3,
+            "cloudy": 3,
+            "16": 3,
             "celsius": 3
           },
           "min_words": 40,
@@ -206,7 +206,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=windy, temperature=12, unit=celsius. Give current conditions in 10 words or fewer."
                 }
               ]
             }
@@ -224,8 +224,8 @@
         "activation_gate": true,
         "semantic_assertions": {
           "minimum_term_occurrences": {
-            "clear": 3,
-            "22": 3,
+            "windy": 3,
+            "12": 3,
             "celsius": 3
           },
           "min_words": 40,
@@ -314,7 +314,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 01. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -330,7 +330,7 @@
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
                       "clear": 3,
-                      "22": 3,
+                      "21": 3,
                       "celsius": 3
                     },
                     "min_words": 40,
@@ -413,7 +413,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Public Demo Location 2: condition=rain, temperature=8, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -428,8 +428,8 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
-                      "clear": 3,
-                      "22": 3,
+                      "rain": 3,
+                      "8": 3,
                       "celsius": 3
                     },
                     "min_words": 40,
@@ -512,7 +512,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 03. Synthetic current-conditions evidence for Public Demo Location 3: condition=snow, temperature=-2, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -527,8 +527,8 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
-                      "clear": 3,
-                      "22": 3,
+                      "snow": 3,
+                      "-2": 3,
                       "celsius": 3
                     },
                     "min_words": 40,
@@ -611,7 +611,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 4: condition=cloudy, temperature=16, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -626,8 +626,8 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
-                      "clear": 3,
-                      "22": 3,
+                      "cloudy": 3,
+                      "16": 3,
                       "celsius": 3
                     },
                     "min_words": 40,
@@ -710,7 +710,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 05. Synthetic current-conditions evidence for Public Demo Location 5: condition=windy, temperature=12, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -725,8 +725,8 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
-                      "clear": 3,
-                      "22": 3,
+                      "windy": 3,
+                      "12": 3,
                       "celsius": 3
                     },
                     "min_words": 40,
@@ -809,7 +809,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=21, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -825,7 +825,7 @@
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
                       "clear": 3,
-                      "22": 3,
+                      "21": 3,
                       "celsius": 3
                     },
                     "min_words": 40,
@@ -908,7 +908,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Public Demo Location 2: condition=rain, temperature=8, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -923,8 +923,8 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
-                      "clear": 3,
-                      "22": 3,
+                      "rain": 3,
+                      "8": 3,
                       "celsius": 3
                     },
                     "min_words": 40,
@@ -1007,7 +1007,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Public Demo Location 3: condition=snow, temperature=-2, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -1022,8 +1022,8 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
-                      "clear": 3,
-                      "22": 3,
+                      "snow": 3,
+                      "-2": 3,
                       "celsius": 3
                     },
                     "min_words": 40,
@@ -1106,7 +1106,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 4: condition=cloudy, temperature=16, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -1121,8 +1121,8 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
-                      "clear": 3,
-                      "22": 3,
+                      "cloudy": 3,
+                      "16": 3,
                       "celsius": 3
                     },
                     "min_words": 40,
@@ -1205,7 +1205,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=22, unit=celsius. Give current conditions in 10 words or fewer."
+                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Public Demo Location 5: condition=windy, temperature=12, unit=celsius. Give current conditions in 10 words or fewer."
                           }
                         ]
                       }
@@ -1220,8 +1220,8 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "minimum_term_occurrences": {
-                      "clear": 3,
-                      "22": 3,
+                      "windy": 3,
+                      "12": 3,
                       "celsius": 3
                     },
                     "min_words": 40,

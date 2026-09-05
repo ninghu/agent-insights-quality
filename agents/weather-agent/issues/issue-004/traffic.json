@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                  "text": "Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                 }
               ]
             }
@@ -34,10 +34,32 @@
         "behavior": "Establishes the Celsius preference for later requests.",
         "defect_observed": false,
         "semantic_assertions": {
-          "required_terms_all": [
-            "20",
-            "celsius"
-          ]
+          "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "condition",
+              "temperature",
+              "unit"
+            ],
+            "properties": {
+              "condition": {
+                "type": "string"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "unit": {
+                "type": "string"
+              }
+            }
+          },
+          "exact_json_fields": {
+            "condition": "clear",
+            "temperature": 20,
+            "unit": "celsius"
+          }
         }
       }
     },
@@ -56,7 +78,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=68. Now check this location."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature_celsius=15, temperature_fahrenheit=59. Give the current weather as JSON with exactly condition, temperature, and unit."
                 }
               ]
             }
@@ -74,14 +96,31 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "condition",
+              "temperature",
+              "unit"
+            ],
+            "properties": {
+              "condition": {
+                "type": "string"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "unit": {
+                "type": "string"
+              }
+            }
+          },
           "exact_json_fields": {
             "condition": "clear",
-            "temperature": 68,
+            "temperature": 59,
             "unit": "fahrenheit"
-          },
-          "forbidden_terms": [
-            "celsius"
-          ]
+          }
         }
       }
     },
@@ -100,7 +139,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=68. Now check this location."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature_celsius=10, temperature_fahrenheit=50. Give the current weather as JSON with exactly condition, temperature, and unit."
                 }
               ]
             }
@@ -118,14 +157,31 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "condition",
+              "temperature",
+              "unit"
+            ],
+            "properties": {
+              "condition": {
+                "type": "string"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "unit": {
+                "type": "string"
+              }
+            }
+          },
           "exact_json_fields": {
             "condition": "clear",
-            "temperature": 68,
+            "temperature": 50,
             "unit": "fahrenheit"
-          },
-          "forbidden_terms": [
-            "celsius"
-          ]
+          }
         }
       }
     },
@@ -144,7 +200,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=68. Now check this location."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature_celsius=25, temperature_fahrenheit=77. Give the current weather as JSON with exactly condition, temperature, and unit."
                 }
               ]
             }
@@ -162,14 +218,31 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "condition",
+              "temperature",
+              "unit"
+            ],
+            "properties": {
+              "condition": {
+                "type": "string"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "unit": {
+                "type": "string"
+              }
+            }
+          },
           "exact_json_fields": {
             "condition": "clear",
-            "temperature": 68,
+            "temperature": 77,
             "unit": "fahrenheit"
-          },
-          "forbidden_terms": [
-            "celsius"
-          ]
+          }
         }
       }
     },
@@ -188,7 +261,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=68. Now check this location."
+                  "text": "Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature_celsius=5, temperature_fahrenheit=41. Give the current weather as JSON with exactly condition, temperature, and unit."
                 }
               ]
             }
@@ -206,14 +279,31 @@
         "activation_gate": true,
         "semantic_assertions": {
           "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "condition",
+              "temperature",
+              "unit"
+            ],
+            "properties": {
+              "condition": {
+                "type": "string"
+              },
+              "temperature": {
+                "type": "number"
+              },
+              "unit": {
+                "type": "string"
+              }
+            }
+          },
           "exact_json_fields": {
             "condition": "clear",
-            "temperature": 68,
+            "temperature": 41,
             "unit": "fahrenheit"
-          },
-          "forbidden_terms": [
-            "celsius"
-          ]
+          }
         }
       }
     }
@@ -256,7 +346,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 01. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -270,10 +360,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -299,7 +411,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 01. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature_celsius=15, temperature_fahrenheit=59. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -314,14 +426,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 59,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -358,7 +487,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 02. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -372,10 +501,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -401,7 +552,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 02. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature_celsius=10, temperature_fahrenheit=50. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -416,14 +567,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 50,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -460,7 +628,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 03. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -474,10 +642,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -503,7 +693,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 03. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature_celsius=25, temperature_fahrenheit=77. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -518,14 +708,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 77,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -562,7 +769,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 04. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -576,10 +783,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -605,7 +834,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 04. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature_celsius=5, temperature_fahrenheit=41. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -620,14 +849,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 41,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -664,7 +910,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 05. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -678,10 +924,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -707,7 +975,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 05. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature_celsius=15, temperature_fahrenheit=59. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -722,14 +990,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 59,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -766,7 +1051,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 06. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -780,10 +1065,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -809,7 +1116,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 06. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature_celsius=10, temperature_fahrenheit=50. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -824,14 +1131,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 50,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -868,7 +1192,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 07. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -882,10 +1206,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -911,7 +1257,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 07. Synthetic current-conditions evidence for Public Demo Location 4: condition=clear, temperature_celsius=25, temperature_fahrenheit=77. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -926,14 +1272,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 77,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -970,7 +1333,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 08. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -984,10 +1347,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -1013,7 +1398,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 08. Synthetic current-conditions evidence for Public Demo Location 5: condition=clear, temperature_celsius=5, temperature_fahrenheit=41. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -1028,14 +1413,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 41,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -1072,7 +1474,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 09. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -1086,10 +1488,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -1115,7 +1539,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 09. Synthetic current-conditions evidence for Public Demo Location 2: condition=clear, temperature_celsius=15, temperature_fahrenheit=59. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -1130,14 +1554,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 59,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -1174,7 +1615,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature=20. What is the weather?"
+                            "text": "Fixed synthetic case 10. Use Celsius for this conversation. Synthetic current-conditions evidence for Public Demo Location 1: condition=clear, temperature_celsius=20, temperature_fahrenheit=68. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -1188,10 +1629,32 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
-                    "required_terms_all": [
-                      "20",
-                      "celsius"
-                    ]
+                    "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "exact_json_fields": {
+                      "condition": "clear",
+                      "temperature": 20,
+                      "unit": "celsius"
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
@@ -1217,7 +1680,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature=68. Now check this location."
+                            "text": "Fixed synthetic case 10. Synthetic current-conditions evidence for Public Demo Location 3: condition=clear, temperature_celsius=10, temperature_fahrenheit=50. Give the current weather as JSON with exactly condition, temperature, and unit."
                           }
                         ]
                       }
@@ -1232,14 +1695,31 @@
                   "http_status": 200,
                   "semantic_assertions": {
                     "response_format": "json",
+                    "json_schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "condition",
+                        "temperature",
+                        "unit"
+                      ],
+                      "properties": {
+                        "condition": {
+                          "type": "string"
+                        },
+                        "temperature": {
+                          "type": "number"
+                        },
+                        "unit": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "exact_json_fields": {
                       "condition": "clear",
-                      "temperature": 68,
+                      "temperature": 50,
                       "unit": "fahrenheit"
-                    },
-                    "forbidden_terms": [
-                      "celsius"
-                    ]
+                    }
                   },
                   "trace_assertions": [],
                   "identity_assertions": {
