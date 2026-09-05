@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 
-from langchain_azure_ai.callbacks.tracers import enable_auto_tracing
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
@@ -18,10 +17,6 @@ def configure_observability(service_name: str, service_version: str) -> None:
     current = trace.get_tracer_provider()
     if isinstance(current, TracerProvider):
         current.add_span_processor(processor)
-        enable_auto_tracing(
-            auto_configure_azure_monitor=False,
-            trace_all_langgraph_nodes=False,
-        )
         return
     provider = TracerProvider(
         resource=Resource.create(
@@ -35,7 +30,3 @@ def configure_observability(service_name: str, service_version: str) -> None:
     )
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)
-    enable_auto_tracing(
-        auto_configure_azure_monitor=False,
-        trace_all_langgraph_nodes=False,
-    )

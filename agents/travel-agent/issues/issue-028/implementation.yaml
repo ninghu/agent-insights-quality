@@ -12,9 +12,9 @@ category: context_memory
 severity: high
 expected_behavior:
   desired: Replace prior itinerary state when the user switches trips.
-  injected: Uses the earlier trip after an explicit switch.
+  injected: Uses the retained earlier conversation trip after an explicit switch.
 injected_defect:
-  single_root: The plan node binds an explicit switch to its source trip instead of its destination.
+  single_root: The plan node retains checkpointed itinerary state instead of replacing it on a switch.
   activation: all_matching_endpoint_requests
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-028.zip

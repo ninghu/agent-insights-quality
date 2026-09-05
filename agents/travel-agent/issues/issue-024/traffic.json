@@ -31,8 +31,31 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Requests a large optional inventory payload that is unused.",
-        "defect_observed": true
+        "behavior": "Forwards at least 80 inventory records to the model for a concise grounded answer.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "flight-demo-0"
+          ],
+          "max_characters": 600
+        },
+        "trace_assertions": [
+          {
+            "name": "unused_optional_payload_overfetched",
+            "kind": "payload_multiplicity",
+            "tool_name": "search_flights",
+            "source": "tool_result",
+            "path": "result_count",
+            "minimum": 80
+          },
+          {
+            "name": "full_inventory_reaches_model",
+            "kind": "payload_multiplicity",
+            "source": "input_messages",
+            "path": "inventory",
+            "minimum": 80
+          }
+        ]
       }
     },
     {
@@ -63,8 +86,31 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Requests a large optional inventory payload that is unused.",
-        "defect_observed": true
+        "behavior": "Forwards at least 80 inventory records to the model for a concise grounded answer.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "hotel-demo-0"
+          ],
+          "max_characters": 600
+        },
+        "trace_assertions": [
+          {
+            "name": "unused_optional_payload_overfetched",
+            "kind": "payload_multiplicity",
+            "tool_name": "search_hotels",
+            "source": "tool_result",
+            "path": "result_count",
+            "minimum": 80
+          },
+          {
+            "name": "full_inventory_reaches_model",
+            "kind": "payload_multiplicity",
+            "source": "input_messages",
+            "path": "inventory",
+            "minimum": 80
+          }
+        ]
       }
     },
     {
@@ -95,8 +141,40 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Requests a large optional inventory payload that is unused.",
-        "defect_observed": true
+        "behavior": "Forwards 160 inventory records to the model for a concise grounded comparison.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "flight-demo-0",
+            "hotel-demo-0"
+          ],
+          "max_characters": 600
+        },
+        "trace_assertions": [
+          {
+            "name": "unused_flights_overfetched",
+            "kind": "payload_multiplicity",
+            "tool_name": "search_flights",
+            "source": "tool_result",
+            "path": "result_count",
+            "minimum": 80
+          },
+          {
+            "name": "unused_hotels_overfetched",
+            "kind": "payload_multiplicity",
+            "tool_name": "search_hotels",
+            "source": "tool_result",
+            "path": "result_count",
+            "minimum": 80
+          },
+          {
+            "name": "full_inventory_reaches_model",
+            "kind": "payload_multiplicity",
+            "source": "input_messages",
+            "path": "inventory",
+            "minimum": 160
+          }
+        ]
       }
     },
     {
@@ -127,8 +205,31 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Requests a large optional inventory payload that is unused.",
-        "defect_observed": true
+        "behavior": "Forwards at least 80 inventory records to the model for a concise grounded answer.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "flight-demo-0"
+          ],
+          "max_characters": 600
+        },
+        "trace_assertions": [
+          {
+            "name": "unused_optional_payload_overfetched",
+            "kind": "payload_multiplicity",
+            "tool_name": "search_flights",
+            "source": "tool_result",
+            "path": "result_count",
+            "minimum": 80
+          },
+          {
+            "name": "full_inventory_reaches_model",
+            "kind": "payload_multiplicity",
+            "source": "input_messages",
+            "path": "inventory",
+            "minimum": 80
+          }
+        ]
       }
     },
     {
@@ -159,8 +260,34 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Requests a large optional inventory payload that is unused.",
-        "defect_observed": true
+        "behavior": "Forwards at least 80 inventory records to the model for one concise grounded result.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "flight-demo-0"
+          ],
+          "forbidden_terms": [
+            "flight-demo-1"
+          ],
+          "max_characters": 300
+        },
+        "trace_assertions": [
+          {
+            "name": "unused_optional_payload_overfetched",
+            "kind": "payload_multiplicity",
+            "tool_name": "search_flights",
+            "source": "tool_result",
+            "path": "result_count",
+            "minimum": 80
+          },
+          {
+            "name": "full_inventory_reaches_model",
+            "kind": "payload_multiplicity",
+            "source": "input_messages",
+            "path": "inventory",
+            "minimum": 80
+          }
+        ]
       }
     }
   ],
@@ -252,7 +379,12 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "flight-demo-0"
+                    ],
+                    "max_characters": 600
+                  },
                   "trace_assertions": [
                     {
                       "name": "unused_optional_payload_overfetched",
@@ -260,6 +392,13 @@
                       "tool_name": "search_flights",
                       "source": "tool_result",
                       "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
                       "minimum": 80
                     }
                   ],
@@ -347,7 +486,12 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "hotel-demo-0"
+                    ],
+                    "max_characters": 600
+                  },
                   "trace_assertions": [
                     {
                       "name": "unused_optional_payload_overfetched",
@@ -355,6 +499,13 @@
                       "tool_name": "search_hotels",
                       "source": "tool_result",
                       "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
                       "minimum": 80
                     }
                   ],
@@ -442,15 +593,36 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "flight-demo-0",
+                      "hotel-demo-0"
+                    ],
+                    "max_characters": 600
+                  },
                   "trace_assertions": [
                     {
-                      "name": "unused_optional_payload_overfetched",
+                      "name": "unused_flights_overfetched",
+                      "kind": "payload_multiplicity",
+                      "tool_name": "search_flights",
+                      "source": "tool_result",
+                      "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "unused_hotels_overfetched",
                       "kind": "payload_multiplicity",
                       "tool_name": "search_hotels",
                       "source": "tool_result",
                       "path": "result_count",
                       "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
+                      "minimum": 160
                     }
                   ],
                   "identity_assertions": {
@@ -537,7 +709,12 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "flight-demo-0"
+                    ],
+                    "max_characters": 600
+                  },
                   "trace_assertions": [
                     {
                       "name": "unused_optional_payload_overfetched",
@@ -545,6 +722,13 @@
                       "tool_name": "search_flights",
                       "source": "tool_result",
                       "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
                       "minimum": 80
                     }
                   ],
@@ -632,7 +816,15 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "flight-demo-0"
+                    ],
+                    "forbidden_terms": [
+                      "flight-demo-1"
+                    ],
+                    "max_characters": 300
+                  },
                   "trace_assertions": [
                     {
                       "name": "unused_optional_payload_overfetched",
@@ -640,6 +832,13 @@
                       "tool_name": "search_flights",
                       "source": "tool_result",
                       "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
                       "minimum": 80
                     }
                   ],
@@ -727,7 +926,12 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "flight-demo-0"
+                    ],
+                    "max_characters": 600
+                  },
                   "trace_assertions": [
                     {
                       "name": "unused_optional_payload_overfetched",
@@ -735,6 +939,13 @@
                       "tool_name": "search_flights",
                       "source": "tool_result",
                       "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
                       "minimum": 80
                     }
                   ],
@@ -822,7 +1033,12 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "hotel-demo-0"
+                    ],
+                    "max_characters": 600
+                  },
                   "trace_assertions": [
                     {
                       "name": "unused_optional_payload_overfetched",
@@ -830,6 +1046,13 @@
                       "tool_name": "search_hotels",
                       "source": "tool_result",
                       "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
                       "minimum": 80
                     }
                   ],
@@ -917,15 +1140,36 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "flight-demo-0",
+                      "hotel-demo-0"
+                    ],
+                    "max_characters": 600
+                  },
                   "trace_assertions": [
                     {
-                      "name": "unused_optional_payload_overfetched",
+                      "name": "unused_flights_overfetched",
+                      "kind": "payload_multiplicity",
+                      "tool_name": "search_flights",
+                      "source": "tool_result",
+                      "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "unused_hotels_overfetched",
                       "kind": "payload_multiplicity",
                       "tool_name": "search_hotels",
                       "source": "tool_result",
                       "path": "result_count",
                       "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
+                      "minimum": 160
                     }
                   ],
                   "identity_assertions": {
@@ -1012,7 +1256,12 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "flight-demo-0"
+                    ],
+                    "max_characters": 600
+                  },
                   "trace_assertions": [
                     {
                       "name": "unused_optional_payload_overfetched",
@@ -1020,6 +1269,13 @@
                       "tool_name": "search_flights",
                       "source": "tool_result",
                       "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
                       "minimum": 80
                     }
                   ],
@@ -1107,7 +1363,15 @@
                 },
                 "expected": {
                   "http_status": 200,
-                  "semantic_assertions": {},
+                  "semantic_assertions": {
+                    "required_terms_all": [
+                      "flight-demo-0"
+                    ],
+                    "forbidden_terms": [
+                      "flight-demo-1"
+                    ],
+                    "max_characters": 300
+                  },
                   "trace_assertions": [
                     {
                       "name": "unused_optional_payload_overfetched",
@@ -1115,6 +1379,13 @@
                       "tool_name": "search_flights",
                       "source": "tool_result",
                       "path": "result_count",
+                      "minimum": 80
+                    },
+                    {
+                      "name": "full_inventory_reaches_model",
+                      "kind": "payload_multiplicity",
+                      "source": "input_messages",
+                      "path": "inventory",
                       "minimum": 80
                     }
                   ],

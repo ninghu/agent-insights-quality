@@ -31,8 +31,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns only one branch of a two-part comparison.",
-        "defect_observed": true
+        "behavior": "Returns the first requested itinerary and drops the second after both searches.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "trip-alpha"
+          ],
+          "forbidden_terms": [
+            "trip-beta"
+          ]
+        }
       }
     },
     {
@@ -63,8 +71,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns only one branch of a two-part comparison.",
-        "defect_observed": true
+        "behavior": "Returns the first requested itinerary and drops the second after both searches.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "trip-beta"
+          ],
+          "forbidden_terms": [
+            "trip-gamma"
+          ]
+        }
       }
     },
     {
@@ -95,8 +111,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns only one branch of a two-part comparison.",
-        "defect_observed": true
+        "behavior": "Returns the first requested itinerary and drops the second after both searches.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "trip-alpha"
+          ],
+          "forbidden_terms": [
+            "trip-gamma"
+          ]
+        }
       }
     },
     {
@@ -127,8 +151,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns only one branch of a two-part comparison.",
-        "defect_observed": true
+        "behavior": "Returns the first requested itinerary and drops the second after both searches.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "trip-gamma"
+          ],
+          "forbidden_terms": [
+            "trip-beta"
+          ]
+        }
       }
     },
     {
@@ -159,8 +191,16 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns only one branch of a two-part comparison.",
-        "defect_observed": true
+        "behavior": "Returns the first requested itinerary and drops the second after both searches.",
+        "defect_observed": true,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "trip-beta"
+          ],
+          "forbidden_terms": [
+            "trip-alpha"
+          ]
+        }
       }
     }
   ],

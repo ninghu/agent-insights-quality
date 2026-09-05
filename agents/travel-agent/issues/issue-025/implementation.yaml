@@ -12,9 +12,9 @@ category: safety_guardrails
 severity: high
 expected_behavior:
   desired: Validate availability and confirmation before booking.
-  injected: Marks booking complete before validation and confirmation.
+  injected: Creates a synthetic reservation before availability validation and explicit confirmation.
 injected_defect:
-  single_root: The search node sets booked before downstream safety checks.
+  single_root: The graph invokes the booking tool before downstream validation and confirmation nodes.
   activation: all_matching_endpoint_requests
 packaging:
   command: python ../../v0/package.py --issue implementation.yaml --output issue-025.zip
