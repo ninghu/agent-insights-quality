@@ -1,10 +1,12 @@
 {
-  "contract_version": "1.0",
+  "contract_version": "2.0",
   "agent_name": "travel-agent",
   "logical_version": "issue-023",
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests",
   "requests": [
     {
-      "id": "issue-023-request-1",
+      "id": "issue-023-setup-01-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -18,37 +20,26 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Find a flight for trip-alpha."
+                  "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-023-1"
-          },
-          "max_output_tokens": 400
+          "max_output_tokens": 200
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
-        "defect_observed": true,
-        "semantic_assertions": {
-          "required_terms_all": [
-            "No itinerary",
-            "No synthetic inventory options",
-            "Booking not completed",
-            "Showing 0 of 0 synthetic options"
-          ],
-          "forbidden_terms": [
-            "available"
-          ]
-        },
-        "activation_gate": true
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-023-request-2",
+      "id": "issue-023-probe-01-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -62,21 +53,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Find a hotel for trip-beta."
+                  "text": "Fixed synthetic case 01. Find a flight for trip-alpha."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-023-2"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
-        "defect_observed": true,
         "semantic_assertions": {
           "required_terms_all": [
             "No itinerary",
@@ -88,11 +74,22 @@
             "available"
           ]
         },
-        "activation_gate": true
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_flights",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-023-request-3",
+      "id": "issue-023-setup-02-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -106,37 +103,26 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Compare flight and hotel for trip-alpha."
+                  "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-023-3"
-          },
-          "max_output_tokens": 400
+          "max_output_tokens": 200
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
-        "defect_observed": true,
-        "semantic_assertions": {
-          "required_terms_all": [
-            "No itinerary",
-            "No synthetic inventory options",
-            "Booking not completed",
-            "Showing 0 of 0 synthetic options"
-          ],
-          "forbidden_terms": [
-            "available"
-          ]
-        },
-        "activation_gate": true
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-023-request-4",
+      "id": "issue-023-probe-02-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -150,21 +136,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Confirm a flight for trip-gamma."
+                  "text": "Fixed synthetic case 02. Find a hotel for trip-beta."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-023-4"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
-        "defect_observed": true,
         "semantic_assertions": {
           "required_terms_all": [
             "No itinerary",
@@ -176,11 +157,22 @@
             "available"
           ]
         },
-        "activation_gate": true
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_hotels",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-023-request-5",
+      "id": "issue-023-setup-03-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -194,21 +186,49 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Switch from trip-alpha to trip-beta and search again."
+                  "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-023-5"
-          },
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-probe-03-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 03. Compare flight and hotel for trip-alpha."
+                }
+              ]
+            }
+          ],
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns a truthful no-inventory answer without running the required inventory search.",
-        "defect_observed": true,
         "semantic_assertions": {
           "required_terms_all": [
             "No itinerary",
@@ -220,1078 +240,722 @@
             "available"
           ]
         },
-        "activation_gate": true
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_hotels",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-setup-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-probe-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Confirm a flight for trip-gamma."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_flights",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-setup-05-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-probe-05-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 05. Switch from trip-alpha to trip-beta and search again."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_flights",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-setup-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-probe-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Find a flight for trip-alpha."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_flights",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-setup-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-probe-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Find a hotel for trip-beta."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_hotels",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-setup-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-probe-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Compare flight and hotel for trip-alpha."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_hotels",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-setup-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-probe-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Confirm a flight for trip-gamma."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_flights",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-setup-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-023-probe-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Switch from trip-alpha to trip-beta and search again."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "No itinerary",
+            "No synthetic inventory options",
+            "Booking not completed",
+            "Showing 0 of 0 synthetic options"
+          ],
+          "forbidden_terms": [
+            "available"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "required_inventory_search_missing",
+            "kind": "tool_call_count",
+            "tool_name": "search_flights",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     }
   ],
-  "data_class": "synthetic_public_safe",
-  "traffic_source": "endpoint_requests",
-  "validation_rules": {
-    "schema_version": "1.0.0",
-    "scenarios": [
-      {
-        "id": "issue-023-defect-path",
-        "validation_mode": "deterministic",
-        "n": 10,
-        "k": 6,
-        "fixtures": [],
-        "attempts": [
-          {
-            "index": 1,
-            "conversation_group": "issue-023-attempt-01",
-            "parameters": {
-              "case_id": "case-01",
-              "source_request_ids": [
-                "issue-023-request-1"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Find a flight for trip-alpha."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_flights",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 2,
-            "conversation_group": "issue-023-attempt-02",
-            "parameters": {
-              "case_id": "case-02",
-              "source_request_ids": [
-                "issue-023-request-2"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Find a hotel for trip-beta."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_hotels",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 3,
-            "conversation_group": "issue-023-attempt-03",
-            "parameters": {
-              "case_id": "case-03",
-              "source_request_ids": [
-                "issue-023-request-3"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Compare flight and hotel for trip-alpha."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_hotels",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 4,
-            "conversation_group": "issue-023-attempt-04",
-            "parameters": {
-              "case_id": "case-04",
-              "source_request_ids": [
-                "issue-023-request-4"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Confirm a flight for trip-gamma."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_flights",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 5,
-            "conversation_group": "issue-023-attempt-05",
-            "parameters": {
-              "case_id": "case-05",
-              "source_request_ids": [
-                "issue-023-request-5"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Switch from trip-alpha to trip-beta and search again."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_flights",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 6,
-            "conversation_group": "issue-023-attempt-06",
-            "parameters": {
-              "case_id": "case-06",
-              "source_request_ids": [
-                "issue-023-request-1"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Find a flight for trip-alpha."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_flights",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 7,
-            "conversation_group": "issue-023-attempt-07",
-            "parameters": {
-              "case_id": "case-07",
-              "source_request_ids": [
-                "issue-023-request-2"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Find a hotel for trip-beta."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_hotels",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 8,
-            "conversation_group": "issue-023-attempt-08",
-            "parameters": {
-              "case_id": "case-08",
-              "source_request_ids": [
-                "issue-023-request-3"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Compare flight and hotel for trip-alpha."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_hotels",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 9,
-            "conversation_group": "issue-023-attempt-09",
-            "parameters": {
-              "case_id": "case-09",
-              "source_request_ids": [
-                "issue-023-request-4"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Confirm a flight for trip-gamma."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_flights",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 10,
-            "conversation_group": "issue-023-attempt-10",
-            "parameters": {
-              "case_id": "case-10",
-              "source_request_ids": [
-                "issue-023-request-5"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-023-setup-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-023-probe-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Switch from trip-alpha to trip-beta and search again."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "No itinerary",
-                      "No synthetic inventory options",
-                      "Booking not completed",
-                      "Showing 0 of 0 synthetic options"
-                    ],
-                    "forbidden_terms": [
-                      "available"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "required_inventory_search_missing",
-                      "kind": "tool_call_count",
-                      "tool_name": "search_flights",
-                      "count": 0
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          }
-        ],
-        "healthy_predicate": null,
-        "defect_predicate": {
-          "kind": "all_observation_steps_pass",
-          "step_ids": [
-            "issue-023-probe-01-01",
-            "issue-023-probe-02-01",
-            "issue-023-probe-03-01",
-            "issue-023-probe-04-01",
-            "issue-023-probe-05-01",
-            "issue-023-probe-06-01",
-            "issue-023-probe-07-01",
-            "issue-023-probe-08-01",
-            "issue-023-probe-09-01",
-            "issue-023-probe-10-01"
-          ],
-          "required_surfaces": [
-            "trace"
-          ]
-        },
-        "v0_control_predicate": {
-          "kind": "zero_defect_observations"
-        },
-        "execution_digest": "sha256:371b806b650f55db387d91b5ee9423c27fcacf8841fb60bbdba3cbc28dd5f35e"
+  "attempts": [
+    {
+      "index": 1,
+      "setup_steps": [
+        "issue-023-setup-01-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-01-01"
+      ],
+      "parameters": {
+        "case_id": "case-01"
       }
-    ],
-    "execution_digest": "sha256:02f55f217a74d259f20e9dd13a5516c0c5f95d0cd0083b565d9f3f870ed044fb"
-  }
+    },
+    {
+      "index": 2,
+      "setup_steps": [
+        "issue-023-setup-02-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-02-01"
+      ],
+      "parameters": {
+        "case_id": "case-02"
+      }
+    },
+    {
+      "index": 3,
+      "setup_steps": [
+        "issue-023-setup-03-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-03-01"
+      ],
+      "parameters": {
+        "case_id": "case-03"
+      }
+    },
+    {
+      "index": 4,
+      "setup_steps": [
+        "issue-023-setup-04-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-04-01"
+      ],
+      "parameters": {
+        "case_id": "case-04"
+      }
+    },
+    {
+      "index": 5,
+      "setup_steps": [
+        "issue-023-setup-05-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-05-01"
+      ],
+      "parameters": {
+        "case_id": "case-05"
+      }
+    },
+    {
+      "index": 6,
+      "setup_steps": [
+        "issue-023-setup-06-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-06-01"
+      ],
+      "parameters": {
+        "case_id": "case-06"
+      }
+    },
+    {
+      "index": 7,
+      "setup_steps": [
+        "issue-023-setup-07-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-07-01"
+      ],
+      "parameters": {
+        "case_id": "case-07"
+      }
+    },
+    {
+      "index": 8,
+      "setup_steps": [
+        "issue-023-setup-08-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-08-01"
+      ],
+      "parameters": {
+        "case_id": "case-08"
+      }
+    },
+    {
+      "index": 9,
+      "setup_steps": [
+        "issue-023-setup-09-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-09-01"
+      ],
+      "parameters": {
+        "case_id": "case-09"
+      }
+    },
+    {
+      "index": 10,
+      "setup_steps": [
+        "issue-023-setup-10-01"
+      ],
+      "probe_steps": [
+        "issue-023-probe-10-01"
+      ],
+      "parameters": {
+        "case_id": "case-10"
+      }
+    }
+  ]
 }

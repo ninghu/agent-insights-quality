@@ -313,10 +313,11 @@ def test_all_ten_comparison_probes_against_matched_baseline(runtime):
     traffic = json.loads(
         (version_path("issue-026") / "traffic.json").read_text(encoding="utf-8")
     )
+    requests = {item["id"]: item for item in traffic["requests"]}
 
     async def run():
-        for attempt in traffic["validation_rules"]["scenarios"][0]["attempts"]:
-            probe = attempt["probe_steps"][0]
+        for attempt in traffic["attempts"]:
+            probe = requests[attempt["probe_steps"][0]]
             text = probe["request"]["body"]["input"][0]["content"][0]["text"]
             trips = runtime.app.requested_trips(text)
             runtime.exporter.clear()
@@ -602,12 +603,13 @@ def test_all_ten_retained_state_probes_and_cold_controls(runtime):
     traffic = json.loads(
         (version_path("issue-028") / "traffic.json").read_text(encoding="utf-8")
     )
+    requests = {item["id"]: item for item in traffic["requests"]}
 
     async def run():
-        for attempt in traffic["validation_rules"]["scenarios"][0]["attempts"]:
+        for attempt in traffic["attempts"]:
             thread = str(attempt["index"])
-            setup = attempt["setup_steps"][0]
-            probe = attempt["probe_steps"][0]
+            setup = requests[attempt["setup_steps"][0]]
+            probe = requests[attempt["probe_steps"][0]]
             seed = setup["request"]["body"]["input"][0]["content"][0]["text"]
             text = probe["request"]["body"]["input"][0]["content"][0]["text"]
             previous = runtime.app.requested_trips(seed)[0]

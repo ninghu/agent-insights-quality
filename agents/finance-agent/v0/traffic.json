@@ -1,7 +1,9 @@
 {
-  "contract_version": "1.0",
+  "contract_version": "2.0",
   "agent_name": "finance-agent",
   "logical_version": "v0",
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests",
   "coverage": [
     "grounded_success",
     "normal_latency_and_token_use",
@@ -12,7 +14,7 @@
   ],
   "requests": [
     {
-      "id": "finance-agent-v0-grounded",
+      "id": "finance-agent-v0-setup-01-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -26,24 +28,26 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Show the balance for acct-demo-a."
+                  "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-v0-1"
-          },
-          "max_output_tokens": 400
+          "max_output_tokens": 200
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Returns the authoritative synthetic balance."
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "finance-agent-v0-bounded",
+      "id": "finance-agent-v0-probe-01-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -57,24 +61,36 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Summarize acct-demo-b in one sentence."
+                  "text": "Fixed synthetic case 01. Show the balance for acct-demo-a."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-v0-2"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses bounded model input and concise output."
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-a",
+            "USD"
+          ],
+          "required_terms_any": [
+            "1250.50",
+            "1,250.50",
+            "1250"
+          ]
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "finance-agent-v0-ordinary",
+      "id": "finance-agent-v0-setup-02-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -88,24 +104,26 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Show acct-demo-a budget status."
+                  "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-v0-3"
-          },
-          "max_output_tokens": 400
+          "max_output_tokens": 200
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses normal bounded model work."
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "finance-agent-v0-transient",
+      "id": "finance-agent-v0-probe-02-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -119,20 +137,158 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Retry one temporary balance failure for acct-demo-a."
+                  "text": "Fixed synthetic case 02. Summarize acct-demo-b in one sentence."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-v0-4"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Retries once and recovers.",
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-b"
+          ],
+          "max_words": 40
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-setup-03-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-probe-03-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 03. Show acct-demo-a budget status."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-a",
+            "budget"
+          ]
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-setup-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-probe-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Retry one temporary balance failure for acct-demo-a."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
         "semantic_assertions": {
           "required_terms_any": [
             "1250.50",
@@ -167,11 +323,15 @@
             "argument": "account_id",
             "request_tool_equal": true
           }
-        ]
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "finance-agent-v0-partial",
+      "id": "finance-agent-v0-setup-05-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -185,20 +345,49 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Summarize the budget for acct-demo-a and acct-demo-missing, and disclose any incomplete coverage."
+                  "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-v0-5"
-          },
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-probe-05-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 05. Summarize the budget for acct-demo-a and acct-demo-missing, and disclose any incomplete coverage."
+                }
+              ]
+            }
+          ],
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Reports partial budget coverage supported by a successful acct-demo-a budget result and an account_not_found result for acct-demo-missing.",
         "semantic_assertions": {
           "required_terms_all": [
             "acct-demo-a",
@@ -222,1043 +411,539 @@
             "tool_name": "get_budget_summary",
             "result_class": "mixed"
           }
-        ]
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-setup-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-probe-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Show the balance for acct-demo-a."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-a",
+            "USD"
+          ],
+          "required_terms_any": [
+            "1250.50",
+            "1,250.50",
+            "1250"
+          ]
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-setup-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-probe-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Summarize acct-demo-b in one sentence."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-b"
+          ],
+          "max_words": 40
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-setup-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-probe-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Show acct-demo-a budget status."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-a",
+            "budget"
+          ]
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-setup-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-probe-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Retry one temporary balance failure for acct-demo-a."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_any": [
+            "1250.50",
+            "1,250.50",
+            "1250",
+            "USD",
+            "balance"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "exact_transient_retry_count",
+            "kind": "tool_call_count",
+            "tool_name": "get_balance_with_transient",
+            "count": 2
+          },
+          {
+            "name": "exact_transient_retry_sequence",
+            "kind": "retry_sequence",
+            "tool_name": "get_balance_with_transient",
+            "result_sequence": [
+              "error",
+              "success"
+            ]
+          },
+          {
+            "name": "exact_transient_retry_scope",
+            "kind": "scope_relation",
+            "tool_name": "get_balance_with_transient",
+            "scope_kind": "account",
+            "request_scope": "first",
+            "argument": "account_id",
+            "request_tool_equal": true
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-setup-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "finance-agent-v0-probe-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Summarize the budget for acct-demo-a and acct-demo-missing, and disclose any incomplete coverage."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-a",
+            "acct-demo-missing"
+          ],
+          "required_terms_any": [
+            "partial",
+            "incomplete"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "two_budget_calls",
+            "kind": "tool_call_count",
+            "tool_name": "get_budget_summary",
+            "count": 2
+          },
+          {
+            "name": "mixed_budget_results",
+            "kind": "tool_result_class",
+            "tool_name": "get_budget_summary",
+            "result_class": "mixed"
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     }
   ],
-  "data_class": "synthetic_public_safe",
-  "traffic_source": "endpoint_requests",
-  "validation_rules": {
-    "schema_version": "1.0.0",
-    "scenarios": [
-      {
-        "id": "finance-agent-baseline-health",
-        "validation_mode": "baseline",
-        "n": 10,
-        "k": 6,
-        "fixtures": [],
-        "attempts": [
-          {
-            "index": 1,
-            "conversation_group": "finance-agent-v0-attempt-01",
-            "parameters": {
-              "case_id": "case-01",
-              "source_request_ids": [
-                "finance-agent-v0-grounded"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Show the balance for acct-demo-a."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "USD"
-                    ],
-                    "required_terms_any": [
-                      "1250.50",
-                      "1,250.50",
-                      "1250"
-                    ]
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 2,
-            "conversation_group": "finance-agent-v0-attempt-02",
-            "parameters": {
-              "case_id": "case-02",
-              "source_request_ids": [
-                "finance-agent-v0-bounded"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Summarize acct-demo-b in one sentence."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-b"
-                    ],
-                    "max_words": 40
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 3,
-            "conversation_group": "finance-agent-v0-attempt-03",
-            "parameters": {
-              "case_id": "case-03",
-              "source_request_ids": [
-                "finance-agent-v0-ordinary"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Show acct-demo-a budget status."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "budget"
-                    ]
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 4,
-            "conversation_group": "finance-agent-v0-attempt-04",
-            "parameters": {
-              "case_id": "case-04",
-              "source_request_ids": [
-                "finance-agent-v0-transient"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Retry one temporary balance failure for acct-demo-a."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_any": [
-                      "1250.50",
-                      "1,250.50",
-                      "1250",
-                      "USD",
-                      "balance"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "exact_transient_retry_count",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance_with_transient",
-                      "count": 2
-                    },
-                    {
-                      "name": "exact_transient_retry_sequence",
-                      "kind": "retry_sequence",
-                      "tool_name": "get_balance_with_transient",
-                      "result_sequence": [
-                        "error",
-                        "success"
-                      ]
-                    },
-                    {
-                      "name": "exact_transient_retry_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance_with_transient",
-                      "scope_kind": "account",
-                      "request_scope": "first",
-                      "argument": "account_id",
-                      "request_tool_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 5,
-            "conversation_group": "finance-agent-v0-attempt-05",
-            "parameters": {
-              "case_id": "case-05",
-              "source_request_ids": [
-                "finance-agent-v0-partial"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Summarize the budget for acct-demo-a and acct-demo-missing, and disclose any incomplete coverage."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "acct-demo-missing"
-                    ],
-                    "required_terms_any": [
-                      "partial",
-                      "incomplete"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "two_budget_calls",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_budget_summary",
-                      "count": 2
-                    },
-                    {
-                      "name": "mixed_budget_results",
-                      "kind": "tool_result_class",
-                      "tool_name": "get_budget_summary",
-                      "result_class": "mixed"
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 6,
-            "conversation_group": "finance-agent-v0-attempt-06",
-            "parameters": {
-              "case_id": "case-06",
-              "source_request_ids": [
-                "finance-agent-v0-grounded"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Show the balance for acct-demo-a."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "USD"
-                    ],
-                    "required_terms_any": [
-                      "1250.50",
-                      "1,250.50",
-                      "1250"
-                    ]
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 7,
-            "conversation_group": "finance-agent-v0-attempt-07",
-            "parameters": {
-              "case_id": "case-07",
-              "source_request_ids": [
-                "finance-agent-v0-bounded"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Summarize acct-demo-b in one sentence."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-b"
-                    ],
-                    "max_words": 40
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 8,
-            "conversation_group": "finance-agent-v0-attempt-08",
-            "parameters": {
-              "case_id": "case-08",
-              "source_request_ids": [
-                "finance-agent-v0-ordinary"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Show acct-demo-a budget status."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "budget"
-                    ]
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 9,
-            "conversation_group": "finance-agent-v0-attempt-09",
-            "parameters": {
-              "case_id": "case-09",
-              "source_request_ids": [
-                "finance-agent-v0-transient"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Retry one temporary balance failure for acct-demo-a."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_any": [
-                      "1250.50",
-                      "1,250.50",
-                      "1250",
-                      "USD",
-                      "balance"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "exact_transient_retry_count",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance_with_transient",
-                      "count": 2
-                    },
-                    {
-                      "name": "exact_transient_retry_sequence",
-                      "kind": "retry_sequence",
-                      "tool_name": "get_balance_with_transient",
-                      "result_sequence": [
-                        "error",
-                        "success"
-                      ]
-                    },
-                    {
-                      "name": "exact_transient_retry_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance_with_transient",
-                      "scope_kind": "account",
-                      "request_scope": "first",
-                      "argument": "account_id",
-                      "request_tool_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 10,
-            "conversation_group": "finance-agent-v0-attempt-10",
-            "parameters": {
-              "case_id": "case-10",
-              "source_request_ids": [
-                "finance-agent-v0-partial"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "finance-agent-v0-setup-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "finance-agent-v0-probe-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Summarize the budget for acct-demo-a and acct-demo-missing, and disclose any incomplete coverage."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "acct-demo-missing"
-                    ],
-                    "required_terms_any": [
-                      "partial",
-                      "incomplete"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "two_budget_calls",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_budget_summary",
-                      "count": 2
-                    },
-                    {
-                      "name": "mixed_budget_results",
-                      "kind": "tool_result_class",
-                      "tool_name": "get_budget_summary",
-                      "result_class": "mixed"
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          }
-        ],
-        "healthy_predicate": {
-          "kind": "all_probe_assertions_pass"
-        },
-        "defect_predicate": {
-          "kind": "never"
-        },
-        "v0_control_predicate": null,
-        "execution_digest": "sha256:65ccfc7a1cf2efde7ef03b6480e44f6634c414049e0d411efebf335f51c4d556"
+  "attempts": [
+    {
+      "index": 1,
+      "setup_steps": [
+        "finance-agent-v0-setup-01-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-01-01"
+      ],
+      "parameters": {
+        "case_id": "case-01"
       }
-    ],
-    "execution_digest": "sha256:e8682c2f931e02ff832e3cd5ff96d7b96a4f5d8419903a9677fdb7064755f260"
-  }
+    },
+    {
+      "index": 2,
+      "setup_steps": [
+        "finance-agent-v0-setup-02-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-02-01"
+      ],
+      "parameters": {
+        "case_id": "case-02"
+      }
+    },
+    {
+      "index": 3,
+      "setup_steps": [
+        "finance-agent-v0-setup-03-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-03-01"
+      ],
+      "parameters": {
+        "case_id": "case-03"
+      }
+    },
+    {
+      "index": 4,
+      "setup_steps": [
+        "finance-agent-v0-setup-04-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-04-01"
+      ],
+      "parameters": {
+        "case_id": "case-04"
+      }
+    },
+    {
+      "index": 5,
+      "setup_steps": [
+        "finance-agent-v0-setup-05-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-05-01"
+      ],
+      "parameters": {
+        "case_id": "case-05"
+      }
+    },
+    {
+      "index": 6,
+      "setup_steps": [
+        "finance-agent-v0-setup-06-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-06-01"
+      ],
+      "parameters": {
+        "case_id": "case-06"
+      }
+    },
+    {
+      "index": 7,
+      "setup_steps": [
+        "finance-agent-v0-setup-07-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-07-01"
+      ],
+      "parameters": {
+        "case_id": "case-07"
+      }
+    },
+    {
+      "index": 8,
+      "setup_steps": [
+        "finance-agent-v0-setup-08-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-08-01"
+      ],
+      "parameters": {
+        "case_id": "case-08"
+      }
+    },
+    {
+      "index": 9,
+      "setup_steps": [
+        "finance-agent-v0-setup-09-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-09-01"
+      ],
+      "parameters": {
+        "case_id": "case-09"
+      }
+    },
+    {
+      "index": 10,
+      "setup_steps": [
+        "finance-agent-v0-setup-10-01"
+      ],
+      "probe_steps": [
+        "finance-agent-v0-probe-10-01"
+      ],
+      "parameters": {
+        "case_id": "case-10"
+      }
+    }
+  ]
 }

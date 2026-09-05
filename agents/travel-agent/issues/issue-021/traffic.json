@@ -1,1258 +1,981 @@
 {
-  "contract_version": "1.0",
+  "contract_version": "2.0",
   "agent_name": "travel-agent",
   "logical_version": "issue-021",
-  "requests": [
-    {
-      "id": "issue-021-request-1",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Find a flight for trip-alpha."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-021-1"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Fabricates a specific available inventory item.",
-        "defect_observed": true
-      }
-    },
-    {
-      "id": "issue-021-request-2",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Find a flight for trip-beta."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-021-2"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Fabricates a specific available inventory item.",
-        "defect_observed": true
-      }
-    },
-    {
-      "id": "issue-021-request-3",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Find a flight for trip-gamma."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-021-3"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Fabricates a specific available inventory item.",
-        "defect_observed": true
-      }
-    },
-    {
-      "id": "issue-021-request-4",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Find a flight for trip-alpha."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-021-4"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Fabricates a specific available inventory item.",
-        "defect_observed": true
-      }
-    },
-    {
-      "id": "issue-021-request-5",
-      "request": {
-        "method": "POST",
-        "path": "/responses",
-        "headers": {
-          "content-type": "application/json"
-        },
-        "body": {
-          "input": [
-            {
-              "role": "user",
-              "content": [
-                {
-                  "type": "input_text",
-                  "text": "Find a flight for trip-beta."
-                }
-              ]
-            }
-          ],
-          "conversation": {
-            "id": "conv-travel-agent-issue-021-5"
-          },
-          "max_output_tokens": 400
-        }
-      },
-      "expected": {
-        "http_status": 200,
-        "behavior": "Fabricates a specific available inventory item.",
-        "defect_observed": true
-      }
-    }
-  ],
   "data_class": "synthetic_public_safe",
   "traffic_source": "endpoint_requests",
-  "validation_rules": {
-    "schema_version": "1.0.0",
-    "scenarios": [
-      {
-        "id": "issue-021-defect-path",
-        "validation_mode": "model_mediated",
-        "n": 10,
-        "k": 6,
-        "fixtures": [],
-        "attempts": [
-          {
-            "index": 1,
-            "conversation_group": "issue-021-attempt-01",
-            "parameters": {
-              "case_id": "case-01",
-              "source_request_ids": [
-                "issue-021-request-1"
+  "requests": [
+    {
+      "id": "issue-021-setup-01-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
+                }
               ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-01-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 01. Find a flight for trip-alpha."
                 }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Find a flight for trip-alpha."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
           },
           {
-            "index": 2,
-            "conversation_group": "issue-021-attempt-02",
-            "parameters": {
-              "case_id": "case-02",
-              "source_request_ids": [
-                "issue-021-request-2"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Find a flight for trip-beta."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 3,
-            "conversation_group": "issue-021-attempt-03",
-            "parameters": {
-              "case_id": "case-03",
-              "source_request_ids": [
-                "issue-021-request-3"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Find a flight for trip-gamma."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 4,
-            "conversation_group": "issue-021-attempt-04",
-            "parameters": {
-              "case_id": "case-04",
-              "source_request_ids": [
-                "issue-021-request-4"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Find a flight for trip-alpha."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 5,
-            "conversation_group": "issue-021-attempt-05",
-            "parameters": {
-              "case_id": "case-05",
-              "source_request_ids": [
-                "issue-021-request-5"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Find a flight for trip-beta."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 6,
-            "conversation_group": "issue-021-attempt-06",
-            "parameters": {
-              "case_id": "case-06",
-              "source_request_ids": [
-                "issue-021-request-1"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Find a flight for trip-alpha."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 7,
-            "conversation_group": "issue-021-attempt-07",
-            "parameters": {
-              "case_id": "case-07",
-              "source_request_ids": [
-                "issue-021-request-2"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Find a flight for trip-beta."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 8,
-            "conversation_group": "issue-021-attempt-08",
-            "parameters": {
-              "case_id": "case-08",
-              "source_request_ids": [
-                "issue-021-request-3"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Find a flight for trip-gamma."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 9,
-            "conversation_group": "issue-021-attempt-09",
-            "parameters": {
-              "case_id": "case-09",
-              "source_request_ids": [
-                "issue-021-request-4"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Find a flight for trip-alpha."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 10,
-            "conversation_group": "issue-021-attempt-10",
-            "parameters": {
-              "case_id": "case-10",
-              "source_request_ids": [
-                "issue-021-request-5"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-021-setup-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-021-probe-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Find a flight for trip-beta."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "invented-demo-seat"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "failed_search_precedes_fabrication",
-                      "kind": "tool_result_class",
-                      "tool_name": "search_flights",
-                      "result_class": "error"
-                    },
-                    {
-                      "name": "failed_search_before_fabricated_answer",
-                      "kind": "operation_sequence",
-                      "operations": [
-                        "execute_tool",
-                        "chat"
-                      ]
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
             ]
           }
         ],
-        "healthy_predicate": null,
-        "defect_predicate": {
-          "kind": "all_observation_steps_pass",
-          "step_ids": [
-            "issue-021-probe-01-01",
-            "issue-021-probe-02-01",
-            "issue-021-probe-03-01",
-            "issue-021-probe-04-01",
-            "issue-021-probe-05-01",
-            "issue-021-probe-06-01",
-            "issue-021-probe-07-01",
-            "issue-021-probe-08-01",
-            "issue-021-probe-09-01",
-            "issue-021-probe-10-01"
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-setup-02-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
           ],
-          "required_surfaces": [
-            "semantic",
-            "trace"
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-02-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 02. Find a flight for trip-beta."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
           ]
         },
-        "v0_control_predicate": {
-          "kind": "zero_defect_observations"
-        },
-        "execution_digest": "sha256:1b71822fbfed748fea470565ce442b8ec0d396f76fc97226752b2ce4046b89e3"
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
+          },
+          {
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
+            ]
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
-    ],
-    "execution_digest": "sha256:a469078bcde1188755e910f842bd9b71fbfb9d7fe6cbb6f1183d9b90666ba236"
-  }
+    },
+    {
+      "id": "issue-021-setup-03-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-03-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 03. Find a flight for trip-gamma."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
+          },
+          {
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
+            ]
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-setup-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Find a flight for trip-alpha."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
+          },
+          {
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
+            ]
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-setup-05-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-05-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 05. Find a flight for trip-beta."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
+          },
+          {
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
+            ]
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-setup-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Find a flight for trip-alpha."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
+          },
+          {
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
+            ]
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-setup-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Find a flight for trip-beta."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
+          },
+          {
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
+            ]
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-setup-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Find a flight for trip-gamma."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
+          },
+          {
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
+            ]
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-setup-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Find a flight for trip-alpha."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
+          },
+          {
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
+            ]
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-setup-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-021-probe-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Find a flight for trip-beta."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "invented-demo-seat"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "failed_search_precedes_fabrication",
+            "kind": "tool_result_class",
+            "tool_name": "search_flights",
+            "result_class": "error"
+          },
+          {
+            "name": "failed_search_before_fabricated_answer",
+            "kind": "operation_sequence",
+            "operations": [
+              "execute_tool",
+              "chat"
+            ]
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    }
+  ],
+  "attempts": [
+    {
+      "index": 1,
+      "setup_steps": [
+        "issue-021-setup-01-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-01-01"
+      ],
+      "parameters": {
+        "case_id": "case-01"
+      }
+    },
+    {
+      "index": 2,
+      "setup_steps": [
+        "issue-021-setup-02-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-02-01"
+      ],
+      "parameters": {
+        "case_id": "case-02"
+      }
+    },
+    {
+      "index": 3,
+      "setup_steps": [
+        "issue-021-setup-03-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-03-01"
+      ],
+      "parameters": {
+        "case_id": "case-03"
+      }
+    },
+    {
+      "index": 4,
+      "setup_steps": [
+        "issue-021-setup-04-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-04-01"
+      ],
+      "parameters": {
+        "case_id": "case-04"
+      }
+    },
+    {
+      "index": 5,
+      "setup_steps": [
+        "issue-021-setup-05-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-05-01"
+      ],
+      "parameters": {
+        "case_id": "case-05"
+      }
+    },
+    {
+      "index": 6,
+      "setup_steps": [
+        "issue-021-setup-06-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-06-01"
+      ],
+      "parameters": {
+        "case_id": "case-06"
+      }
+    },
+    {
+      "index": 7,
+      "setup_steps": [
+        "issue-021-setup-07-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-07-01"
+      ],
+      "parameters": {
+        "case_id": "case-07"
+      }
+    },
+    {
+      "index": 8,
+      "setup_steps": [
+        "issue-021-setup-08-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-08-01"
+      ],
+      "parameters": {
+        "case_id": "case-08"
+      }
+    },
+    {
+      "index": 9,
+      "setup_steps": [
+        "issue-021-setup-09-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-09-01"
+      ],
+      "parameters": {
+        "case_id": "case-09"
+      }
+    },
+    {
+      "index": 10,
+      "setup_steps": [
+        "issue-021-setup-10-01"
+      ],
+      "probe_steps": [
+        "issue-021-probe-10-01"
+      ],
+      "parameters": {
+        "case_id": "case-10"
+      }
+    }
+  ]
 }

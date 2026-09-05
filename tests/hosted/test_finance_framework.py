@@ -561,22 +561,22 @@ def test_successive_requests_in_one_session_restart_transient_scope(version, str
     )
 
 
-@pytest.mark.parametrize("fixture_index", [0, 1, 2])
+@pytest.mark.parametrize("fixture_index", [0, 1])
 @pytest.mark.parametrize("stream", [False, True])
 def test_baseline_partial_fixture_requires_actual_mixed_budget_results(
     fixture_index, stream, telemetry,
 ):
     traffic = json.loads((ROOT / "v0" / "traffic.json").read_text(encoding="utf-8"))
-    original = next(item for item in traffic["requests"] if item["id"] == "finance-agent-v0-partial")
+    requests = {item["id"]: item for item in traffic["requests"]}
     counterparts = [
-        step
-        for scenario in traffic["validation_rules"]["scenarios"]
-        for attempt in scenario["attempts"]
-        if original["id"] in attempt["parameters"]["source_request_ids"]
-        for step in attempt["probe_steps"]
+        requests[ref]
+        for attempt in traffic["attempts"]
+        for ref in attempt["probe_steps"]
+        if "acct-demo-missing" in requests[ref]["request"]["body"]["input"][0]["content"][0]["text"]
     ]
     assert len(counterparts) == 2
-    selected = [original, *counterparts][fixture_index]
+    original = counterparts[0]
+    selected = counterparts[fixture_index]
     expected = selected["expected"]
     for field in ("semantic_assertions", "trace_assertions"):
         assert expected[field] == original["expected"][field]

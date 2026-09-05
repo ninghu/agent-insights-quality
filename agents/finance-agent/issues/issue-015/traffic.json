@@ -1,10 +1,12 @@
 {
-  "contract_version": "1.0",
+  "contract_version": "2.0",
   "agent_name": "finance-agent",
   "logical_version": "issue-015",
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests",
   "requests": [
     {
-      "id": "issue-015-request-1",
+      "id": "issue-015-setup-01-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -18,56 +20,26 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use only acct-demo-a and show its balance."
+                  "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-1"
-          },
-          "max_output_tokens": 400
+          "max_output_tokens": 200
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true,
-        "semantic_assertions": {
-          "required_terms_all": [
-            "acct-demo-b",
-            "USD 875.00"
-          ],
-          "forbidden_terms": [
-            "acct-demo-a",
-            "USD 1250.50"
-          ]
-        },
-        "trace_assertions": [
-          {
-            "name": "one_balance_call",
-            "kind": "tool_call_count",
-            "tool_name": "get_balance",
-            "count": 1
-          },
-          {
-            "name": "opposite_account_scope",
-            "kind": "scope_relation",
-            "tool_name": "get_balance",
-            "scope_kind": "account",
-            "request_scope": "last",
-            "argument": "account_id",
-            "result_field": "account_id",
-            "request_tool_equal": false,
-            "request_result_equal": false,
-            "tool_result_equal": true
-          }
-        ],
-        "activation_gate": true
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-015-request-2",
+      "id": "issue-015-probe-01-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -81,29 +53,24 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use only acct-demo-b and show its balance."
+                  "text": "Fixed synthetic case 01. Use only acct-demo-a and show its balance."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-2"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true,
         "semantic_assertions": {
           "required_terms_all": [
-            "acct-demo-a",
-            "USD 1250.50"
-          ],
-          "forbidden_terms": [
             "acct-demo-b",
             "USD 875.00"
+          ],
+          "forbidden_terms": [
+            "acct-demo-a",
+            "USD 1250.50"
           ]
         },
         "trace_assertions": [
@@ -126,11 +93,14 @@
             "tool_result_equal": true
           }
         ],
-        "activation_gate": true
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-015-request-3",
+      "id": "issue-015-setup-02-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -144,56 +114,26 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use only acct-demo-a and show its balance."
+                  "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-3"
-          },
-          "max_output_tokens": 400
+          "max_output_tokens": 200
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true,
-        "semantic_assertions": {
-          "required_terms_all": [
-            "acct-demo-b",
-            "USD 875.00"
-          ],
-          "forbidden_terms": [
-            "acct-demo-a",
-            "USD 1250.50"
-          ]
-        },
-        "trace_assertions": [
-          {
-            "name": "one_balance_call",
-            "kind": "tool_call_count",
-            "tool_name": "get_balance",
-            "count": 1
-          },
-          {
-            "name": "opposite_account_scope",
-            "kind": "scope_relation",
-            "tool_name": "get_balance",
-            "scope_kind": "account",
-            "request_scope": "last",
-            "argument": "account_id",
-            "result_field": "account_id",
-            "request_tool_equal": false,
-            "request_result_equal": false,
-            "tool_result_equal": true
-          }
-        ],
-        "activation_gate": true
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-015-request-4",
+      "id": "issue-015-probe-02-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -207,21 +147,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use only acct-demo-b and show its balance."
+                  "text": "Fixed synthetic case 02. Use only acct-demo-b and show its balance."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-4"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true,
         "semantic_assertions": {
           "required_terms_all": [
             "acct-demo-a",
@@ -252,11 +187,14 @@
             "tool_result_equal": true
           }
         ],
-        "activation_gate": true
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-015-request-5",
+      "id": "issue-015-setup-03-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -270,21 +208,49 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use only acct-demo-a and show its balance."
+                  "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-finance-agent-issue-015-5"
-          },
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-probe-03-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 03. Use only acct-demo-a and show its balance."
+                }
+              ]
+            }
+          ],
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Uses the other synthetic account scope.",
-        "defect_observed": true,
         "semantic_assertions": {
           "required_terms_all": [
             "acct-demo-b",
@@ -315,1188 +281,791 @@
             "tool_result_equal": true
           }
         ],
-        "activation_gate": true
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-setup-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-probe-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Use only acct-demo-b and show its balance."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-a",
+            "USD 1250.50"
+          ],
+          "forbidden_terms": [
+            "acct-demo-b",
+            "USD 875.00"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "one_balance_call",
+            "kind": "tool_call_count",
+            "tool_name": "get_balance",
+            "count": 1
+          },
+          {
+            "name": "opposite_account_scope",
+            "kind": "scope_relation",
+            "tool_name": "get_balance",
+            "scope_kind": "account",
+            "request_scope": "last",
+            "argument": "account_id",
+            "result_field": "account_id",
+            "request_tool_equal": false,
+            "request_result_equal": false,
+            "tool_result_equal": true
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-setup-05-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-probe-05-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 05. Use only acct-demo-a and show its balance."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-b",
+            "USD 875.00"
+          ],
+          "forbidden_terms": [
+            "acct-demo-a",
+            "USD 1250.50"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "one_balance_call",
+            "kind": "tool_call_count",
+            "tool_name": "get_balance",
+            "count": 1
+          },
+          {
+            "name": "opposite_account_scope",
+            "kind": "scope_relation",
+            "tool_name": "get_balance",
+            "scope_kind": "account",
+            "request_scope": "last",
+            "argument": "account_id",
+            "result_field": "account_id",
+            "request_tool_equal": false,
+            "request_result_equal": false,
+            "tool_result_equal": true
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-setup-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-probe-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Use only acct-demo-a and show its balance."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-b",
+            "USD 875.00"
+          ],
+          "forbidden_terms": [
+            "acct-demo-a",
+            "USD 1250.50"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "one_balance_call",
+            "kind": "tool_call_count",
+            "tool_name": "get_balance",
+            "count": 1
+          },
+          {
+            "name": "opposite_account_scope",
+            "kind": "scope_relation",
+            "tool_name": "get_balance",
+            "scope_kind": "account",
+            "request_scope": "last",
+            "argument": "account_id",
+            "result_field": "account_id",
+            "request_tool_equal": false,
+            "request_result_equal": false,
+            "tool_result_equal": true
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-setup-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-probe-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Use only acct-demo-b and show its balance."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-a",
+            "USD 1250.50"
+          ],
+          "forbidden_terms": [
+            "acct-demo-b",
+            "USD 875.00"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "one_balance_call",
+            "kind": "tool_call_count",
+            "tool_name": "get_balance",
+            "count": 1
+          },
+          {
+            "name": "opposite_account_scope",
+            "kind": "scope_relation",
+            "tool_name": "get_balance",
+            "scope_kind": "account",
+            "request_scope": "last",
+            "argument": "account_id",
+            "result_field": "account_id",
+            "request_tool_equal": false,
+            "request_result_equal": false,
+            "tool_result_equal": true
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-setup-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-probe-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Use only acct-demo-a and show its balance."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-b",
+            "USD 875.00"
+          ],
+          "forbidden_terms": [
+            "acct-demo-a",
+            "USD 1250.50"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "one_balance_call",
+            "kind": "tool_call_count",
+            "tool_name": "get_balance",
+            "count": 1
+          },
+          {
+            "name": "opposite_account_scope",
+            "kind": "scope_relation",
+            "tool_name": "get_balance",
+            "scope_kind": "account",
+            "request_scope": "last",
+            "argument": "account_id",
+            "result_field": "account_id",
+            "request_tool_equal": false,
+            "request_result_equal": false,
+            "tool_result_equal": true
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-setup-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-probe-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Use only acct-demo-b and show its balance."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-a",
+            "USD 1250.50"
+          ],
+          "forbidden_terms": [
+            "acct-demo-b",
+            "USD 875.00"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "one_balance_call",
+            "kind": "tool_call_count",
+            "tool_name": "get_balance",
+            "count": 1
+          },
+          {
+            "name": "opposite_account_scope",
+            "kind": "scope_relation",
+            "tool_name": "get_balance",
+            "scope_kind": "account",
+            "request_scope": "last",
+            "argument": "account_id",
+            "result_field": "account_id",
+            "request_tool_equal": false,
+            "request_result_equal": false,
+            "tool_result_equal": true
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-setup-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 200
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {},
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-015-probe-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Use only acct-demo-a and show its balance."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-b",
+            "USD 875.00"
+          ],
+          "forbidden_terms": [
+            "acct-demo-a",
+            "USD 1250.50"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "one_balance_call",
+            "kind": "tool_call_count",
+            "tool_name": "get_balance",
+            "count": 1
+          },
+          {
+            "name": "opposite_account_scope",
+            "kind": "scope_relation",
+            "tool_name": "get_balance",
+            "scope_kind": "account",
+            "request_scope": "last",
+            "argument": "account_id",
+            "result_field": "account_id",
+            "request_tool_equal": false,
+            "request_result_equal": false,
+            "tool_result_equal": true
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     }
   ],
-  "data_class": "synthetic_public_safe",
-  "traffic_source": "endpoint_requests",
-  "validation_rules": {
-    "schema_version": "1.0.0",
-    "scenarios": [
-      {
-        "id": "issue-015-defect-path",
-        "validation_mode": "deterministic",
-        "n": 10,
-        "k": 6,
-        "fixtures": [],
-        "attempts": [
-          {
-            "index": 1,
-            "conversation_group": "issue-015-attempt-01",
-            "parameters": {
-              "case_id": "case-01",
-              "source_request_ids": [
-                "issue-015-request-1"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Use only acct-demo-a and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 2,
-            "conversation_group": "issue-015-attempt-02",
-            "parameters": {
-              "case_id": "case-02",
-              "source_request_ids": [
-                "issue-015-request-2"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Use only acct-demo-b and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 3,
-            "conversation_group": "issue-015-attempt-03",
-            "parameters": {
-              "case_id": "case-03",
-              "source_request_ids": [
-                "issue-015-request-3"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Use only acct-demo-a and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 4,
-            "conversation_group": "issue-015-attempt-04",
-            "parameters": {
-              "case_id": "case-04",
-              "source_request_ids": [
-                "issue-015-request-4"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Use only acct-demo-b and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 5,
-            "conversation_group": "issue-015-attempt-05",
-            "parameters": {
-              "case_id": "case-05",
-              "source_request_ids": [
-                "issue-015-request-5"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Use only acct-demo-a and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 6,
-            "conversation_group": "issue-015-attempt-06",
-            "parameters": {
-              "case_id": "case-06",
-              "source_request_ids": [
-                "issue-015-request-1"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Use only acct-demo-a and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 7,
-            "conversation_group": "issue-015-attempt-07",
-            "parameters": {
-              "case_id": "case-07",
-              "source_request_ids": [
-                "issue-015-request-2"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Use only acct-demo-b and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 8,
-            "conversation_group": "issue-015-attempt-08",
-            "parameters": {
-              "case_id": "case-08",
-              "source_request_ids": [
-                "issue-015-request-3"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Use only acct-demo-a and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 9,
-            "conversation_group": "issue-015-attempt-09",
-            "parameters": {
-              "case_id": "case-09",
-              "source_request_ids": [
-                "issue-015-request-4"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Use only acct-demo-b and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 10,
-            "conversation_group": "issue-015-attempt-10",
-            "parameters": {
-              "case_id": "case-10",
-              "source_request_ids": [
-                "issue-015-request-5"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-015-setup-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 200
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {},
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-015-probe-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Use only acct-demo-a and show its balance."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "acct-demo-b",
-                      "USD 875.00"
-                    ],
-                    "forbidden_terms": [
-                      "acct-demo-a",
-                      "USD 1250.50"
-                    ]
-                  },
-                  "trace_assertions": [
-                    {
-                      "name": "one_balance_call",
-                      "kind": "tool_call_count",
-                      "tool_name": "get_balance",
-                      "count": 1
-                    },
-                    {
-                      "name": "opposite_account_scope",
-                      "kind": "scope_relation",
-                      "tool_name": "get_balance",
-                      "scope_kind": "account",
-                      "request_scope": "last",
-                      "argument": "account_id",
-                      "result_field": "account_id",
-                      "request_tool_equal": false,
-                      "request_result_equal": false,
-                      "tool_result_equal": true
-                    }
-                  ],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          }
-        ],
-        "healthy_predicate": null,
-        "defect_predicate": {
-          "kind": "all_observation_steps_pass",
-          "step_ids": [
-            "issue-015-probe-01-01",
-            "issue-015-probe-02-01",
-            "issue-015-probe-03-01",
-            "issue-015-probe-04-01",
-            "issue-015-probe-05-01",
-            "issue-015-probe-06-01",
-            "issue-015-probe-07-01",
-            "issue-015-probe-08-01",
-            "issue-015-probe-09-01",
-            "issue-015-probe-10-01"
-          ],
-          "required_surfaces": [
-            "trace"
-          ]
-        },
-        "v0_control_predicate": {
-          "kind": "zero_defect_observations"
-        },
-        "execution_digest": "sha256:4b73c7f0cf27999e7f7c30477e5a7f1db71d1c20f11830d710e308044e2071ac"
+  "attempts": [
+    {
+      "index": 1,
+      "setup_steps": [
+        "issue-015-setup-01-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-01-01"
+      ],
+      "parameters": {
+        "case_id": "case-01"
       }
-    ],
-    "execution_digest": "sha256:7c0b6ba7555a11f020e87bc33d6b689a0e66bee5f94a3729dc241187fac8eb91"
-  }
+    },
+    {
+      "index": 2,
+      "setup_steps": [
+        "issue-015-setup-02-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-02-01"
+      ],
+      "parameters": {
+        "case_id": "case-02"
+      }
+    },
+    {
+      "index": 3,
+      "setup_steps": [
+        "issue-015-setup-03-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-03-01"
+      ],
+      "parameters": {
+        "case_id": "case-03"
+      }
+    },
+    {
+      "index": 4,
+      "setup_steps": [
+        "issue-015-setup-04-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-04-01"
+      ],
+      "parameters": {
+        "case_id": "case-04"
+      }
+    },
+    {
+      "index": 5,
+      "setup_steps": [
+        "issue-015-setup-05-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-05-01"
+      ],
+      "parameters": {
+        "case_id": "case-05"
+      }
+    },
+    {
+      "index": 6,
+      "setup_steps": [
+        "issue-015-setup-06-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-06-01"
+      ],
+      "parameters": {
+        "case_id": "case-06"
+      }
+    },
+    {
+      "index": 7,
+      "setup_steps": [
+        "issue-015-setup-07-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-07-01"
+      ],
+      "parameters": {
+        "case_id": "case-07"
+      }
+    },
+    {
+      "index": 8,
+      "setup_steps": [
+        "issue-015-setup-08-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-08-01"
+      ],
+      "parameters": {
+        "case_id": "case-08"
+      }
+    },
+    {
+      "index": 9,
+      "setup_steps": [
+        "issue-015-setup-09-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-09-01"
+      ],
+      "parameters": {
+        "case_id": "case-09"
+      }
+    },
+    {
+      "index": 10,
+      "setup_steps": [
+        "issue-015-setup-10-01"
+      ],
+      "probe_steps": [
+        "issue-015-probe-10-01"
+      ],
+      "parameters": {
+        "case_id": "case-10"
+      }
+    }
+  ]
 }

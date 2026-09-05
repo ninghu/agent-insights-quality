@@ -1,10 +1,12 @@
 {
-  "contract_version": "1.0",
+  "contract_version": "2.0",
   "agent_name": "healthcare-agent",
   "logical_version": "issue-009",
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests",
   "requests": [
     {
-      "id": "issue-009-request-1",
+      "id": "issue-009-setup-01-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -18,20 +20,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Dr. Rivera for demo-account-a on 2026-09-21. Synthetic schedule evidence: slot-demo-initial-1 open at 09:00. Summarize this selection."
+                  "text": "Fixed synthetic case 01. Use Dr. Rivera for demo-account-a on 2026-09-21. Synthetic schedule evidence: slot-demo-initial-1 open at 09:00. Summarize this selection."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-1"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Establishes a concrete original selection before the correction.",
         "semantic_assertions": {
           "required_terms_all": [
             "demo-account-a",
@@ -42,12 +40,15 @@
           ],
           "max_words": 60
         },
-        "defect_observed": false,
-        "activation_gate": false
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-009-request-2",
+      "id": "issue-009-probe-01-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -61,20 +62,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Correction: use Dr. Chen at slot-demo-revised-1 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-21. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                  "text": "Fixed synthetic case 01. Correction: use Dr. Chen at slot-demo-revised-1 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-21. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-1"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Reuses the original evidenced provider and slot rather than the explicit replacement.",
         "semantic_assertions": {
           "response_format": "json",
           "json_schema": {
@@ -108,12 +105,15 @@
             "date": "2026-09-21"
           }
         },
-        "defect_observed": true,
-        "activation_gate": true
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-009-request-3",
+      "id": "issue-009-setup-02-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -127,20 +127,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Dr. Chen for demo-account-b on 2026-09-22. Synthetic schedule evidence: slot-demo-initial-2 open at 09:00. Summarize this selection."
+                  "text": "Fixed synthetic case 02. Use Dr. Chen for demo-account-b on 2026-09-22. Synthetic schedule evidence: slot-demo-initial-2 open at 09:00. Summarize this selection."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-2"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Establishes a concrete original selection before the correction.",
         "semantic_assertions": {
           "required_terms_all": [
             "demo-account-b",
@@ -151,12 +147,15 @@
           ],
           "max_words": 60
         },
-        "defect_observed": false,
-        "activation_gate": false
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-009-request-4",
+      "id": "issue-009-probe-02-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -170,20 +169,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Correction: use Dr. Patel at slot-demo-revised-2 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-22. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                  "text": "Fixed synthetic case 02. Correction: use Dr. Patel at slot-demo-revised-2 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-22. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-2"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Reuses the original evidenced provider and slot rather than the explicit replacement.",
         "semantic_assertions": {
           "response_format": "json",
           "json_schema": {
@@ -217,12 +212,15 @@
             "date": "2026-09-22"
           }
         },
-        "defect_observed": true,
-        "activation_gate": true
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-009-request-5",
+      "id": "issue-009-setup-03-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -236,20 +234,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Dr. Patel for demo-account-a on 2026-09-23. Synthetic schedule evidence: slot-demo-initial-3 open at 09:00. Summarize this selection."
+                  "text": "Fixed synthetic case 03. Use Dr. Patel for demo-account-a on 2026-09-23. Synthetic schedule evidence: slot-demo-initial-3 open at 09:00. Summarize this selection."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-3"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Establishes a concrete original selection before the correction.",
         "semantic_assertions": {
           "required_terms_all": [
             "demo-account-a",
@@ -260,12 +254,15 @@
           ],
           "max_words": 60
         },
-        "defect_observed": false,
-        "activation_gate": false
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-009-request-6",
+      "id": "issue-009-probe-03-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -279,20 +276,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Correction: use Dr. Ali at slot-demo-revised-3 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-23. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                  "text": "Fixed synthetic case 03. Correction: use Dr. Ali at slot-demo-revised-3 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-23. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-3"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Reuses the original evidenced provider and slot rather than the explicit replacement.",
         "semantic_assertions": {
           "response_format": "json",
           "json_schema": {
@@ -326,12 +319,15 @@
             "date": "2026-09-23"
           }
         },
-        "defect_observed": true,
-        "activation_gate": true
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-009-request-7",
+      "id": "issue-009-setup-04-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -345,20 +341,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Dr. Ali for demo-account-b on 2026-09-24. Synthetic schedule evidence: slot-demo-initial-4 open at 09:00. Summarize this selection."
+                  "text": "Fixed synthetic case 04. Use Dr. Ali for demo-account-b on 2026-09-24. Synthetic schedule evidence: slot-demo-initial-4 open at 09:00. Summarize this selection."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-4"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Establishes a concrete original selection before the correction.",
         "semantic_assertions": {
           "required_terms_all": [
             "demo-account-b",
@@ -369,12 +361,15 @@
           ],
           "max_words": 60
         },
-        "defect_observed": false,
-        "activation_gate": false
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-009-request-8",
+      "id": "issue-009-probe-04-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -388,20 +383,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Correction: use Dr. Morgan at slot-demo-revised-4 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-24. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                  "text": "Fixed synthetic case 04. Correction: use Dr. Morgan at slot-demo-revised-4 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-24. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-4"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Reuses the original evidenced provider and slot rather than the explicit replacement.",
         "semantic_assertions": {
           "response_format": "json",
           "json_schema": {
@@ -435,12 +426,15 @@
             "date": "2026-09-24"
           }
         },
-        "defect_observed": true,
-        "activation_gate": true
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-009-request-9",
+      "id": "issue-009-setup-05-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -454,20 +448,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Use Dr. Morgan for demo-account-a on 2026-09-25. Synthetic schedule evidence: slot-demo-initial-5 open at 09:00. Summarize this selection."
+                  "text": "Fixed synthetic case 05. Use Dr. Morgan for demo-account-a on 2026-09-25. Synthetic schedule evidence: slot-demo-initial-5 open at 09:00. Summarize this selection."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-5"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Establishes a concrete original selection before the correction.",
         "semantic_assertions": {
           "required_terms_all": [
             "demo-account-a",
@@ -478,12 +468,15 @@
           ],
           "max_words": 60
         },
-        "defect_observed": false,
-        "activation_gate": false
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     },
     {
-      "id": "issue-009-request-10",
+      "id": "issue-009-probe-05-01",
       "request": {
         "method": "POST",
         "path": "/responses",
@@ -497,20 +490,16 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Correction: use Dr. Rivera at slot-demo-revised-5 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-25. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                  "text": "Fixed synthetic case 05. Correction: use Dr. Rivera at slot-demo-revised-5 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-25. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
                 }
               ]
             }
           ],
-          "conversation": {
-            "id": "conv-issue-009-5"
-          },
           "max_output_tokens": 400
         }
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Reuses the original evidenced provider and slot rather than the explicit replacement.",
         "semantic_assertions": {
           "response_format": "json",
           "json_schema": {
@@ -544,1329 +533,669 @@
             "date": "2026-09-25"
           }
         },
-        "defect_observed": true,
-        "activation_gate": true
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-setup-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Use Dr. Rivera for demo-account-a on 2026-09-21. Synthetic schedule evidence: slot-demo-initial-1 open at 09:00. Summarize this selection."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "demo-account-a",
+            "Dr. Rivera",
+            "slot-demo-initial-1",
+            "09:00",
+            "2026-09-21"
+          ],
+          "max_words": 60
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-probe-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Correction: use Dr. Chen at slot-demo-revised-1 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-21. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "provider",
+              "slot",
+              "date"
+            ],
+            "properties": {
+              "account_scope": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "slot": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              }
+            }
+          },
+          "exact_json_fields": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Rivera",
+            "slot": "slot-demo-initial-1",
+            "date": "2026-09-21"
+          }
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-setup-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Use Dr. Chen for demo-account-b on 2026-09-22. Synthetic schedule evidence: slot-demo-initial-2 open at 09:00. Summarize this selection."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "demo-account-b",
+            "Dr. Chen",
+            "slot-demo-initial-2",
+            "09:00",
+            "2026-09-22"
+          ],
+          "max_words": 60
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-probe-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Correction: use Dr. Patel at slot-demo-revised-2 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-22. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "provider",
+              "slot",
+              "date"
+            ],
+            "properties": {
+              "account_scope": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "slot": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              }
+            }
+          },
+          "exact_json_fields": {
+            "account_scope": "demo-account-b",
+            "provider": "Dr. Chen",
+            "slot": "slot-demo-initial-2",
+            "date": "2026-09-22"
+          }
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-setup-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Use Dr. Patel for demo-account-a on 2026-09-23. Synthetic schedule evidence: slot-demo-initial-3 open at 09:00. Summarize this selection."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "demo-account-a",
+            "Dr. Patel",
+            "slot-demo-initial-3",
+            "09:00",
+            "2026-09-23"
+          ],
+          "max_words": 60
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-probe-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Correction: use Dr. Ali at slot-demo-revised-3 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-23. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "provider",
+              "slot",
+              "date"
+            ],
+            "properties": {
+              "account_scope": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "slot": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              }
+            }
+          },
+          "exact_json_fields": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Patel",
+            "slot": "slot-demo-initial-3",
+            "date": "2026-09-23"
+          }
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-setup-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Use Dr. Ali for demo-account-b on 2026-09-24. Synthetic schedule evidence: slot-demo-initial-4 open at 09:00. Summarize this selection."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "demo-account-b",
+            "Dr. Ali",
+            "slot-demo-initial-4",
+            "09:00",
+            "2026-09-24"
+          ],
+          "max_words": 60
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-probe-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Correction: use Dr. Morgan at slot-demo-revised-4 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-24. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "provider",
+              "slot",
+              "date"
+            ],
+            "properties": {
+              "account_scope": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "slot": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              }
+            }
+          },
+          "exact_json_fields": {
+            "account_scope": "demo-account-b",
+            "provider": "Dr. Ali",
+            "slot": "slot-demo-initial-4",
+            "date": "2026-09-24"
+          }
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-setup-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Use Dr. Morgan for demo-account-a on 2026-09-25. Synthetic schedule evidence: slot-demo-initial-5 open at 09:00. Summarize this selection."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "required_terms_all": [
+            "demo-account-a",
+            "Dr. Morgan",
+            "slot-demo-initial-5",
+            "09:00",
+            "2026-09-25"
+          ],
+          "max_words": 60
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-009-probe-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Correction: use Dr. Rivera at slot-demo-revised-5 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-25. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
+                }
+              ]
+            }
+          ],
+          "max_output_tokens": 400
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "response_format": "json",
+          "json_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "account_scope",
+              "provider",
+              "slot",
+              "date"
+            ],
+            "properties": {
+              "account_scope": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "slot": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              }
+            }
+          },
+          "exact_json_fields": {
+            "account_scope": "demo-account-a",
+            "provider": "Dr. Morgan",
+            "slot": "slot-demo-initial-5",
+            "date": "2026-09-25"
+          }
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
       }
     }
   ],
-  "data_class": "synthetic_public_safe",
-  "traffic_source": "endpoint_requests",
-  "validation_rules": {
-    "schema_version": "1.0.0",
-    "scenarios": [
-      {
-        "id": "issue-009-defect-path",
-        "validation_mode": "model_mediated",
-        "n": 10,
-        "k": 6,
-        "fixtures": [],
-        "attempts": [
-          {
-            "index": 1,
-            "conversation_group": "issue-009-attempt-01",
-            "parameters": {
-              "case_id": "case-01",
-              "source_request_ids": [
-                "issue-009-request-1",
-                "issue-009-request-2"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Use Dr. Rivera for demo-account-a on 2026-09-21. Synthetic schedule evidence: slot-demo-initial-1 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-a",
-                      "Dr. Rivera",
-                      "slot-demo-initial-1",
-                      "09:00",
-                      "2026-09-21"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-01-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 01. Correction: use Dr. Chen at slot-demo-revised-1 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-21. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-a",
-                      "provider": "Dr. Rivera",
-                      "slot": "slot-demo-initial-1",
-                      "date": "2026-09-21"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 2,
-            "conversation_group": "issue-009-attempt-02",
-            "parameters": {
-              "case_id": "case-02",
-              "source_request_ids": [
-                "issue-009-request-3",
-                "issue-009-request-4"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Use Dr. Chen for demo-account-b on 2026-09-22. Synthetic schedule evidence: slot-demo-initial-2 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-b",
-                      "Dr. Chen",
-                      "slot-demo-initial-2",
-                      "09:00",
-                      "2026-09-22"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-02-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 02. Correction: use Dr. Patel at slot-demo-revised-2 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-22. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-b",
-                      "provider": "Dr. Chen",
-                      "slot": "slot-demo-initial-2",
-                      "date": "2026-09-22"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 3,
-            "conversation_group": "issue-009-attempt-03",
-            "parameters": {
-              "case_id": "case-03",
-              "source_request_ids": [
-                "issue-009-request-5",
-                "issue-009-request-6"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Use Dr. Patel for demo-account-a on 2026-09-23. Synthetic schedule evidence: slot-demo-initial-3 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-a",
-                      "Dr. Patel",
-                      "slot-demo-initial-3",
-                      "09:00",
-                      "2026-09-23"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-03-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 03. Correction: use Dr. Ali at slot-demo-revised-3 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-23. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-a",
-                      "provider": "Dr. Patel",
-                      "slot": "slot-demo-initial-3",
-                      "date": "2026-09-23"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 4,
-            "conversation_group": "issue-009-attempt-04",
-            "parameters": {
-              "case_id": "case-04",
-              "source_request_ids": [
-                "issue-009-request-7",
-                "issue-009-request-8"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Use Dr. Ali for demo-account-b on 2026-09-24. Synthetic schedule evidence: slot-demo-initial-4 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-b",
-                      "Dr. Ali",
-                      "slot-demo-initial-4",
-                      "09:00",
-                      "2026-09-24"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-04-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 04. Correction: use Dr. Morgan at slot-demo-revised-4 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-24. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-b",
-                      "provider": "Dr. Ali",
-                      "slot": "slot-demo-initial-4",
-                      "date": "2026-09-24"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 5,
-            "conversation_group": "issue-009-attempt-05",
-            "parameters": {
-              "case_id": "case-05",
-              "source_request_ids": [
-                "issue-009-request-9",
-                "issue-009-request-10"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Use Dr. Morgan for demo-account-a on 2026-09-25. Synthetic schedule evidence: slot-demo-initial-5 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-a",
-                      "Dr. Morgan",
-                      "slot-demo-initial-5",
-                      "09:00",
-                      "2026-09-25"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-05-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 05. Correction: use Dr. Rivera at slot-demo-revised-5 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-25. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-a",
-                      "provider": "Dr. Morgan",
-                      "slot": "slot-demo-initial-5",
-                      "date": "2026-09-25"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 6,
-            "conversation_group": "issue-009-attempt-06",
-            "parameters": {
-              "case_id": "case-06",
-              "source_request_ids": [
-                "issue-009-request-1",
-                "issue-009-request-2"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Use Dr. Rivera for demo-account-a on 2026-09-21. Synthetic schedule evidence: slot-demo-initial-1 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-a",
-                      "Dr. Rivera",
-                      "slot-demo-initial-1",
-                      "09:00",
-                      "2026-09-21"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-06-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 06. Correction: use Dr. Chen at slot-demo-revised-1 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-21. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-a",
-                      "provider": "Dr. Rivera",
-                      "slot": "slot-demo-initial-1",
-                      "date": "2026-09-21"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 7,
-            "conversation_group": "issue-009-attempt-07",
-            "parameters": {
-              "case_id": "case-07",
-              "source_request_ids": [
-                "issue-009-request-3",
-                "issue-009-request-4"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Use Dr. Chen for demo-account-b on 2026-09-22. Synthetic schedule evidence: slot-demo-initial-2 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-b",
-                      "Dr. Chen",
-                      "slot-demo-initial-2",
-                      "09:00",
-                      "2026-09-22"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-07-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 07. Correction: use Dr. Patel at slot-demo-revised-2 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-22. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-b",
-                      "provider": "Dr. Chen",
-                      "slot": "slot-demo-initial-2",
-                      "date": "2026-09-22"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 8,
-            "conversation_group": "issue-009-attempt-08",
-            "parameters": {
-              "case_id": "case-08",
-              "source_request_ids": [
-                "issue-009-request-5",
-                "issue-009-request-6"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Use Dr. Patel for demo-account-a on 2026-09-23. Synthetic schedule evidence: slot-demo-initial-3 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-a",
-                      "Dr. Patel",
-                      "slot-demo-initial-3",
-                      "09:00",
-                      "2026-09-23"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-08-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 08. Correction: use Dr. Ali at slot-demo-revised-3 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-23. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-a",
-                      "provider": "Dr. Patel",
-                      "slot": "slot-demo-initial-3",
-                      "date": "2026-09-23"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 9,
-            "conversation_group": "issue-009-attempt-09",
-            "parameters": {
-              "case_id": "case-09",
-              "source_request_ids": [
-                "issue-009-request-7",
-                "issue-009-request-8"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Use Dr. Ali for demo-account-b on 2026-09-24. Synthetic schedule evidence: slot-demo-initial-4 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-b",
-                      "Dr. Ali",
-                      "slot-demo-initial-4",
-                      "09:00",
-                      "2026-09-24"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-09-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 09. Correction: use Dr. Morgan at slot-demo-revised-4 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-24. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-b",
-                      "provider": "Dr. Ali",
-                      "slot": "slot-demo-initial-4",
-                      "date": "2026-09-24"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          },
-          {
-            "index": 10,
-            "conversation_group": "issue-009-attempt-10",
-            "parameters": {
-              "case_id": "case-10",
-              "source_request_ids": [
-                "issue-009-request-9",
-                "issue-009-request-10"
-              ]
-            },
-            "setup_steps": [
-              {
-                "id": "issue-009-setup-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Use Dr. Morgan for demo-account-a on 2026-09-25. Synthetic schedule evidence: slot-demo-initial-5 open at 09:00. Summarize this selection."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "required_terms_all": [
-                      "demo-account-a",
-                      "Dr. Morgan",
-                      "slot-demo-initial-5",
-                      "09:00",
-                      "2026-09-25"
-                    ],
-                    "max_words": 60
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ],
-            "probe_steps": [
-              {
-                "id": "issue-009-probe-10-01",
-                "request": {
-                  "method": "POST",
-                  "path": "/responses",
-                  "headers": {
-                    "content-type": "application/json"
-                  },
-                  "body": {
-                    "input": [
-                      {
-                        "role": "user",
-                        "content": [
-                          {
-                            "type": "input_text",
-                            "text": "Fixed synthetic case 10. Correction: use Dr. Rivera at slot-demo-revised-5 instead. Synthetic schedule evidence for the replacement: open at 14:00 on 2026-09-25. Return the current selection as JSON with exactly account_scope, provider, slot, and date."
-                          }
-                        ]
-                      }
-                    ],
-                    "conversation": {
-                      "id": "$validation_conversation"
-                    },
-                    "max_output_tokens": 400
-                  }
-                },
-                "expected": {
-                  "http_status": 200,
-                  "semantic_assertions": {
-                    "response_format": "json",
-                    "json_schema": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "account_scope",
-                        "provider",
-                        "slot",
-                        "date"
-                      ],
-                      "properties": {
-                        "account_scope": {
-                          "type": "string"
-                        },
-                        "provider": {
-                          "type": "string"
-                        },
-                        "slot": {
-                          "type": "string"
-                        },
-                        "date": {
-                          "type": "string"
-                        }
-                      }
-                    },
-                    "exact_json_fields": {
-                      "account_scope": "demo-account-a",
-                      "provider": "Dr. Morgan",
-                      "slot": "slot-demo-initial-5",
-                      "date": "2026-09-25"
-                    }
-                  },
-                  "trace_assertions": [],
-                  "identity_assertions": {
-                    "agent_name": "$runtime_agent_name",
-                    "agent_version": "$runtime_agent_version"
-                  }
-                }
-              }
-            ]
-          }
-        ],
-        "healthy_predicate": null,
-        "defect_predicate": {
-          "kind": "all_observation_steps_pass",
-          "step_ids": [
-            "issue-009-probe-01-01",
-            "issue-009-probe-02-01",
-            "issue-009-probe-03-01",
-            "issue-009-probe-04-01",
-            "issue-009-probe-05-01",
-            "issue-009-probe-06-01",
-            "issue-009-probe-07-01",
-            "issue-009-probe-08-01",
-            "issue-009-probe-09-01",
-            "issue-009-probe-10-01"
-          ],
-          "required_surfaces": [
-            "semantic"
-          ]
-        },
-        "v0_control_predicate": {
-          "kind": "zero_defect_observations"
-        },
-        "execution_digest": "sha256:a50c2d213defab64d7a50f2be37b2241f8a4651c68cf95644f5b2eef68fc5746"
+  "attempts": [
+    {
+      "index": 1,
+      "setup_steps": [
+        "issue-009-setup-01-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-01-01"
+      ],
+      "parameters": {
+        "case_id": "case-01"
       }
-    ],
-    "execution_digest": "sha256:17e5090b8cfb0efe58df08603dabfa779ffe2a9203eb6d9d2ab18c62affda0f4"
-  }
+    },
+    {
+      "index": 2,
+      "setup_steps": [
+        "issue-009-setup-02-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-02-01"
+      ],
+      "parameters": {
+        "case_id": "case-02"
+      }
+    },
+    {
+      "index": 3,
+      "setup_steps": [
+        "issue-009-setup-03-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-03-01"
+      ],
+      "parameters": {
+        "case_id": "case-03"
+      }
+    },
+    {
+      "index": 4,
+      "setup_steps": [
+        "issue-009-setup-04-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-04-01"
+      ],
+      "parameters": {
+        "case_id": "case-04"
+      }
+    },
+    {
+      "index": 5,
+      "setup_steps": [
+        "issue-009-setup-05-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-05-01"
+      ],
+      "parameters": {
+        "case_id": "case-05"
+      }
+    },
+    {
+      "index": 6,
+      "setup_steps": [
+        "issue-009-setup-06-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-06-01"
+      ],
+      "parameters": {
+        "case_id": "case-06"
+      }
+    },
+    {
+      "index": 7,
+      "setup_steps": [
+        "issue-009-setup-07-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-07-01"
+      ],
+      "parameters": {
+        "case_id": "case-07"
+      }
+    },
+    {
+      "index": 8,
+      "setup_steps": [
+        "issue-009-setup-08-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-08-01"
+      ],
+      "parameters": {
+        "case_id": "case-08"
+      }
+    },
+    {
+      "index": 9,
+      "setup_steps": [
+        "issue-009-setup-09-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-09-01"
+      ],
+      "parameters": {
+        "case_id": "case-09"
+      }
+    },
+    {
+      "index": 10,
+      "setup_steps": [
+        "issue-009-setup-10-01"
+      ],
+      "probe_steps": [
+        "issue-009-probe-10-01"
+      ],
+      "parameters": {
+        "case_id": "case-10"
+      }
+    }
+  ]
 }

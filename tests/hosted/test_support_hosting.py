@@ -330,7 +330,8 @@ def test_baseline_transient_failure_and_partial_result_are_actual_tool_results(i
 def test_reviewed_probe_goes_through_actual_responses_host(invoke, version):
     directory = ROOT / "v0" if version == "v0" else ROOT / "issues" / version
     traffic = json.loads((directory / "traffic.json").read_text(encoding="utf-8"))
-    probe = traffic["validation_rules"]["scenarios"][0]["attempts"][0]["probe_steps"][0]
+    requests = {item["id"]: item for item in traffic["requests"]}
+    probe = requests[traffic["attempts"][0]["probe_steps"][0]]
     result = invoke(version, body=probe["request"]["body"])
     assertions = probe["expected"]["semantic_assertions"]
     if "exact_text" in assertions:

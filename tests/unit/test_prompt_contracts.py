@@ -10,6 +10,9 @@ import pytest
 import yaml
 from jsonschema import Draft202012Validator
 
+from agent_insights_quality.catalogs import load_catalog
+from agent_insights_quality.traffic import load_attempts, traffic_validator
+
 
 ROOT = Path(__file__).resolve().parents[2]
 PROMPT_ROOTS = [
@@ -44,6 +47,37 @@ def assertions(step):
 
 def requests_by_id(document):
     return {step["id"]: step for step in document["requests"]}
+
+
+def phase_steps(document, phase):
+    requests = requests_by_id(document)
+    return [
+        requests[ref]
+        for attempt in document["attempts"]
+        for ref in attempt[f"{phase}_steps"]
+    ]
+
+
+def case_step(document, index, phase="probe", offset=0):
+    ref = document["attempts"][index - 1][f"{phase}_steps"][offset]
+    return requests_by_id(document)[ref]
+
+
+def healthcare_baseline_cases():
+    document = traffic("healthcare-agent")
+    locations = {
+        "memory-followup": (3, "probe", 0),
+        "correction": (4, "probe", 0),
+        "guardrails": (5, "probe", 0),
+        "booking-confirm": (6, "probe", 0),
+        "booking-correction": (6, "probe", 1),
+        "transition-review": (9, "setup", 0),
+        "transition-denied": (9, "probe", 0),
+        "transition-confirm": (9, "probe", 1),
+        "transition-cancel": (9, "probe", 2),
+        "scope": (10, "probe", 0),
+    }
+    return {name: case_step(document, *location) for name, location in locations.items()}
 
 
 def dictionaries(value):
@@ -100,7 +134,11 @@ def test_prompt_assets_are_pure_and_schema_valid(directory):
         document = read_json(directory / filename)
         schema = read_json(ROOT / "schemas" / schema_name)
         Draft202012Validator.check_schema(schema)
-        Draft202012Validator(schema).validate(document)
+        validator = (
+            traffic_validator(ROOT / "schemas", True)
+            if filename == "traffic.json" else Draft202012Validator(schema)
+        )
+        validator.validate(document)
         for item in dictionaries(document):
             assert not {
                 "tools", "tool_fixtures", "tool_choice", "function_call", "function_call_output"
@@ -138,58 +176,33 @@ def test_prompt_traffic_schema_rejects_non_prompt_requests(violation):
         ]
     else:
         request["request"]["body"]["input"][0]["role"] = "assistant"
-    schema = read_json(ROOT / "schemas" / "prompt-traffic.schema.json")
-    assert not Draft202012Validator(schema).is_valid(document)
+    assert not traffic_validator(ROOT / "schemas", True).is_valid(document)
 
 
 @pytest.mark.parametrize("directory", AUTHORITIES)
-def test_scenarios_preserve_reviewed_requests_and_expectations(directory):
+def test_attempts_resolve_reviewed_requests_and_expectations(directory):
     document = read_json(directory / "traffic.json")
     sources = requests_by_id(document)
     assert len(sources) == len(document["requests"])
     referenced = set()
-    conversation_groups = set()
-    step_ids = set()
-    issues = yaml.safe_load(
-        (ROOT / "catalogs" / "ISSUE_CATALOG.yaml").read_text(encoding="utf-8")
-    )["issues"]
-    modes = {issue["id"]: issue["validation_mode"] for issue in issues}
-    for scenario in document["validation_rules"]["scenarios"]:
-        expected_mode = (
-            "baseline" if document["logical_version"] == "v0"
-            else modes[document["logical_version"]]
-        )
-        assert scenario["validation_mode"] == expected_mode
-        assert scenario["fixtures"] == []
-        assert scenario["n"] == len(scenario["attempts"]) == 10
-        assert scenario["k"] == 6
-        assert [attempt["index"] for attempt in scenario["attempts"]] == list(range(1, 11))
-        for attempt in scenario["attempts"]:
-            group = attempt["conversation_group"]
-            assert group not in conversation_groups
-            conversation_groups.add(group)
-            ids = attempt["parameters"]["source_request_ids"]
-            referenced.update(ids)
-            count = len(attempt["probe_steps"])
-            assert count > 0
-            paired_steps = attempt["probe_steps"]
-            if len(ids) > count:
-                paired_steps = attempt["setup_steps"] + paired_steps
-            assert len(paired_steps) == len(ids)
-            for source_id, step in zip(ids, paired_steps, strict=True):
-                source = sources[source_id]
-                expected_request = copy.deepcopy(source["request"])
-                expected_request["body"]["conversation"]["id"] = "$validation_conversation"
-                expected_request["body"]["input"][0]["content"][0]["text"] = (
-                    f"Fixed synthetic case {attempt['index']:02d}. {text(source)}"
-                )
-                assert step["request"] == expected_request
-                assert assertions(step) == assertions(source)
-                assert assertions(step)
-                assert step["expected"]["http_status"] == source["expected"]["http_status"]
-            for step in attempt["setup_steps"] + attempt["probe_steps"]:
-                assert step["id"] not in step_ids
-                step_ids.add(step["id"])
+    target = load_catalog(ROOT).target(
+        f"{document['agent_name']}/{document['logical_version']}"
+    )
+    attempts = load_attempts(target)
+    assert len(attempts) == 10
+    assert [attempt.index for attempt in attempts] == list(range(1, 11))
+    for attempt, case in zip(attempts, document["attempts"], strict=True):
+        ids = case["setup_steps"] + case["probe_steps"]
+        referenced.update(ids)
+        assert case["probe_steps"]
+        assert len(ids) == len(set(ids))
+        for ref, step in zip(ids, attempt.steps, strict=True):
+            source = sources[ref]
+            assert step.body == source["request"]["body"]
+            assert step.expected == source["expected"]
+            assert "conversation" not in step.body
+            if step.phase == "probe":
+                assert assertions(source)
     assert referenced == set(sources)
 
 
@@ -218,14 +231,14 @@ def test_baseline_inputs_do_not_supply_completed_answers(agent):
 
 
 def test_healthcare_memory_probes_require_previous_context():
-    requests = requests_by_id(traffic("healthcare-agent"))
+    requests = healthcare_baseline_cases()
     for suffix, values in (
         ("memory-followup", ("demo-account-a", "Dr. Rivera")),
         ("correction", ("demo-account-a",)),
         ("booking-confirm", ("demo-account-b", "Dr. Ali", "slot-demo-505")),
         ("transition-denied", ("demo-account-a", "Dr. Patel", "slot-demo-701")),
     ):
-        probe = requests[f"health-v0-{suffix}"]
+        probe = requests[suffix]
         serialized_expectation = json.dumps(assertions(probe))
         for value in values:
             assert value not in text(probe)
@@ -233,10 +246,10 @@ def test_healthcare_memory_probes_require_previous_context():
 
 
 def test_healthcare_approval_oracles_cover_negation_and_changed_identity():
-    requests = requests_by_id(traffic("healthcare-agent"))
+    requests = healthcare_baseline_cases()
 
     def expected(suffix):
-        return assertions(requests["health-v0-" + suffix])["exact_json_fields"]
+        return assertions(requests[suffix])["exact_json_fields"]
 
     pending = expected("guardrails")
     approved = expected("booking-confirm")
@@ -255,12 +268,12 @@ def test_healthcare_approval_oracles_cover_negation_and_changed_identity():
     ):
         assert expected(suffix)["confirmation"] is confirmation
         assert expected(suffix)["state"] == state
-    denied = text(requests["health-v0-transition-denied"]).lower()
+    denied = text(requests["transition-denied"]).lower()
     assert "not" in denied and "confirm" in denied
 
 
 def test_healthcare_scope_fixture_contains_distinguishable_records():
-    request = requests_by_id(traffic("healthcare-agent"))["health-v0-scope"]
+    request = healthcare_baseline_cases()["scope"]
     semantic = assertions(request)
     assert len(re.findall(r"\brecord-[\w-]+", text(request))) >= 2
     for value in semantic["required_terms_all"] + semantic["forbidden_terms"]:
@@ -271,7 +284,10 @@ def test_healthcare_scope_fixture_contains_distinguishable_records():
 def test_stale_correction_oracles_are_grounded_in_varied_earlier_turns():
     document = traffic("healthcare-agent", "issue-009")
     definition = read_json(PROMPT_ROOTS[1] / "issues" / "issue-009" / "definition.json")
-    pairs = list(zip(document["requests"][::2], document["requests"][1::2], strict=True))
+    pairs = [
+        (case_step(document, index, "setup"), case_step(document, index))
+        for index in range(1, 11)
+    ]
     stale_selections = set()
     for setup, probe in pairs:
         values = assertions(probe)["exact_json_fields"]
@@ -283,19 +299,20 @@ def test_stale_correction_oracles_are_grounded_in_varied_earlier_turns():
             assert values[key] not in definition["definition"]["instructions"]
         assert re.search(r"slot-demo-revised-\d+", text(probe))
         stale_selections.add((values["provider"], values["slot"], values["date"]))
-        assert setup["request"]["body"]["conversation"] == probe["request"]["body"]["conversation"]
+        assert "conversation" not in setup["request"]["body"]
+        assert "conversation" not in probe["request"]["body"]
     assert len(stale_selections) >= 3
 
 
 def test_handoff_fixture_supplies_the_fields_omitted_by_the_defect():
     required = {"owner", "next_action", "deadline", "validation"}
-    for request in traffic("healthcare-agent", "issue-007")["requests"]:
+    for request in phase_steps(traffic("healthcare-agent", "issue-007"), "probe"):
         assert all(field in text(request) for field in required)
         assert required.isdisjoint(assertions(request)["exact_json"])
 
 
 def test_create_envelope_defect_omits_only_scope_and_approval_controls():
-    for request in traffic("healthcare-agent", "issue-008")["requests"]:
+    for request in phase_steps(traffic("healthcare-agent", "issue-008"), "probe"):
         expected = assertions(request)["exact_json_fields"]
         assert set(expected) == {"action", "provider", "slot", "message"}
         assert expected["action"] == "create_appointment"
@@ -305,7 +322,7 @@ def test_create_envelope_defect_omits_only_scope_and_approval_controls():
 
 
 def test_unsupported_availability_keeps_the_requested_identity():
-    for request in traffic("healthcare-agent", "issue-010")["requests"]:
+    for request in phase_steps(traffic("healthcare-agent", "issue-010"), "probe"):
         expected = assertions(request)["exact_json_fields"]
         assert expected["evidence"] == "missing"
         assert expected["availability"] == "available"
@@ -314,7 +331,7 @@ def test_unsupported_availability_keeps_the_requested_identity():
 
 
 def test_scope_leak_oracle_selects_an_actual_foreign_record():
-    for request in traffic("healthcare-agent", "issue-012")["requests"]:
+    for request in phase_steps(traffic("healthcare-agent", "issue-012"), "probe"):
         expected = assertions(request)["exact_json_fields"]
         assert expected["account_scope"] == "demo-account-b"
         assert "demo-account-a" in text(request)
@@ -323,7 +340,7 @@ def test_scope_leak_oracle_selects_an_actual_foreign_record():
 
 
 def test_unsupported_weather_claim_is_not_provided_by_the_fixture():
-    for request in traffic("weather-agent", "issue-001")["requests"]:
+    for request in phase_steps(traffic("weather-agent", "issue-001"), "probe"):
         expected = assertions(request)["exact_json"]
         assert expected["condition"] not in text(request)
         assert expected["evidence"] == "missing"
@@ -331,18 +348,19 @@ def test_unsupported_weather_claim_is_not_provided_by_the_fixture():
 
 def test_weather_unit_memory_does_not_relabel_a_temperature():
     document = traffic("weather-agent", "issue-004")
-    for index, request in enumerate(document["requests"]):
-        values = measurements(request)
-        assert values["temperature_fahrenheit"] == pytest.approx(
-            values["temperature_celsius"] * 9 / 5 + 32
-        )
-        expected = assertions(request)["exact_json_fields"]
-        assert expected["unit"] == ("celsius" if index == 0 else "fahrenheit")
-        assert expected["temperature"] == values[f"temperature_{expected['unit']}"]
+    for phase, unit in (("setup", "celsius"), ("probe", "fahrenheit")):
+        for request in phase_steps(document, phase):
+            values = measurements(request)
+            assert values["temperature_fahrenheit"] == pytest.approx(
+                values["temperature_celsius"] * 9 / 5 + 32
+            )
+            expected = assertions(request)["exact_json_fields"]
+            assert expected["unit"] == unit
+            assert expected["temperature"] == values[f"temperature_{expected['unit']}"]
 
 
 def test_forecast_substitution_uses_distinct_grounded_forecast_values():
-    for request in traffic("weather-agent", "issue-003")["requests"]:
+    for request in phase_steps(traffic("weather-agent", "issue-003"), "probe"):
         values = measurements(request)
         expected = assertions(request)["exact_json_fields"]
         assert expected["high"] == values["high"]
@@ -352,20 +370,24 @@ def test_forecast_substitution_uses_distinct_grounded_forecast_values():
 
 
 def test_unnecessary_clarification_pairs_do_not_add_weather_evidence():
-    requests = traffic("weather-agent", "issue-005")["requests"]
+    requests = phase_steps(traffic("weather-agent", "issue-005"), "probe")
     for first, second in zip(requests[::2], requests[1::2], strict=True):
         assert assertions(first)["question_only"] is True
         assert measurements(first)
         assert not measurements(second)
         assert assertions(second)["exact_json"]["temperature"] == measurements(first)["temperature"]
-        assert first["request"]["body"]["conversation"] == second["request"]["body"]["conversation"]
+        document = traffic("weather-agent", "issue-005")
+        assert any(
+            attempt["probe_steps"] == [first["id"], second["id"]]
+            for attempt in document["attempts"]
+        )
 
 
 def test_overgeneration_template_exceeds_bound_without_adding_facts():
     definition = read_json(PROMPT_ROOTS[0] / "issues" / "issue-006" / "definition.json")
     templates = re.findall(r"`([^`]*<location>[^`]*)`", definition["definition"]["instructions"])
     repeated = templates[-1]
-    for request in traffic("weather-agent", "issue-006")["requests"]:
+    for request in phase_steps(traffic("weather-agent", "issue-006"), "probe"):
         location = re.search(r"evidence for ([^:]+):", text(request)).group(1)
         condition = re.search(r"condition=(\w+)", text(request)).group(1)
         temperature = re.search(r"temperature=(-?\d+)", text(request)).group(1)

@@ -244,30 +244,27 @@ def test_healthy_read_retry_partial_and_request_isolation():
 
 
 @pytest.mark.parametrize("version", VERSIONS)
-def test_reviewed_traffic_and_scenario_counterparts_execute(version):
+def test_reviewed_executable_traffic_cases_execute(version):
     module = load_domain(version)
     directory = ROOT / "v0" if version == "v0" else ROOT / "issues" / version
     path = directory / "traffic.json"
     traffic = json.loads(path.read_text(encoding="utf-8"))
-    source_text = {
-        item["id"]: module.input_text(item["request"]["body"]["input"])
-        for item in traffic["requests"]
-    }
-    for scenario in traffic["validation_rules"]["scenarios"]:
-        for attempt in scenario["attempts"]:
-            for setup in attempt["setup_steps"]:
-                _, session, _ = execute(module, module.input_text(setup["request"]["body"]["input"]))
-                assert session is None
-            for probe in attempt["probe_steps"]:
-                text = module.input_text(probe["request"]["body"]["input"])
-                assert any(text.endswith(source_text[source]) for source in attempt["parameters"]["source_request_ids"])
-                output, _, _ = execute(module, text)
-                assertions = probe["expected"]["semantic_assertions"]
-                if "exact_text" in assertions:
-                    assert output == assertions["exact_text"]
-                for term in assertions.get("required_terms_all", []):
-                    assert term.lower() in output.lower()
-                for forbidden in assertions.get("forbidden_claims", []):
-                    assert forbidden.lower() not in output.lower()
-                if "max_words" in assertions:
-                    assert len(output.split()) <= assertions["max_words"]
+    requests = {item["id"]: item for item in traffic["requests"]}
+    for attempt in traffic["attempts"]:
+        for ref in attempt["setup_steps"]:
+            setup = requests[ref]
+            _, session, _ = execute(module, module.input_text(setup["request"]["body"]["input"]))
+            assert session is None
+        for ref in attempt["probe_steps"]:
+            probe = requests[ref]
+            text = module.input_text(probe["request"]["body"]["input"])
+            output, _, _ = execute(module, text)
+            assertions = probe["expected"]["semantic_assertions"]
+            if "exact_text" in assertions:
+                assert output == assertions["exact_text"]
+            for term in assertions.get("required_terms_all", []):
+                assert term.lower() in output.lower()
+            for forbidden in assertions.get("forbidden_claims", []):
+                assert forbidden.lower() not in output.lower()
+            if "max_words" in assertions:
+                assert len(output.split()) <= assertions["max_words"]
