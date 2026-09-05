@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 import hashlib
 from itertools import groupby
 import json
@@ -473,7 +473,7 @@ class AzureCliAdxClient:
                     self._client = KustoClient(connection)
                     self._client.set_http_retries(0)
                 properties = ClientRequestProperties()
-                properties.set_option("servertimeout", "00:00:30")
+                properties.set_option("servertimeout", timedelta(seconds=30))
                 properties.set_option("norequesttimeout", False)
                 if not management:
                     properties.set_option("queryconsistency", "strongconsistency")

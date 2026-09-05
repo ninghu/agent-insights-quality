@@ -2,6 +2,7 @@ import asyncio
 import builtins
 from copy import deepcopy
 from dataclasses import replace
+from datetime import timedelta
 import hashlib
 import io
 import json
@@ -522,10 +523,12 @@ def test_lazy_sdk_adapter_uses_cli_bounded_strong_complete_queries_and_no_http_r
             calls.append(("retries", retries))
 
         def execute_query(self, database, statement, properties):
+            assert properties.options["servertimeout"] + timedelta(seconds=30) == timedelta(minutes=1)
             calls.append(("query", database, statement, properties.options))
             return response
 
         def execute_mgmt(self, database, statement, properties):
+            assert properties.options["servertimeout"] + timedelta(seconds=30) == timedelta(minutes=1)
             calls.append(("manage", database, statement, properties.options))
             return response
 
@@ -546,7 +549,7 @@ def test_lazy_sdk_adapter_uses_cli_bounded_strong_complete_queries_and_no_http_r
     assert client.query("synthetic query") == [{"ContentHash": "a" * 64}]
     assert calls[:2] == [("connect", ("azure_cli", "https://synthetic.example.test")), ("retries", 0)]
     assert calls[-1][-1] == {
-        "servertimeout": "00:00:30", "norequesttimeout": False,
+        "servertimeout": timedelta(seconds=30), "norequesttimeout": False,
         "queryconsistency": "strongconsistency", "notruncation": True,
     }
     client.manage("synthetic management")
