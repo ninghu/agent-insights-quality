@@ -5,6 +5,7 @@ import http.client
 import json
 import math
 import re
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -75,6 +76,8 @@ class AzureHttpTransport:
 
     def __init__(self, credential: Any = None) -> None:
         self._credential = credential
+        self._token_providers: dict[str, Callable[[], str]] = {}
+        self._credential_lock = threading.Lock()
 
     async def send(self, request: HttpRequest) -> HttpResponse:
         return await asyncio.to_thread(self._send, request)
@@ -83,21 +86,7 @@ class AzureHttpTransport:
         validate_url(request.url)
         if request.scope not in {FOUNDRY_SCOPE, ARM_SCOPE, AZURE_DEVOPS_SCOPE}:
             raise QualityError("provider_scope_invalid", request_accepted=False)
-        try:
-            from azure.core.exceptions import AzureError
-            from azure.identity import AzureCliCredential
-        except ImportError:
-            raise QualityError(
-                "azure_identity_unavailable", request_accepted=False
-            ) from None
-        if self._credential is None:
-            self._credential = AzureCliCredential()
-        try:
-            token = self._credential.get_token(request.scope).token
-        except AzureError:
-            raise QualityError(
-                "azure_authentication_failed", request_accepted=False
-            ) from None
+        token = self._bearer_token(request.scope)
         headers = dict(request.headers)
         headers["Authorization"] = f"Bearer {token}"
         wire = urllib.request.Request(
@@ -116,6 +105,30 @@ class AzureHttpTransport:
                 )
         except (OSError, urllib.error.URLError, http.client.HTTPException):
             raise QualityError("provider_no_response", request_accepted=None) from None
+
+    def _bearer_token(self, scope: str) -> str:
+        try:
+            from azure.core.exceptions import AzureError
+            from azure.identity import AzureCliCredential, get_bearer_token_provider
+        except ImportError:
+            raise QualityError(
+                "azure_identity_unavailable", request_accepted=False
+            ) from None
+        # The SDK callable owns expiry/refresh caching; serialize refresh across scopes
+        # because concurrent Azure CLI processes contend for the same local identity.
+        with self._credential_lock:
+            if self._credential is None:
+                self._credential = AzureCliCredential(process_timeout=60)
+            provider = self._token_providers.get(scope)
+            if provider is None:
+                provider = get_bearer_token_provider(self._credential, scope)
+                self._token_providers[scope] = provider
+            try:
+                return provider()
+            except AzureError:
+                raise QualityError(
+                    "azure_authentication_failed", request_accepted=False
+                ) from None
 
 
 def validate_url(url: str) -> None:

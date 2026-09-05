@@ -1226,6 +1226,9 @@ def test_native_http_auth_and_incomplete_read_have_no_sensitive_output(
     exceptions.AzureError = AzureError
     identity = ModuleType("azure.identity")
     identity.AzureCliCredential = lambda: None
+    identity.get_bearer_token_provider = lambda credential, scope: (
+        lambda: credential.get_token(scope).token
+    )
     monkeypatch.setitem(sys.modules, "azure.core.exceptions", exceptions)
     monkeypatch.setitem(sys.modules, "azure.identity", identity)
     scopes = []
