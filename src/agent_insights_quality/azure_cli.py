@@ -4,7 +4,7 @@ import os
 import shutil
 from pathlib import Path
 
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.errors import QualityError
 
 
 def azure_cli() -> str:
@@ -23,4 +23,4 @@ def azure_cli() -> str:
         )
         if candidate.is_file():
             return str(candidate)
-    raise ContractError("Azure CLI is not installed or discoverable")
+    raise QualityError("azure_cli_unavailable")

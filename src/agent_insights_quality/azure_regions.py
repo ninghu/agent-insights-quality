@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from agent_insights_quality.util import ContractError
+from agent_insights_quality.errors import QualityError
 
 
 def normalized_region_key(value: Any) -> str:
@@ -17,7 +17,7 @@ def location_display_name(
 ) -> str:
     live_key = normalized_region_key(live_location)
     if not live_key:
-        raise ContractError("Live Foundry Project location is missing")
+        raise QualityError("project_location_missing")
     matches = []
     for item in metadata:
         name = normalized_region_key(item.get("name"))
@@ -25,13 +25,10 @@ def location_display_name(
         if name == live_key and display_name:
             matches.append(display_name)
     if len(matches) != 1:
-        raise ContractError(
-            "Live Foundry Project location did not resolve uniquely through "
-            "Azure location metadata"
-        )
+        raise QualityError("region_metadata_unavailable")
     canonical = re.sub(r"\s+", "", matches[0])
     if re.fullmatch(r"[A-Z][A-Za-z]*[0-9]*", canonical) is None:
-        raise ContractError("Azure location display name is invalid")
+        raise QualityError("region_display_invalid")
     return canonical
 
 
