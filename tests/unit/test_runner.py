@@ -1064,3 +1064,126 @@ def test_child_evidence_outside_engine_window_is_retained_but_not_citable_as_vis
     assert visible.records == snapshot.records
     assert visible.scopes[0].evidence_refs == ("anchor",)
     r.logger.close()
+
+
+def sol_http_failure(h):
+    from agent_insights_quality.providers.sol import SolResponseError
+    complete = h.sol.complete_json
+    failed = True
+
+    async def respond(**kwargs):
+        nonlocal failed
+        if failed:
+            h.sol.calls.append(deepcopy(kwargs["payload"]))
+            raise SolResponseError(
+                "sol_http_error", {"error": {"code": "invalid_json_schema", "message": "uniqueItems unsupported"}},
+                request_accepted=False, status=400,
+            )
+        return await complete(**kwargs)
+
+    def repair():
+        nonlocal failed
+        failed = False
+
+    h.sol.complete_json = respond
+    return repair
+
+
+@pytest.mark.parametrize("original_failure_record", [False, True])
+def test_choose_staging_reuses_identical_packet_after_sol_only_http400_repair(tmp_path, original_failure_record):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    repair = sol_http_failure(h)
+    initial = h.staging()
+    assert initial["results"][0]["status"] == "INCOMPLETE"
+    if original_failure_record:
+        # The active pre-fix run recorded its failure in the original traffic run.
+        record = h.store.staging_index.read(h.catalog.targets[0].key)
+        record.pop("failure_run_id")
+        with h.store.ownership():
+            h.store.staging_index.save_progress(h.catalog.targets[0].key, record)
+    packet = deepcopy(h.sol.calls[0])
+    calls = len(h.cloud.invocations), sum(h.cloud.deployment_calls.values()), len(h.cloud.events)
+    changes = SourceChanges(("src/agent_insights_quality/providers/sol.py",))
+    selected = choose_staging(h.catalog, h.store, changes_since=lambda _: changes)
+    assert len(selected) == 1 and selected[0].action == "reassess"
+    repair()
+    result = h.staging("sol-repair", selections=selected, revision="source-two", changes=changes.paths)
+    assert result["results"][0]["status"] == "PASS"
+    assert (len(h.cloud.invocations), sum(h.cloud.deployment_calls.values())) == calls[:2]
+    assert all(event[0] == "assessment" for event in h.cloud.events[calls[2]:])
+    assert h.sol.calls[1] == packet
+    assert result["results"][0]["evidence_key"] == initial["results"][0]["evidence_key"]
+    assert result["results"][0]["traffic_source_revision"] == "source-one"
+    assert "reason" not in result["results"][0]
+    assert "failure_run_id" not in result["results"][0]
+
+
+@pytest.mark.parametrize("gap", ["partial-query", "five-probes", "collector-change", "traffic-change", "full"])
+def test_assessment_failure_does_not_reuse_incomplete_or_invalidated_evidence(tmp_path, gap):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    repair = sol_http_failure(h)
+    if gap == "partial-query":
+        h.cloud.query_complete = False
+    elif gap == "five-probes":
+        h.cloud.ready_count = 5
+    h.staging()
+    target = h.catalog.targets[0]
+    changed = {
+        "collector-change": "src/agent_insights_quality/telemetry.py",
+        "traffic-change": target.version_root.relative_to(h.catalog.root) / "traffic.json",
+    }.get(gap, "src/agent_insights_quality/providers/sol.py")
+    choices = choose_staging(
+        h.catalog, h.store, full=gap == "full", changes_since=lambda _: SourceChanges((changed,)),
+    )
+    assert choices[0].action == "traffic"
+    if gap in {"partial-query", "five-probes", "collector-change"}:
+        before = sum(event[0] == "query" for event in h.cloud.events)
+        repair()
+        h.staging("repair", selections=choices, revision="source-two", changes=(changed,))
+        assert sum(event[0] == "query" for event in h.cloud.events) > before
+        assert len(h.cloud.invocations) == 20
+
+
+def test_failed_reassessment_uses_its_own_failure_reference_and_original_evidence(tmp_path):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    initial = h.staging()
+    repair = sol_http_failure(h)
+    choices = choose_staging(h.catalog, h.store, changes_since=lambda _: SourceChanges(
+        ("src/agent_insights_quality/assessment.py",),
+    ))
+    failed = h.staging(
+        "evaluation-failure", selections=choices, revision="source-two",
+        changes=("src/agent_insights_quality/assessment.py",),
+    )
+    assert failed["results"][0]["failure_run_id"] == "evaluation-failure"
+    count = len(h.cloud.invocations), sum(h.cloud.deployment_calls.values()), sum(event[0] == "query" for event in h.cloud.events)
+    packet = deepcopy(h.sol.calls[-1])
+    choices = choose_staging(h.catalog, h.store, changes_since=lambda _: SourceChanges(
+        ("src/agent_insights_quality/providers/sol.py",),
+    ))
+    assert choices[0].action == "reassess"
+    repair()
+    result = h.staging(
+        "sol-repair", selections=choices, revision="source-three",
+        changes=("src/agent_insights_quality/providers/sol.py",),
+    )
+    assert result["results"][0]["status"] == "PASS"
+    assert result["results"][0]["evidence_key"] == initial["results"][0]["evidence_key"]
+    assert h.sol.calls[-1] == packet
+    assert (len(h.cloud.invocations), sum(h.cloud.deployment_calls.values()),
+            sum(event[0] == "query" for event in h.cloud.events)) == count
+
+
+def test_incomplete_assessment_clears_prior_transport_failure_before_next_selection(tmp_path):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    repair = sol_http_failure(h)
+    h.staging()
+    repair()
+    h.cloud.query_complete = False
+    result = h.staging()
+    assert result["results"][0]["status"] == "INCOMPLETE"
+    assert "reason" not in result["results"][0] and "failure_run_id" not in result["results"][0]
+    choices = choose_staging(h.catalog, h.store, changes_since=lambda _: SourceChanges(
+        ("src/agent_insights_quality/providers/sol.py",),
+    ))
+    assert choices[0].action == "traffic"

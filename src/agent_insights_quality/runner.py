@@ -106,10 +106,11 @@ def choose_staging(
     catalog: Catalog, store: RuntimeStore, *, full: bool = False,
     changes_since: Callable[[str], SourceChanges] | None = None,
 ) -> tuple[Selection, ...]:
-    previous = {}
+    previous, history = {}, {}
     for target in catalog.targets:
         record = store.staging_index.read(target.key, missing_ok=True)
         if record is not None:
+            history[target.key] = record
             try:
                 previous[target.key] = LastTest(
                     record["source_revision"], record["status"], record["tested_at"],
@@ -120,10 +121,56 @@ def choose_staging(
     changes = {} if full else {
         revision: compare(revision) for revision in {item.source_revision for item in previous.values()}
     }
-    return select_staging(
+    selections = select_staging(
         catalog, last_tests=previous, changes_by_revision=changes, full=full,
         evaluation_paths=_EVALUATION,
     )
+    result = []
+    collectors = {
+        catalog.root / "src" / "agent_insights_quality" / "telemetry.py",
+        catalog.root / "src" / "agent_insights_quality" / "providers" / "telemetry.py",
+    }
+    for selection in selections:
+        record = history.get(selection.target.key)
+        if selection.reasons == ("incomplete",) and not any(
+            (catalog.root / path).resolve() in collectors
+            for path in changes[record["source_revision"]].paths
+        ) and _retained_assessment_evidence(store, selection.target, record):
+            selection = replace(selection, action="reassess", reasons=(*selection.reasons, "assessment_retry"))
+        result.append(selection)
+    return tuple(result)
+
+
+def _retained_assessment_evidence(store: RuntimeStore, target: Target, record: dict) -> bool:
+    """An assessment transport/schema failure must not replace its input packet."""
+    if not record.get("reason") or not record.get("evidence_key"):
+        return False
+    records = store.run(record["traffic_run_id"])
+    failure_records = store.run(record.get("failure_run_id", record["traffic_run_id"]))
+    failure = failure_records.read(f"targets/{target.key}/failure", missing_ok=True)
+    if not failure or failure.get("stage") != "assessment" or failure.get("code") != record["reason"]:
+        return False
+    key = record["work_key"]
+    if not records.read_completed(key + "/traffic-done", missing_ok=True):
+        return False
+    try:
+        snapshot = Snapshot.from_private_dict(records.read_artifact(record["evidence_key"]))
+    except QualityError as error:
+        raise StateError("evidence_checkpoint_invalid") from error
+    if not snapshot.query_complete:
+        return False
+    plan = records.read_completed(key + "/plan")
+    ready = 0
+    for attempt in plan["attempts"]:
+        attributable_probe = False
+        for step in attempt["steps"]:
+            invocation = Invocation(**records.read_completed(
+                key + f"/traffic/attempt-{attempt['index']:02d}/{step['step_id']}",
+            ))
+            if step["phase"] == "probe" and invocation.response is not None:
+                attributable_probe |= invocation.response_id in snapshot.attributable_responses
+        ready += attributable_probe
+    return ready >= RuntimeSettings().readiness_attempts
 
 
 @dataclass
@@ -908,6 +955,8 @@ class Runner:
         else:
             restore_unit(result["unit_result"])
             fields = {"result": {key: result[key] for key in ("unit_result", "reasons")}}
+        work.binding.pop("reason", None)
+        work.binding.pop("failure_run_id", None)
         self._update(
             target, work, **fields, assessment={"run_id": self.run_id, "artifact": reference["artifact"]},
             assessed_at=self.now().isoformat(),
@@ -1003,7 +1052,9 @@ class Runner:
                     self._failure(target, error, stage)
                     if work is None:
                         raise
-                    self._update(target, work, status="INCOMPLETE", reason=error.code)
+                    self._update(
+                        target, work, status="INCOMPLETE", reason=error.code, failure_run_id=self.run_id,
+                    )
                 self._save(self.runtime.staging_index, "progress", target.key, work.binding)
                 return {"unit": target.key, **work.binding}
         records = await self._gather(one(item) for item in selections)
