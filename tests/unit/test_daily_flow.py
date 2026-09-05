@@ -62,7 +62,7 @@ class InterleavedCloud(fake.Cloud):
 
 
 @pytest.mark.parametrize("hosted", [False, True])
-@pytest.mark.parametrize("workers,budget", [(2, 10), (3, 4)])
+@pytest.mark.parametrize("workers,budget", [(2, 10), (4, 10), (4, 4)])
 def test_daily_attempt_bounds_conversations_and_frozen_version_boundary(tmp_path, hosted, workers, budget):
     h = fake.Harness(tmp_path, agents=5, issues=1, hosted=hosted,
                      daily_attempt_workers=workers, daily_attempt_budget=budget)
@@ -103,7 +103,7 @@ def test_daily_attempt_bounds_conversations_and_frozen_version_boundary(tmp_path
 
 @pytest.mark.parametrize("profile,travel", [("staging", False), ("daily", True)])
 def test_staging_and_shared_travel_booking_fixture_remain_serial(tmp_path, profile, travel):
-    h = fake.Harness(tmp_path, profile=profile, hosted=True, daily_attempt_workers=3)
+    h = fake.Harness(tmp_path, profile=profile, hosted=True, daily_attempt_workers=4)
     if travel:
         h.catalog = replace(h.catalog, agents=("travel-agent",), targets=tuple(
             replace(target, unit_id=UnitId("travel-agent", target.unit_id.logical_version))
@@ -117,8 +117,20 @@ def test_staging_and_shared_travel_booking_fixture_remain_serial(tmp_path, profi
         assert [phase for key, _, phase in h.cloud.completed if key == target.key] == ["setup", "probe"] * 10
 
 
+def test_configured_four_workers_are_supported_without_a_throughput_claim(tmp_path):
+    h = fake.Harness(tmp_path, issues=0, daily_attempt_workers=4)
+    h.cloud = InterleavedCloud(h.clock)
+    h.sol = fake.Sol(h.cloud)
+    h.daily()
+    assert set(h.cloud.peak.values()) == {4}
+    assert h.cloud.global_peak == 4 and len(h.cloud.invocations) == 20
+
+
 @pytest.mark.parametrize("hosted", [False, True])
-def test_serial_parallel_fixed_outcomes_and_request_binding_are_equivalent(tmp_path, hosted, monkeypatch):
+@pytest.mark.parametrize("parallel_workers", [2, 4])
+def test_serial_parallel_fixed_outcomes_and_request_binding_are_equivalent(
+    tmp_path, hosted, parallel_workers, monkeypatch,
+):
     from agent_insights_quality import runner
     def run(workers):
         count = 0
@@ -140,7 +152,7 @@ def test_serial_parallel_fixed_outcomes_and_request_binding_are_equivalent(tmp_p
             )
         counts = Counter(event[0] for event in h.cloud.events)
         return result, bindings, counts, h
-    serial, parallel = run(1), run(2)
+    serial, parallel = run(1), run(parallel_workers)
     assert serial[:3] == parallel[:3]
     assert serial[3].cloud.global_peak < parallel[3].cloud.global_peak
     assert len(serial[3].sol.calls) == len(parallel[3].sol.calls) == 4
@@ -170,7 +182,7 @@ def test_unknown_daily_conversation_does_not_repeat_or_advance_lane(tmp_path):
 
 @pytest.mark.parametrize("hosted", [False, True])
 def test_cancelled_fresh_attempts_resume_saved_turns_without_reposting_unknowns(tmp_path, hosted):
-    h = fake.Harness(tmp_path, hosted=hosted)
+    h = fake.Harness(tmp_path, hosted=hosted, daily_attempt_workers=2)
     original = h.cloud.invoke
     posted, completed = [], []
     async def run():

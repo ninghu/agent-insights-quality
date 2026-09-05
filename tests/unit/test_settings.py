@@ -21,7 +21,7 @@ def test_code_defaults_are_offline_and_bounded(monkeypatch):
     monkeypatch.setattr(Path, "open", forbidden)
     settings = load_settings()
     assert settings.daily_lanes == 5
-    assert settings.daily_attempt_workers == 2
+    assert settings.daily_attempt_workers == 1
     assert settings.daily_attempt_budget == 10
     assert settings.daily_evidence_grace_seconds == 30
     assert settings.staging_workers == 8
@@ -44,7 +44,7 @@ def test_code_defaults_are_offline_and_bounded(monkeypatch):
     "overrides",
     [
         {"daily_lanes": True}, {"daily_lanes": 0}, {"daily_lanes": 6},
-        {"daily_attempt_workers": True}, {"daily_attempt_workers": 0}, {"daily_attempt_workers": 4},
+        {"daily_attempt_workers": True}, {"daily_attempt_workers": 0}, {"daily_attempt_workers": 5},
         {"daily_attempt_budget": True}, {"daily_attempt_budget": 0}, {"daily_attempt_budget": 16},
         {"daily_evidence_grace_seconds": True}, {"daily_evidence_grace_seconds": -1},
         {"daily_evidence_grace_seconds": 121},
@@ -76,7 +76,7 @@ def test_explicit_small_json_settings_and_snapshot(tmp_path):
     assert settings.staging_workers == 8
 
 
-@pytest.mark.parametrize("workers,budget,grace", [(1, 1, 0), (3, 15, 120)])
+@pytest.mark.parametrize("workers,budget,grace", [(1, 1, 0), (4, 15, 120)])
 def test_daily_scheduling_setting_bounds_load_through_strict_json(tmp_path, workers, budget, grace):
     values = {
         "daily_attempt_workers": workers, "daily_attempt_budget": budget,

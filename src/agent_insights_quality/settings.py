@@ -26,7 +26,7 @@ def _integer(value: object, minimum: int, maximum: int) -> bool:
 @dataclass(frozen=True)
 class RuntimeSettings:
     daily_lanes: int = 5
-    daily_attempt_workers: int = 2
+    daily_attempt_workers: int = 1
     daily_attempt_budget: int = 10
     daily_evidence_grace_seconds: int = 30
     staging_workers: int = 8
@@ -49,7 +49,7 @@ class RuntimeSettings:
     def __post_init__(self) -> None:
         bounds = {
             "daily_lanes": (1, 5),
-            "daily_attempt_workers": (1, 3),
+            "daily_attempt_workers": (1, 4),
             "daily_attempt_budget": (1, 15),
             "daily_evidence_grace_seconds": (0, 120),
             "staging_workers": (1, 8),
