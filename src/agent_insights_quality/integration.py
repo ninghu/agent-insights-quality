@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import contextmanager
 from datetime import date
@@ -49,6 +50,44 @@ def read_object(path: Path) -> dict:
         raise QualityError("private_input_invalid") from error
 
 
+def _exception_diagnostics(error: BaseException) -> dict:
+    """Bounded private structure only; never format exception messages or locals."""
+    exceptions, seen = [], set()
+    current, relation = error, "raised"
+    while current is not None and id(current) not in seen and len(exceptions) < 8:
+        seen.add(id(current))
+        frames = deque(maxlen=32)
+        trace, traversed = current.__traceback__, 0
+        while trace is not None and traversed < 256:
+            code = trace.tb_frame.f_code
+            frames.append({
+                "filename": code.co_filename[:1024], "lineno": trace.tb_lineno,
+                "function": code.co_name[:256],
+            })
+            trace, traversed = trace.tb_next, traversed + 1
+        kind = type(current)
+        item = {
+            "exception_type": f"{kind.__module__}.{kind.__qualname__}"[:256],
+            "relation": relation, "frames": list(frames),
+            "frames_truncated": traversed > 32 or trace is not None,
+        }
+        for name in ("errno", "winerror"):
+            value = getattr(current, name, None)
+            item[name] = value if type(value) is int and -(2**63) <= value < 2**63 else None
+        exceptions.append(item)
+        if current.__cause__ is not None:
+            current, relation = current.__cause__, "cause"
+        elif current.__context__ is not None:
+            relation = "suppressed_context" if current.__suppress_context__ else "context"
+            current = current.__context__
+        else:
+            current = None
+    return {
+        "schema_version": "1.0", "exceptions": exceptions,
+        "chain_truncated": current is not None,
+    }
+
+
 @contextmanager
 def command_status(runtime: RuntimeStore, command: str):
     """Persist safe startup failures too; programming exceptions still propagate."""
@@ -64,7 +103,10 @@ def command_status(runtime: RuntimeStore, command: str):
         )
         logger.emit("failure", code=code)
         try:
+            diagnostics = "diagnostics/exception"
+            records.save_artifact(diagnostics, _exception_diagnostics(error))
             value = {"command": command, "status": "blocked", "code": code}
+            value["diagnostics_path"] = str(records._path("artifacts", diagnostics))
             if isinstance(error, QualityError):
                 value.update(request_accepted=error.request_accepted, retryable=error.retryable)
             records.save_progress("command-status", value)

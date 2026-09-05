@@ -9,7 +9,7 @@ import pytest
 from agent_insights_quality.contracts import Environment
 from agent_insights_quality.email import claim_email, record_email_outcome
 from agent_insights_quality.errors import QualityError
-from agent_insights_quality.integration import RunIntegration, command_status
+from agent_insights_quality.integration import RunIntegration, _exception_diagnostics, command_status
 from agent_insights_quality.publication import PublicationOutbox
 from agent_insights_quality.state import CheckpointError, RuntimeStore
 import test_publication as publishing
@@ -312,9 +312,105 @@ def test_bootstrap_failure_is_durable_safe_and_programming_error_propagates(tmp_
             raise TypeError("private synthetic message")
     paths = list((runtime.directory / "runs").glob("startup-*"))
     status = runtime.run(paths[0].name).read("command-status")
+    diagnostics = Path(status.pop("diagnostics_path"))
     assert status == {"command": "run-daily", "status": "blocked", "code": "unexpected_failure"}
+    assert diagnostics.is_file() and diagnostics.is_relative_to(runtime.directory)
+    assert "private synthetic message" not in diagnostics.read_text()
     assert "private synthetic message" not in (paths[0] / "runner.log").read_text()
     assert "unexpected_failure" in (paths[0] / "events.jsonl").read_text()
+
+
+def test_private_diagnostics_capture_errno_windows_code_and_cause_frames_without_payload(tmp_path, capsys):
+    runtime = RuntimeStore("daily", root=tmp_path / "private")
+    error = OSError(5, "synthetic private outer message", "synthetic-private-file")
+    error.winerror = 1234
+    def credential_boundary():
+        try:
+            raise TimeoutError(110, "synthetic credential timeout with private payload")
+        except TimeoutError as cause:
+            raise error from cause
+    with runtime.ownership(), pytest.raises(OSError) as caught:
+        with command_status(runtime, "run-staging"):
+            credential_boundary()
+    assert caught.value is error
+    run_path = next((runtime.directory / "runs").glob("startup-*"))
+    status = runtime.run(run_path.name).read("command-status")
+    diagnostic_text = Path(status["diagnostics_path"]).read_text()
+    diagnostic = json.loads(diagnostic_text)
+    outer, cause = diagnostic["exceptions"]
+    assert outer["exception_type"] == "builtins.OSError" and outer["relation"] == "raised"
+    assert (outer["errno"], outer["winerror"]) == (5, 1234)
+    assert cause["exception_type"] == "builtins.TimeoutError" and cause["relation"] == "cause"
+    assert cause["errno"] == 110 and cause["winerror"] is None
+    assert any(frame["function"] == "credential_boundary" for frame in cause["frames"])
+    assert all(set(frame) == {"filename", "lineno", "function"}
+               for item in diagnostic["exceptions"] for frame in item["frames"])
+    assert not diagnostic["chain_truncated"]
+    output = capsys.readouterr()
+    logs = (run_path / "runner.log").read_text() + (run_path / "events.jsonl").read_text()
+    assert "command_io_failed" in logs
+    for private in ("synthetic private outer", "synthetic credential timeout", "synthetic-private-file"):
+        assert private not in diagnostic_text + logs + output.out + output.err
+    assert "credential_boundary" not in logs + output.out + output.err
+    assert "diagnostics_path" not in logs + output.out + output.err
+
+
+def test_private_diagnostics_bound_frames_chains_and_do_not_call_exception_formatters():
+    class UnprintableError(RuntimeError):
+        def __str__(self):
+            pytest.fail("Exception messages must never be formatted")
+    def recurse(depth):
+        if depth:
+            return recurse(depth - 1)
+        raise UnprintableError("synthetic private payload")
+    try:
+        recurse(50)
+    except UnprintableError as original:
+        top = original
+        for _ in range(12):
+            wrapped = RuntimeError("synthetic hidden cause")
+            wrapped.__cause__ = top
+            top = wrapped
+        bounded = _exception_diagnostics(top)
+        assert len(bounded["exceptions"]) == 8 and bounded["chain_truncated"]
+        detail = _exception_diagnostics(original)
+        assert len(detail["exceptions"][0]["frames"]) == 32
+        assert detail["exceptions"][0]["frames_truncated"]
+        assert detail["exceptions"][0]["frames"][-1]["function"] == "recurse"
+        assert "synthetic private payload" not in json.dumps(detail)
+        original.__cause__ = original
+        assert _exception_diagnostics(original)["chain_truncated"]
+
+
+def test_private_diagnostics_distinguish_context_suppression_without_formatting_it():
+    try:
+        raise TimeoutError("synthetic hidden")
+    except TimeoutError:
+        try:
+            raise ValueError("synthetic outer")
+        except ValueError as error:
+            diagnostic = _exception_diagnostics(error)
+            assert [item["relation"] for item in diagnostic["exceptions"]] == ["raised", "context"]
+            error.__suppress_context__ = True
+            diagnostic = _exception_diagnostics(error)
+            assert [item["relation"] for item in diagnostic["exceptions"]] == ["raised", "suppressed_context"]
+            assert "synthetic hidden" not in json.dumps(diagnostic)
+
+
+def test_diagnostic_checkpoint_failure_propagates_without_authorizing_more_work(tmp_path, monkeypatch):
+    from agent_insights_quality.state import RecordStore
+    runtime = RuntimeStore("daily", root=tmp_path / "private")
+    def fail(*args, **kwargs):
+        raise CheckpointError()
+    monkeypatch.setattr(RecordStore, "save_artifact", fail)
+    continued = False
+    with runtime.ownership(), pytest.raises(CheckpointError):
+        with command_status(runtime, "run-staging"):
+            raise OSError(5, "synthetic failure")
+        continued = True
+    assert not continued
+    path = next((runtime.directory / "runs").glob("startup-*"))
+    assert "state_checkpoint_failed" in (path / "runner.log").read_text()
 
 
 def test_real_official_artifacts_and_email_use_one_result_and_private_context_never_leaks(tmp_path, monkeypatch):

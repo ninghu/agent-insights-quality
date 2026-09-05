@@ -539,3 +539,78 @@ def test_missing_active_staging_selection_fails_closed_before_provider_calls(app
     assert app.cli("run-staging", day=date(2026, 9, 5)) == 2
     assert "state_record_missing" in capsys.readouterr().err
     assert len(app.port_calls) == calls and not app.cloud.invocations
+
+
+def test_constructor_io_failure_has_private_diagnostics_not_public_exception_details(app, capsys):
+    def constructor():
+        try:
+            raise TimeoutError(110, "synthetic private CLI credential timeout")
+        except TimeoutError as cause:
+            error = OSError(5, "synthetic private constructor failure")
+            error.winerror = 1234
+            raise error from cause
+    @asynccontextmanager
+    async def ports(*args):
+        constructor()
+        yield
+    code = cli.main(
+        ["run-daily", "--test-run", "--rerun", "1"], root=app.catalog.root,
+        runtime_factory=lambda _: app.store, ports=ports, today=fake.DAY,
+    )
+    assert code == 2
+    output = capsys.readouterr()
+    assert json.loads(output.err)["code"] == "command_io_failed"
+    assert "synthetic private" not in output.out + output.err
+    startup = next((app.store.directory / "runs").glob("startup-*"))
+    status = app.store.run(startup.name).read("command-status")
+    diagnostics = json.loads(Path(status["diagnostics_path"]).read_text())
+    assert diagnostics["exceptions"][0]["errno"] == 5
+    assert diagnostics["exceptions"][0]["winerror"] == 1234
+    assert diagnostics["exceptions"][1]["exception_type"] == "builtins.TimeoutError"
+    assert "synthetic private" not in json.dumps(diagnostics)
+    assert app.cli("status") == 0
+    status_output, _ = last_json(capsys)
+    assert any(item["code"] == "command_io_failed" for item in status_output["runs"] if "code" in item)
+    assert "diagnostics_path" not in json.dumps(status_output) and not app.cloud.invocations
+
+
+def test_next_source_staging_selects_all_missing_after_global_failure_without_result(app, monkeypatch, capsys):
+    app.catalog = fake.replace(app.catalog, targets=app.catalog.targets[:3])
+    app.cloud.environment = fake.replace(app.cloud.environment, profile="staging")
+    settings = app.catalog.root / "config"
+    settings.mkdir(parents=True)
+    (settings / "runtime.json").write_text(json.dumps({"staging_workers": 1, "hydration_seconds": 0}))
+    monkeypatch.setattr(runner, "git_source_changes", lambda *args: runner.SourceChanges(("README.md",)))
+    original = app.cloud.ensure_deployment
+    def interrupted():
+        raise OSError(5, "synthetic global credential failure")
+    async def deploy(target, *args):
+        if not target.is_baseline:
+            interrupted()
+        return await original(target, *args)
+    app.cloud.ensure_deployment = deploy
+    assert app.cli("run-staging", "--full") == 2
+    capsys.readouterr()
+    staging = RuntimeStore("staging", root=app.store.root)
+    prior_active = staging.outbox("staging").read("full")
+    prior_run = staging.run(prior_active["run_id"])
+    original_selection = prior_run.read_completed("selection")
+    assert prior_run.read("staging-result", missing_ok=True) is None
+    baseline = staging.staging_index.read(app.catalog.targets[0].key)
+    assert baseline["status"] == "PASS" and not prior_active["completed"]
+    assert len(app.cloud.invocations) == 20
+    assert all(staging.staging_index.read(target.key, missing_ok=True) is None
+               for target in app.catalog.targets[1:])
+    app.cloud.ensure_deployment = original
+    monkeypatch.setattr(runner, "source_revision", lambda _: "b" * 40)
+    assert app.cli("run-staging") == 0
+    result, _ = last_json(capsys)
+    assert result["run_id"] != prior_active["run_id"] and result["selected"] == 2
+    selected = staging.run(result["run_id"]).read_completed("selection")["targets"]
+    assert {item["key"] for item in selected} == {target.key for target in app.catalog.targets[1:]}
+    assert all("missing" in item["reasons"] for item in selected)
+    assert len(app.cloud.invocations) == 60 and len(app.sol.calls) == 3
+    assert staging.staging_index.read(app.catalog.targets[0].key) == baseline
+    assert staging.outbox("staging").read("full") == prior_active
+    assert prior_run.read_completed("selection") == original_selection
+    assert prior_run.read("staging-result", missing_ok=True) is None
