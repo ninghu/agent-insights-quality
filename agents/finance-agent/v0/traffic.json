@@ -185,7 +185,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Summarize acct-demo-a and a missing account."
+                  "text": "Summarize the budget for acct-demo-a and acct-demo-missing, and disclose any incomplete coverage."
                 }
               ]
             }
@@ -198,7 +198,31 @@
       },
       "expected": {
         "http_status": 200,
-        "behavior": "Labels the aggregate result partial."
+        "behavior": "Reports partial budget coverage supported by a successful acct-demo-a budget result and an account_not_found result for acct-demo-missing.",
+        "semantic_assertions": {
+          "required_terms_all": [
+            "acct-demo-a",
+            "acct-demo-missing"
+          ],
+          "required_terms_any": [
+            "partial",
+            "incomplete"
+          ]
+        },
+        "trace_assertions": [
+          {
+            "name": "two_budget_calls",
+            "kind": "tool_call_count",
+            "tool_name": "get_budget_summary",
+            "count": 2
+          },
+          {
+            "name": "mixed_budget_results",
+            "kind": "tool_result_class",
+            "tool_name": "get_budget_summary",
+            "result_class": "mixed"
+          }
+        ]
       }
     }
   ],
@@ -674,7 +698,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Summarize acct-demo-a and a missing account."
+                            "text": "Fixed synthetic case 05. Summarize the budget for acct-demo-a and acct-demo-missing, and disclose any incomplete coverage."
                           }
                         ]
                       }
@@ -688,13 +712,29 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
+                    "required_terms_all": [
+                      "acct-demo-a",
+                      "acct-demo-missing"
+                    ],
                     "required_terms_any": [
                       "partial",
-                      "missing",
-                      "not found"
+                      "incomplete"
                     ]
                   },
-                  "trace_assertions": [],
+                  "trace_assertions": [
+                    {
+                      "name": "two_budget_calls",
+                      "kind": "tool_call_count",
+                      "tool_name": "get_budget_summary",
+                      "count": 2
+                    },
+                    {
+                      "name": "mixed_budget_results",
+                      "kind": "tool_result_class",
+                      "tool_name": "get_budget_summary",
+                      "result_class": "mixed"
+                    }
+                  ],
                   "identity_assertions": {
                     "agent_name": "$runtime_agent_name",
                     "agent_version": "$runtime_agent_version"
@@ -1163,7 +1203,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Summarize acct-demo-a and a missing account."
+                            "text": "Fixed synthetic case 10. Summarize the budget for acct-demo-a and acct-demo-missing, and disclose any incomplete coverage."
                           }
                         ]
                       }
@@ -1177,13 +1217,29 @@
                 "expected": {
                   "http_status": 200,
                   "semantic_assertions": {
+                    "required_terms_all": [
+                      "acct-demo-a",
+                      "acct-demo-missing"
+                    ],
                     "required_terms_any": [
                       "partial",
-                      "missing",
-                      "not found"
+                      "incomplete"
                     ]
                   },
-                  "trace_assertions": [],
+                  "trace_assertions": [
+                    {
+                      "name": "two_budget_calls",
+                      "kind": "tool_call_count",
+                      "tool_name": "get_budget_summary",
+                      "count": 2
+                    },
+                    {
+                      "name": "mixed_budget_results",
+                      "kind": "tool_result_class",
+                      "tool_name": "get_budget_summary",
+                      "result_class": "mixed"
+                    }
+                  ],
                   "identity_assertions": {
                     "agent_name": "$runtime_agent_name",
                     "agent_version": "$runtime_agent_version"
