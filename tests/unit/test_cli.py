@@ -20,14 +20,20 @@ import test_runner as fake
 def app(tmp_path, monkeypatch):
     h = fake.Harness(tmp_path, issues=4)
     fake.fake_storage(monkeypatch)
+    from agent_insights_quality import report_context
+    h.catalog = fake.replace(h.catalog, targets=tuple(fake.replace(target, expectation={
+        "title": "Synthetic reviewed defect", "root_cause": "Synthetic input contradiction",
+        "expected_fix": "Honor the synthetic reviewed input",
+    }) for target in h.catalog.targets))
     private_config = h.store.root / "config"
     private_config.mkdir(parents=True)
     (private_config / "email-recipient.json").write_text(json.dumps({
         "schema_version": "1.0.0", "purpose": "daily_test", "recipient": "synthetic@example.invalid",
     }))
     monkeypatch.setattr(catalogs, "load_catalog", lambda _: h.catalog)
+    monkeypatch.setattr(report_context, "load_catalog", lambda _: h.catalog)
     monkeypatch.setattr(cli, "_committed_inputs", lambda _: None)
-    monkeypatch.setattr(runner, "source_revision", lambda _: "source-one")
+    monkeypatch.setattr(runner, "source_revision", lambda _: "a" * 40)
     original = runner.Runner
     def construct(*args, **kwargs):
         return original(*args, **kwargs, now=h.clock.now, monotonic=h.clock.monotonic,
@@ -125,7 +131,7 @@ def test_private_weekend_preserves_actual_date_and_current_candidate(app, monkey
     value, _ = last_json(capsys)
     record = read_email(app.store.outbox("email"), value["delivery_id"])
     assert record.request.report_date == weekend.isoformat()
-    assert app.store.run(value["run_id"]).read_completed("run")["source_revision"] == "source-one"
+    assert app.store.run(value["run_id"]).read_completed("run")["source_revision"] == "a" * 40
 
 
 def test_fixed_private_recipient_schema_precedes_cloud(app):
@@ -237,7 +243,8 @@ def test_production_factory_scoped_metadata_and_current_constructor_contracts(tm
     assert "InstrumentationKey" not in capsys.readouterr().out
 
 
-def test_generate_docs_only_writes_stdout_and_validation_stays_offline(app, monkeypatch, capsys):
+def test_generate_docs_calls_catalog_views_and_validation_stays_offline(app, monkeypatch, capsys):
+    from agent_insights_quality import catalog_docs
     guarded = builtins.__import__
     def no_sdk(name, *args, **kwargs):
         if name.startswith(("azure.", "agent_framework", "docker")):
@@ -245,9 +252,15 @@ def test_generate_docs_only_writes_stdout_and_validation_stays_offline(app, monk
         return guarded(name, *args, **kwargs)
     monkeypatch.setattr(builtins, "__import__", no_sdk)
     called = []
+    generated = []
+    def generate(catalog):
+        generated.append(catalog)
+        return ("AGENT_CATALOG.md", "ISSUE_CATALOG.md")
+    monkeypatch.setattr(catalog_docs, "generate_catalog_views", generate)
     monkeypatch.setattr(catalogs, "validate_catalog", lambda catalog: called.append(catalog))
     assert app.cli("generate-docs") == 0
-    assert "# Reviewed Agent inventory" in capsys.readouterr().out
+    assert json.loads(capsys.readouterr().out)["generated_paths"] == ["AGENT_CATALOG.md", "ISSUE_CATALOG.md"]
+    assert generated == [app.catalog]
     assert not app.catalog.root.exists()
     assert app.cli("validate") == 0
     assert called == [app.catalog]
@@ -295,7 +308,7 @@ def test_partial_and_failure_email_routing_comes_from_actual_result(app, monkeyp
     first, _ = last_json(capsys)
     assert first["status"] == "Partial" and first["coverage"]["excluded_units"] == 1
     failing.update({"issue-002", "issue-003"})
-    monkeypatch.setattr(runner, "source_revision", lambda _: "source-two")
+    monkeypatch.setattr(runner, "source_revision", lambda _: "b" * 40)
     # A fresh trial without retained history exposes all three incomplete units.
     app.store.outbox("trials")._path("progress", fake.DAY.isoformat()).unlink()
     assert app.cli("run-daily", "--test-run", "--rerun", "2") == 2
@@ -303,3 +316,107 @@ def test_partial_and_failure_email_routing_comes_from_actual_result(app, monkeyp
     assert second["status"] == "Failed" and second["score"] is None
     email = read_email(app.store.outbox("email"), second["delivery_id"])
     assert email.request.mode == "test" and "failure" in email.request.subject
+
+
+def test_prepared_email_resume_skips_ports_and_retains_frozen_metadata_context_and_warnings(app, monkeypatch, capsys):
+    assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
+    value, _ = last_json(capsys)
+    record = read_email(app.store.outbox("email"), value["delivery_id"])
+    assert "Sweden Central" in record.request.html and "a" * 40 in record.request.html
+    assert "2026-09-04" in record.request.html and "Synthetic reviewed defect" in record.request.html
+    calls = len(app.port_calls), len(app.sol.calls), len(app.cloud.invocations)
+    (app.store.root / "config" / "email-recipient.json").write_text("{broken")
+    (app.store.root / "config" / "assessment.json").write_text("{broken")
+    monkeypatch.setattr(runner, "source_revision", lambda _: "b" * 40)
+    assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
+    last_json(capsys)
+    assert (len(app.port_calls), len(app.sol.calls), len(app.cloud.invocations)) == calls
+    assert read_email(app.store.outbox("email"), value["delivery_id"]) == record
+
+
+def test_bootstrap_failure_is_safe_logged_before_traffic_and_unexpected_error_reraises(app, monkeypatch, capsys):
+    @asynccontextmanager
+    async def failed(*args):
+        raise QualityError("synthetic_bootstrap_unavailable")
+        yield
+    code = cli.main(
+        ["run-daily", "--test-run", "--rerun", "1"], root=app.catalog.root,
+        runtime_factory=lambda profile: app.store, ports=failed, today=fake.DAY,
+    )
+    assert code == 2 and "synthetic_bootstrap_unavailable" in capsys.readouterr().err
+    assert not app.cloud.invocations
+    statuses = [
+        app.store.run(path.name).read("command-status")
+        for path in (app.store.directory / "runs").glob("startup-*")
+    ]
+    assert any(item["code"] == "synthetic_bootstrap_unavailable" for item in statuses)
+    @asynccontextmanager
+    async def bug(*args):
+        raise TypeError("synthetic private programmer detail")
+        yield
+    with pytest.raises(TypeError, match="programmer detail"):
+        cli.main(["run-daily", "--test-run", "--rerun", "2"], root=app.catalog.root,
+                 runtime_factory=lambda profile: app.store, ports=bug, today=fake.DAY)
+    assert "programmer detail" not in capsys.readouterr().out
+
+
+def test_entrypoint_redacts_programming_details_but_returns_failure(monkeypatch, capsys):
+    def bug():
+        raise ValueError("synthetic private exception payload")
+    monkeypatch.setattr(cli, "main", bug)
+    assert cli.entrypoint() == 1
+    capture = capsys.readouterr()
+    assert json.loads(capture.err) == {"status": "failed", "code": "unexpected_failure"}
+    assert "exception payload" not in capture.out + capture.err
+
+
+def test_cli_official_flushes_logger_events_during_traffic_and_keeps_work_items_private(app, monkeypatch, capsys):
+    import asyncio
+    from agent_insights_quality import events
+    from agent_insights_quality.integration import RunIntegration
+    import test_integration as integrations
+    import test_publication as publishing
+
+    integrations.config(app.store)
+    client = publishing.FakeClient()
+    gate = {}
+    writes = []
+    monkeypatch.setattr(cli, "_official_source", lambda _: None)
+    monkeypatch.setattr(runner, "RunLogger", events.RunLogger)
+    async def fetch(*args):
+        return integrations.snapshot()
+    def auxiliary(*args, **kwargs):
+        loop = asyncio.get_running_loop()
+        gate.update(tick=integrations.Tick(), written=asyncio.Event())
+        client.before_manage = lambda _: loop.call_soon_threadsafe(gate["written"].set)
+        def write(root, document, *, test_run):
+            writes.append(document)
+            return (
+                "reports/daily/2026/09/04/report.json", "reports/daily/2026/09/04/report.md",
+                "reports/latest.json", "reports/latest.md",
+            )
+        return RunIntegration(*args, **kwargs, fetch_context=fetch, tick=gate["tick"],
+                              adx_factory=lambda *_: client, write_report=write)
+    original = app.cloud.invoke
+    async def invoke(*args, **kwargs):
+        if not app.cloud.invocations:
+            gate["tick"].request.set()
+            await gate["written"].wait()
+            assert not app.sol.calls and not app.cloud.starts
+        return await original(*args, **kwargs)
+    app.cloud.invoke = invoke
+    @asynccontextmanager
+    async def ports(*args):
+        assert app.store.run("daily-2026-09-04").read_completed("work-item-context")
+        yield app.cloud, app.sol, app.registry
+    assert cli.main(
+        ["run-daily"], root=app.catalog.root, runtime_factory=lambda _: app.store,
+        ports=ports, integrations=auxiliary, today=fake.DAY,
+    ) == 0
+    value, _ = last_json(capsys)
+    assert value["status"] == "Full" and value["github_request_path"]
+    email = read_email(app.store.outbox("email"), value["delivery_id"])
+    assert "Synthetic private quality item" in email.request.html
+    assert "Synthetic private quality item" not in json.dumps(app.sol.calls)
+    assert "Synthetic private quality item" not in json.dumps(writes)
+    assert "Synthetic private quality item" not in json.dumps(client.rows)

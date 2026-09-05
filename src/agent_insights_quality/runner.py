@@ -154,6 +154,7 @@ class Runner:
         attempts: Callable[[Target], tuple[Attempt, ...]] = load_attempts,
         deployment_source: Callable[[Target], str] | None = None,
         changes_since: Callable[[str], SourceChanges] | None = None,
+        event_outbox: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if runtime.environment != cloud.environment.profile:
             raise QualityError("runner_environment_mismatch")
@@ -179,7 +180,7 @@ class Runner:
             self.run.directory, allowed_units=[target.unit_id for target in catalog.targets],
             max_bytes=self.settings.log_max_bytes, backup_count=self.settings.log_backup_count,
             clock=now, monotonic=monotonic, test_run=test_run,
-            outbox=lambda event: self.runtime.outbox("events").save_artifact(uuid.uuid4().hex, event),
+            outbox=event_outbox,
         )
         self.deploy_limit = asyncio.Semaphore(self.settings.deployment_workers)
         self.query_limit = asyncio.Semaphore(self.settings.query_workers)

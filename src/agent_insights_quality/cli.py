@@ -16,13 +16,15 @@ import subprocess
 import sys
 
 from .errors import QualityError
+from .integration import RunIntegration, command_status
+from .integration import private_path as _private_path, read_object as _read_object
 
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="aiq-quality")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="Validate reviewed catalogs, schemas and source offline")
-    commands.add_parser("generate-docs", help="Print catalog Markdown views; never alter traffic")
+    commands.add_parser("generate-docs", help="Generate reviewed catalog views; never alter traffic")
     staging = commands.add_parser("run-staging", help="Run or resume incremental staging")
     staging.add_argument("--full", action="store_true")
     daily = commands.add_parser("run-daily", help="Run or resume today's Daily measurement")
@@ -42,27 +44,6 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
-def _read_object(path: Path) -> dict:
-    def unique(pairs):
-        value = {}
-        for key, item in pairs:
-            if key in value:
-                raise ValueError("Duplicate field")
-            value[key] = item
-        return value
-    try:
-        with path.open("rb") as stream:
-            content = stream.read(2_000_001)
-        if len(content) > 2_000_000:
-            raise ValueError("Oversized configuration")
-        value = json.loads(content, object_pairs_hook=unique)
-        if not isinstance(value, dict):
-            raise ValueError("Object required")
-        return value
-    except (OSError, ValueError, UnicodeError) as error:
-        raise QualityError("private_input_invalid") from error
-
-
 def _recipient(runtime) -> str:
     from .email import TEAM_RECIPIENT, _address
     value = _read_object(_private_path(runtime, runtime.root / "config" / "email-recipient.json"))
@@ -74,13 +55,6 @@ def _recipient(runtime) -> str:
     if address.casefold() == TEAM_RECIPIENT:
         raise QualityError("email_recipient_isolation")
     return address
-
-
-def _private_path(runtime, path: Path) -> Path:
-    path = path.absolute()
-    if path.resolve() != path or not path.is_relative_to(runtime.root):
-        raise QualityError("private_path_invalid")
-    return path
 
 
 def _official_source(root: Path) -> None:
@@ -105,20 +79,6 @@ def _committed_inputs(root: Path) -> None:
     )
     if result.returncode or result.stdout.strip():
         raise QualityError("source_inputs_not_committed")
-
-
-def _docs(catalog) -> str:
-    lines = [
-        "# Reviewed Agent inventory", "",
-        "Generated from the catalog authorities; this view does not generate traffic.", "",
-        "| Agent | Version | Type | Validation |", "| --- | --- | --- | --- |",
-    ]
-    for target in catalog.targets:
-        lines.append(
-            f"| {target.unit_id.agent} | {target.unit_id.logical_version} | "
-            f"{target.agent_type} | {target.validation_mode} |"
-        )
-    return "\n".join(lines) + "\n"
 
 
 @asynccontextmanager
@@ -164,8 +124,8 @@ def _artifact_path(records, key: str) -> str:
     return str(records._path("artifacts", key))
 
 
-async def _run(args, catalog, runtime, *, ports, today: date) -> tuple[dict, int]:
-    from .email import prepare_email, read_email
+async def _run(args, catalog, runtime, *, ports, integrations, today: date) -> tuple[dict, int]:
+    from .contracts import Environment
     from .runner import Runner, choose_staging, planned_units, source_revision
     from .selection import Selection, select_daily
     from .settings import load_assessment_settings, load_settings
@@ -178,11 +138,6 @@ async def _run(args, catalog, runtime, *, ports, today: date) -> tuple[dict, int
         _official_source(catalog.root)
     _committed_inputs(catalog.root)
     revision = source_revision(catalog)
-    settings_path = catalog.root / "config" / "runtime.json"
-    settings = load_settings(settings_path if settings_path.is_file() else None)
-    assessment_path = _private_path(runtime, runtime.root / "config" / "assessment.json")
-    assessment = load_assessment_settings(assessment_path if assessment_path.is_file() else None)
-    recipient = _recipient(runtime) if is_daily else None
     if is_daily:
         run_id = f"daily-{today.isoformat()}" + (f"-test-{args.rerun}" if test_run else "")
         targets = select_daily(catalog, today, test_run=test_run)
@@ -202,6 +157,13 @@ async def _run(args, catalog, runtime, *, ports, today: date) -> tuple[dict, int
                                for item in saved["targets"])
         targets = tuple(item.target for item in selections)
     records = runtime.run(run_id)
+    frozen = records.read_completed("delivery-inputs", missing_ok=True) if is_daily else None
+    recipient = _recipient(runtime) if is_daily and frozen is None else None
+    if frozen is None:
+        settings_path = catalog.root / "config" / "runtime.json"
+        settings = load_settings(settings_path if settings_path.is_file() else None)
+        assessment_path = _private_path(runtime, runtime.root / "config" / "assessment.json")
+        assessment = load_assessment_settings(assessment_path if assessment_path.is_file() else None)
     reuse_run_id = None
     if test_run and records.read_completed("run", missing_ok=True) is None:
         last = runtime.outbox("trials").read(today.isoformat(), missing_ok=True)
@@ -212,47 +174,66 @@ async def _run(args, catalog, runtime, *, ports, today: date) -> tuple[dict, int
         value = {"profile": "staging", "selected": 0, "status": "unchanged"}
         records.save_progress("staging-result", value)
         return value, 0
-    async with ports(catalog, runtime, run_id, assessment) as (cloud, sol, registry):
-        runner = Runner(
-            catalog, runtime, run_id, cloud, sol, registry, settings=settings,
-            test_run=test_run, rerun=args.rerun if is_daily else 0,
-            revision=revision, reuse_run_id=reuse_run_id,
-        )
-        try:
-            runner.initialize(targets, today, kind=runtime.environment)
-            records.save_completed("assessment-settings", {
-                "deployment_name": assessment.deployment_name, "model": assessment.model,
-                "model_version": assessment.model_version, "credential": assessment.credential,
-            })
-            if is_daily:
-                result = await runner.run_daily(targets)
-                pointer = records.read("quality-result")
-                request = prepare_email(
-                    runtime.outbox("email"), run_id, result, allowed_units=planned_units(targets),
-                    report_date=today.isoformat(), test_run=test_run, rerun=args.rerun,
-                    test_recipient=recipient, failure_recipient=recipient,
-                    warnings=runner.logger.health_warnings,
-                )
-                if test_run:
-                    runtime.outbox("trials").save_progress(today.isoformat(), {"run_id": run_id})
+    async with integrations(
+        catalog.root, runtime, run_id, allowed_units=planned_units(targets),
+        report_date=today, test_run=test_run,
+    ) as integration:
+        if frozen is not None:
+            result = integration.frozen_result()
+            environment = Environment(**records.read_completed("environment"))
+            published = integration.publish_report(result, environment, frozen["source_revision"])
+            await integration.finish_publication()
+            email = integration.prepare_delivery(
+                result, environment, frozen["source_revision"], rerun=args.rerun,
+                recipient=lambda: frozen["recipient"],
+            )
+            return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
+        async with ports(catalog, runtime, run_id, assessment) as (cloud, sol, registry):
+            runner = Runner(
+                catalog, runtime, run_id, cloud, sol, registry, settings=settings,
+                test_run=test_run, rerun=args.rerun if is_daily else 0,
+                revision=revision, reuse_run_id=reuse_run_id, event_outbox=integration.queue_event,
+            )
+            try:
+                integration.attach_logger(runner.logger)
+                runner.initialize(targets, today, kind=runtime.environment)
+                records.save_completed("assessment-settings", {
+                    "deployment_name": assessment.deployment_name, "model": assessment.model,
+                    "model_version": assessment.model_version, "credential": assessment.credential,
+                })
+                if is_daily:
+                    result = await runner.run_daily(targets)
+                    published = integration.publish_report(result, cloud.environment, revision)
+                    await integration.finish_publication()
+                    email = integration.prepare_delivery(
+                        result, cloud.environment, revision, rerun=args.rerun, recipient=lambda: recipient,
+                    )
+                    if test_run:
+                        runtime.outbox("trials").save_progress(today.isoformat(), {"run_id": run_id})
+                    return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
+                result = await runner.run_staging(selections)
+                await integration.finish_publication()
+                statuses = [item["status"] for item in result["results"]]
                 return {
-                    "run_id": run_id, "profile": "daily", "status": result.status.value,
-                    "score": result.score, "counts": result.counts.to_dict(),
-                    "coverage": result.coverage.to_dict(),
-                    "result_path": _artifact_path(records, pointer["artifact"]),
-                    "delivery_id": request.delivery_id,
-                    "email_record_path": str(runtime.outbox("email")._path("progress", run_id)),
-                    "email_status": read_email(runtime.outbox("email"), run_id).status,
-                }, 0 if result.team_report_eligible else 2
-            result = await runner.run_staging(selections)
-            statuses = [item["status"] for item in result["results"]]
-            return {
-                "run_id": run_id, "profile": "staging", "selected": len(selections),
-                "statuses": {status: statuses.count(status) for status in ("PASS", "FAIL", "INCOMPLETE")},
-                "result_path": str(records._path("progress", "staging-result")),
-            }, 2 if "INCOMPLETE" in statuses or result["integrity_failure"] else 0
-        finally:
-            runner.logger.close()
+                    "run_id": run_id, "profile": "staging", "selected": len(selections),
+                    "statuses": {status: statuses.count(status) for status in ("PASS", "FAIL", "INCOMPLETE")},
+                    "result_path": str(records._path("progress", "staging-result")),
+                    "warnings": sorted(integration.warnings),
+                }, 2 if "INCOMPLETE" in statuses or result["integrity_failure"] else 0
+            finally:
+                runner.logger.close()
+
+
+def _daily_status(runtime, records, run_id, result, email, published, warnings):
+    pointer = records.read("quality-result")
+    return {
+        "run_id": run_id, "profile": "daily", "status": result.status.value,
+        "score": result.score, "counts": result.counts.to_dict(),
+        "coverage": result.coverage.to_dict(), "result_path": _artifact_path(records, pointer["artifact"]),
+        "delivery_id": email.request.delivery_id,
+        "email_record_path": str(runtime.outbox("email")._path("progress", run_id)),
+        "email_status": email.status, "warnings": sorted(warnings), **published,
+    }, 0 if result.team_report_eligible else 2
 
 
 def _status(runtime) -> dict:
@@ -264,6 +245,9 @@ def _status(runtime) -> dict:
         records = runtime.run(path.name)
         metadata = records.read_completed("run", missing_ok=True)
         if metadata is None:
+            status = records.read("command-status", missing_ok=True)
+            if status and status["status"] == "blocked":
+                runs.append({"run_id": path.name, "status": status["status"], "code": status["code"]})
             continue
         pointer = records.read("quality-result", missing_ok=True)
         if pointer:
@@ -278,19 +262,31 @@ def _status(runtime) -> dict:
     return {"profile": runtime.environment, "runs": runs}
 
 
-def main(argv=None, *, root: Path | None = None, runtime_factory=None, ports=None, today=None) -> int:
+def _catalog(root):
+    from .catalogs import load_catalog
+    from jsonschema.exceptions import ValidationError
+    import yaml
+    try:
+        return load_catalog(root)
+    except (OSError, ValueError, ValidationError, yaml.YAMLError) as error:
+        raise QualityError("catalog_input_invalid") from error
+
+
+def main(argv=None, *, root: Path | None = None, runtime_factory=None, ports=None, integrations=None, today=None) -> int:
     args = parser().parse_args(argv)
-    from .catalogs import load_catalog, validate_catalog
+    from .catalogs import validate_catalog
     from .email import claim_email, record_email_outcome
     from .state import RuntimeStore
     root = Path.cwd() if root is None else root
     runtime_factory = RuntimeStore if runtime_factory is None else runtime_factory
     ports = production_ports if ports is None else ports
+    integrations = RunIntegration if integrations is None else integrations
     try:
         if args.command in {"validate", "generate-docs"}:
-            catalog = load_catalog(root)
+            catalog = _catalog(root)
             if args.command == "generate-docs":
-                print(_docs(catalog), end="")
+                from .catalog_docs import generate_catalog_views
+                print(json.dumps({"generated_paths": list(generate_catalog_views(catalog))}))
             else:
                 validate_catalog(catalog)
                 print(json.dumps({"status": "validated", "targets": len(catalog.targets)}))
@@ -302,9 +298,11 @@ def main(argv=None, *, root: Path | None = None, runtime_factory=None, ports=Non
             return 0
         with runtime.ownership():
             if args.command.startswith("run-"):
-                value, code = asyncio.run(_run(
-                    args, load_catalog(root), runtime, ports=ports, today=today or date.today(),
-                ))
+                with command_status(runtime, args.command):
+                    value, code = asyncio.run(_run(
+                        args, _catalog(root), runtime, ports=ports, integrations=integrations,
+                        today=today or date.today(),
+                    ))
             elif args.command == "email-claim":
                 outbox = runtime.outbox("email")
                 request = claim_email(outbox, args.delivery_id, claim_id=args.claim_id)
@@ -328,14 +326,24 @@ def main(argv=None, *, root: Path | None = None, runtime_factory=None, ports=Non
             print(json.dumps(value))
             return code
     except QualityError as error:
-        print(json.dumps({"status": "blocked", "code": error.code}), file=sys.stderr)
+        print(json.dumps({
+            "status": "blocked", "code": error.code,
+            "request_accepted": error.request_accepted, "retryable": error.retryable,
+        }), file=sys.stderr)
         return 2
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        # Do not echo catalog/provider/config contents in a CLI traceback.
-        print(json.dumps({"status": "blocked", "code": "command_input_or_state_invalid",
-                          "error_type": type(error).__name__}), file=sys.stderr)
+    except OSError:
+        print(json.dumps({"status": "blocked", "code": "command_io_failed"}), file=sys.stderr)
         return 2
+
+
+def entrypoint() -> int:
+    """Safe terminal boundary; unexpected bugs remain failing, not soft unknowns."""
+    try:
+        return main()
+    except Exception:
+        print(json.dumps({"status": "failed", "code": "unexpected_failure"}), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())
