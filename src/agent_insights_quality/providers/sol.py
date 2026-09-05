@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
 from typing import Any
@@ -133,11 +134,16 @@ class AzureSol:
             if response.status != 429 or attempt + 1 == self.attempts:
                 break
             retry_after = response.header("Retry-After")
-            delay = (
-                min(float(retry_after), 30)
-                if retry_after and retry_after.isdigit()
-                else 2**attempt
-            )
+            try:
+                delay = float(retry_after) if retry_after is not None else 2**attempt
+            except (ValueError, OverflowError):
+                delay = 2**attempt
+            if not math.isfinite(delay) or delay < 0:
+                delay = 2**attempt
+            # Do not retry before the server's reset. Longer waits remain an
+            # explicit rate-limit failure for checkpointed recovery.
+            if delay > 300:
+                break
             await self.sleep(delay)
         invalid_json = False
         try:

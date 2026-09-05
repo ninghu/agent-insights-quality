@@ -954,6 +954,45 @@ def test_sol_errors_keep_private_response_but_only_safe_exception_text(
     assert error.value.response == value
 
 
+@pytest.mark.parametrize("header, expected", [
+    ("60", 60), ("120", 120), ("1.5", 1.5), ("0", 0),
+    ("invalid", 1), ("nan", 1), ("inf", 1), ("-1", 1),
+])
+def test_sol_rate_limit_wait_does_not_undercut_server_reset(environment, header, expected):
+    waits = []
+
+    async def sleep(delay):
+        waits.append(delay)
+
+    transport = FakeTransport(
+        response({"error": {"code": "rate_limit_exceeded"}}, 429, {"Retry-After": header}),
+        response(sol_output()),
+    )
+    result = run(AzureSol(environment, transport=transport, sleep=sleep).complete_json(
+        instructions="Judge synthetic input", payload={}, schema=SCHEMA,
+    ))
+    assert result == {"verdict": "synthetic"}
+    assert waits == [expected]
+    assert len(transport.requests) == 2
+
+
+def test_sol_server_wait_beyond_local_budget_is_not_retried_early(environment):
+    waits = []
+
+    async def sleep(delay):
+        waits.append(delay)
+
+    transport = FakeTransport(
+        response({"error": {"code": "rate_limit_exceeded"}}, 429, {"Retry-After": "600"}),
+    )
+    with pytest.raises(SolResponseError, match="sol_http_error") as error:
+        run(AzureSol(environment, transport=transport, sleep=sleep).complete_json(
+            instructions="Judge synthetic input", payload={}, schema=SCHEMA,
+        ))
+    assert error.value.status == 429 and error.value.request_accepted is False
+    assert waits == [] and len(transport.requests) == 1
+
+
 def test_sol_unknown_post_not_retried(environment):
     transport = FakeTransport(TimeoutError("synthetic private error"))
     with pytest.raises(QualityError) as error:
