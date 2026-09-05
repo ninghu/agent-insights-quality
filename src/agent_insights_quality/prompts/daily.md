@@ -20,7 +20,9 @@ Represent all ten attempts. Here sufficient/observed refer to adequate evidence
 and independent activation of the expected defect, not repeated staging
 qualification. On a baseline, observed may describe evidenced healthy behavior.
 For every attempt, observed=true requires sufficient=true and adequate independent
-endpoint/probe trace evidence. If sufficient=false, observed must be false, even
+endpoint/probe trace evidence paired in one citation for that same probe turn.
+Setup evidence cannot establish attempt sufficiency, expected-issue activation,
+or Daily readiness. If sufficient=false, observed must be false, even
 when the response appears healthy or defective; citations may be empty or cite
 only matching allowed refs. Sufficient=true permits observed=false when adequate
 evidence does not establish the expected defect (or healthy baseline behavior).
@@ -28,6 +30,17 @@ Six distinct attributable probes can support a measurement; do not demand ten
 perfect responses, every child span, or exact list-length versus trace-count
 equality. Mark essential execution/evidence gaps in limitations, but do not mark
 unrelated missing fields or tolerated missing attempts as essential limitations.
+
+measurement_facts supplies code-computed readiness, current-card, query and
+pre-Insights window facts, not a behavioral verdict. When its
+unit_limitations_not_applicable is true, limitations must be empty: this is a
+baseline with at least six executed, attributable and previsible probe attempts,
+complete queries/card snapshots and valid in-time windows, no current cards,
+and no expected-issue activation requirement. For example, ten endpoint attempts,
+nine ready probes and zero current cards do not become globally incomplete
+because the tenth probe lacks an anchor. Keep that attempt insufficient in the
+ten-attempt judgments; do not hide its gap. This exception does not apply to
+current-card uncertainty, issues, incomplete queries or insufficient readiness.
 
 Assess every canonical card_alias once. The adapter owns current/historical
 contribution and page/revision deduplication; do not invent per-card run IDs.
@@ -40,9 +53,14 @@ Core correct means correct diagnosis, a semantically reasonable category, and
 independent current supporting evidence. Core incorrect means proven wrong core
 diagnosis, materially wrong category, or wrong evidence. Severity and proposed
 fix are diagnostic only. Use unknown when the evidence cannot establish either.
-Every known core judgment must cite actual endpoint and attributable probe trace
-refs in a probe citation {attempt, step_id, refs}; refs must belong to that turn's
-allowed_citation_refs. Cite other relevant setup/probe refs too. Card text,
+Every known core judgment must cite an actual endpoint and attributable trace
+paired in one citation {attempt, step_id, refs} for the same planned setup OR
+probe turn; refs must belong to that turn's allowed_citation_refs. Setup proof
+may establish a current card's core, but does not by itself establish expected
+issue activation or expected_match. Preserve the distinction between a real
+unexpected setup problem and the reviewed expected defect. Cite other relevant
+setup/probe refs too. Never relabel a phase, combine separate citation objects
+to manufacture a pair, or append an unrelated probe as proof. Card text,
 request text, anomaly/self-report labels and catalog claims alone cannot prove
 runtime defects. Unrelated sibling/history records are never current proof.
 

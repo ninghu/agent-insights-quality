@@ -188,9 +188,9 @@ class _Evidence:
 
     def citations(
         self, citations: list[dict], *, attempt: int | None = None,
-        proof: bool = False,
+        proof: bool = False, probe_only: bool = True,
     ) -> None:
-        probe_proof = False
+        paired_proof = False
         for citation in citations:
             index = citation["attempt"]
             key = (index, citation["step_id"])
@@ -202,9 +202,12 @@ class _Evidence:
             ):
                 raise AssessmentError("assessment_citation_invalid")
             endpoint = self.endpoints.get(key)
-            if key in self.probes and endpoint in refs and refs - {endpoint}:
-                probe_proof = True
-        if proof and not probe_proof:
+            if (
+                (not probe_only or key in self.probes)
+                and endpoint in refs and refs - {endpoint}
+            ):
+                paired_proof = True
+        if proof and not paired_proof:
             raise AssessmentError("assessment_proof_missing")
 
 
@@ -302,6 +305,49 @@ def _evidence(
     )
 
 
+def _measurement_facts(
+    evidence: _Evidence, visible: _Evidence, cards: tuple[dict, ...], *,
+    baseline: bool, cards_complete: bool, engine_started_at: str,
+    engine_window: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    snapshot = evidence.payload["snapshot"]
+    visible_snapshot = visible.payload["snapshot"]
+    facts = {
+        "baseline": baseline,
+        "executed_probe_attempts": len(evidence.executed),
+        "attributable_probe_attempts": len(evidence.ready),
+        "pre_insights_attributable_probe_attempts": len(visible.ready),
+        "current_card_count": sum(card["contribution"] == "current" for card in cards),
+        "cards_complete": cards_complete,
+        "query_complete": snapshot["query_complete"],
+        "pre_insights_query_complete": visible_snapshot["query_complete"],
+        "pre_insights_observed_in_time": (
+            _timestamp(visible_snapshot["observed_at"]) <= _timestamp(engine_started_at)
+        ),
+        "evidence_windows_valid": all(
+            _timestamp(item["window_start"]) < _timestamp(item["window_end"])
+            for item in (snapshot, visible_snapshot)
+        ),
+        "engine_window_coverage_proven": (
+            engine_window is None
+            or engine_window.get("coverage_proven") is True and not engine_window.get("reasons")
+        ),
+    }
+    facts["unit_limitations_not_applicable"] = (
+        baseline and facts["current_card_count"] == 0
+        and all(facts[name] >= 6 for name in (
+            "executed_probe_attempts", "attributable_probe_attempts",
+            "pre_insights_attributable_probe_attempts",
+        ))
+        and all(facts[name] for name in (
+            "cards_complete", "query_complete", "pre_insights_query_complete",
+            "pre_insights_observed_in_time", "evidence_windows_valid",
+            "engine_window_coverage_proven",
+        ))
+    )
+    return facts
+
+
 def _fits(payload: dict, limit: int) -> bool:
     if type(limit) is not int or limit <= 0:
         raise AssessmentError("assessment_limit_invalid")
@@ -325,6 +371,8 @@ async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
     schema = deepcopy(DAILY_SCHEMA if daily else STAGING_SCHEMA)
     schema["properties"]["attempts"].update(minItems=len(indices), maxItems=len(indices))
     schema["properties"]["attempts"]["items"]["properties"]["index"]["enum"] = indices
+    if daily and decoded["measurement_facts"]["unit_limitations_not_applicable"]:
+        schema["properties"]["limitations"]["maxItems"] = 0
     request_schema = deepcopy(schema)
     if daily:
         # Express the existing semantic rules using supported nested object unions.
@@ -611,7 +659,9 @@ def _validate_daily(evidence: _Evidence, output: dict, cards: tuple[dict, ...],
             if group in groups and groups[group] != card["expected_match"]:
                 raise AssessmentError("assessment_root_conflict")
             groups[group] = card["expected_match"]
-        evidence.citations(card["citations"], proof=card["core"] != "unknown")
+        evidence.citations(
+            card["citations"], proof=card["core"] != "unknown", probe_only=False,
+        )
 
 
 def _candidates(output: dict, cards: tuple[dict, ...], *, baseline: bool) -> list[str]:
@@ -769,6 +819,11 @@ async def assess_daily(
         "card_snapshots": {"before": before_cards, "after": after_cards},
         "cards_complete": cards_complete, "engine_started_at": engine_started_at,
         "visible_snapshot": visible_snapshot.to_private_dict(),
+        "measurement_facts": _measurement_facts(
+            evidence, visible, cards, baseline=target.is_baseline,
+            cards_complete=cards_complete, engine_started_at=engine_started_at,
+            engine_window=engine_window,
+        ),
         **({"engine_window": _json_copy(engine_window)} if engine_window is not None else {}),
     })
     detail = {"input": payload, "initial": None, "review": None, "resolved": None}
