@@ -73,10 +73,6 @@ def source_files(target: Target, *, container: bool = False) -> dict[str, bytes]
         else ("requirements.txt", "host.yaml")
     ):
         files[prefix + filename] = _read(target.baseline_root / filename)
-    if container:
-        files["v0/implementation.yaml"] = _read(
-            target.version_root / "implementation.yaml"
-        )
     return files
 
 

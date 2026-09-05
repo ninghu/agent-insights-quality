@@ -88,7 +88,6 @@ def deployment_inputs(target: Target) -> tuple[Path, ...]:
     if target.agent_type == "hosted_custom_container":
         return (
             *hosted, providers / "acr.py", target.baseline_root / "Dockerfile",
-            target.version_root / "implementation.yaml",
         )
     return (*hosted, target.baseline_root / "host.yaml")
 
@@ -110,7 +109,10 @@ def evaluation_inputs(target: Target) -> tuple[Path, ...]:
         root / "schemas" / "traffic.schema.json",
         *((root / "schemas" / "prompt-traffic.schema.json",) if target.is_prompt else ()),
         root / "src" / "agent_insights_quality" / "assessment.py",
+        root / "src" / "agent_insights_quality" / "assessment_partition.py",
         root / "src" / "agent_insights_quality" / "telemetry.py",
+        root / "src" / "agent_insights_quality" / "prompts" / "staging.md",
+        root / "src" / "agent_insights_quality" / "prompts" / "daily.md",
     )
 
 

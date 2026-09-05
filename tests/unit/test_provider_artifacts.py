@@ -57,9 +57,7 @@ def target(tmp_path):
     (baseline / "requirements.txt").write_text("synthetic-package==1.0\n")
     (baseline / "Dockerfile").write_text(
         "FROM python:3.12-slim\nCOPY v0/source /app/source\n"
-        "COPY v0/implementation.yaml /app/issue.yaml\n"
     )
-    (root / "implementation.yaml").write_text("issue_id: issue-029\n")
     return Target(
         UnitId("support-ticket-agent", "issue-029"),
         "hosted_custom_container",
@@ -79,11 +77,15 @@ def test_container_context_uses_selected_complete_source_without_patching(target
         ).read_bytes(),
         "v0/requirements.txt": (target.baseline_root / "requirements.txt").read_bytes(),
         "v0/Dockerfile": (target.baseline_root / "Dockerfile").read_bytes(),
-        "v0/implementation.yaml": (
-            target.version_root / "implementation.yaml"
-        ).read_bytes(),
     }
     assert source_zip(files) == source_zip(dict(reversed(list(files.items()))))
+
+
+def test_manifest_only_edits_do_not_change_support_image_contents(target):
+    before = source_zip(source_files(target, container=True))
+    (target.version_root / "implementation.yaml").write_text("expected_behavior: synthetic revision\n")
+    after = source_zip(source_files(target, container=True))
+    assert before == after
 
 
 def test_missing_selected_source_never_falls_back_to_baseline(target, tmp_path):
@@ -232,27 +234,21 @@ def test_real_support_sources_satisfy_selected_acr_build_context(version, tmp_pa
     root = Path(__file__).resolve().parents[2]
     target = load_catalog(root).target("support-ticket-agent/" + version)
     context = source_files(target, container=True)
-    variables = {}
     copies = {}
     dockerfile = context["v0/Dockerfile"].decode("utf-8")
     for line in dockerfile.splitlines():
-        if line.startswith("ARG "):
-            name, default = line[4:].split("=", 1)
-            variables[name] = default
-        elif line.startswith("COPY "):
+        if line.startswith("COPY "):
             source, destination = shlex.split(line)[1:]
-            for name, value in variables.items():
-                source = source.replace("${" + name + "}", value)
             assert source in context or any(name.startswith(source + "/") for name in context)
             copies[destination] = source
     assert copies == {
         "/app/requirements.txt": "v0/requirements.txt",
         "/app/source": "v0/source",
-        "/app/issue.yaml": "v0/implementation.yaml",
     }
     assert "-r /app/requirements.txt" in dockerfile
     assert 'CMD ["python", "-m", "source.app"]' in dockerfile
-    assert context["v0/implementation.yaml"] == (target.version_root / "implementation.yaml").read_bytes()
+    assert "v0/implementation.yaml" not in context
+    assert "ISSUE_PATH" not in dockerfile and "issue.yaml" not in dockerfile
     expected_sources = {
         "v0/source/" + path.relative_to(target.version_root / "source").as_posix(): path.read_bytes()
         for path in (target.version_root / "source").rglob("*.py")

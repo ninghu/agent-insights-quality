@@ -82,7 +82,7 @@ def test_missing_full_incomplete_and_unchanged_failure(catalog):
     ("agents/support-ticket-agent/v0/Dockerfile", {"support-ticket-agent"}, "traffic"),
     ("agents/support-ticket-agent/v0/container.yaml", set(), "traffic"),
     ("agents/finance-agent/issues/issue-013/implementation.yaml", {"finance-agent/issue-013"}, "reassess"),
-    ("agents/support-ticket-agent/issues/issue-029/implementation.yaml", {"support-ticket-agent/issue-029"}, "traffic"),
+    ("agents/support-ticket-agent/issues/issue-029/implementation.yaml", {"support-ticket-agent/issue-029"}, "reassess"),
     ("src/agent_insights_quality/providers/artifacts.py", {"all"}, "traffic"),
     ("src/agent_insights_quality/providers/hosted.py", {"hosted"}, "traffic"),
     ("src/agent_insights_quality/providers/acr.py", {"support-ticket-agent"}, "traffic"),
@@ -90,7 +90,11 @@ def test_missing_full_incomplete_and_unchanged_failure(catalog):
     ("src/agent_insights_quality/providers/sol.py", set(), "traffic"),
     ("src/agent_insights_quality/cli.py", set(), "traffic"),
     ("src/agent_insights_quality/assessment.py", {"all"}, "reassess"),
+    ("src/agent_insights_quality/assessment_partition.py", {"all"}, "reassess"),
     ("src/agent_insights_quality/telemetry.py", {"all"}, "reassess"),
+    ("src/agent_insights_quality/prompts/staging.md", {"all"}, "reassess"),
+    ("src/agent_insights_quality/prompts/daily.md", {"all"}, "reassess"),
+    ("src/agent_insights_quality/prompts/unrelated.md", set(), "traffic"),
     ("src/agent_insights_quality/evidence.py", set(), "traffic"),
     ("catalogs/ISSUE_CATALOG.yaml", {"all"}, "reassess"),
     ("README.md", set(), "traffic"),
@@ -157,6 +161,15 @@ def test_deployment_inputs_exclude_traffic_and_verifiers(catalog):
         assert ROOT / "src" / "agent_insights_quality" / "cli.py" not in paths
         assert target.baseline_root / "package.py" not in paths
         assert target.baseline_root / "container.yaml" not in paths
+        assert target.version_root / "implementation.yaml" not in paths
+        assert target.version_root / "implementation.yaml" in evaluation_inputs(target)
+        evaluator = ROOT / "src" / "agent_insights_quality"
+        for path in (
+            evaluator / "assessment_partition.py",
+            evaluator / "prompts" / "staging.md",
+            evaluator / "prompts" / "daily.md",
+        ):
+            assert path not in paths and path in evaluation_inputs(target)
 
 
 def test_git_bound_deployment_revision_changes_only_for_actual_inputs(catalog, tmp_path):
@@ -195,7 +208,11 @@ def test_git_bound_deployment_revision_changes_only_for_actual_inputs(catalog, t
         ("src/agent_insights_quality/providers/artifacts.py", {"prompt", "hosted_code", "hosted_custom_container"}),
         ("src/agent_insights_quality/providers/acr.py", {"hosted_custom_container"}),
         ("agents/finance-agent/v0/package.py", set()),
+        ("agents/support-ticket-agent/issues/issue-029/implementation.yaml", set()),
         ("src/agent_insights_quality/telemetry.py", set()),
+        ("src/agent_insights_quality/assessment_partition.py", set()),
+        ("src/agent_insights_quality/prompts/staging.md", set()),
+        ("src/agent_insights_quality/prompts/daily.md", set()),
     ):
         file = tmp_path / path
         file.parent.mkdir(parents=True, exist_ok=True)
