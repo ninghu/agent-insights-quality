@@ -13,6 +13,11 @@ Run the weekday Agent Insights quality automation locally.
 6. Save the actual provider result privately and call `email-result` with the same delivery/claim IDs,
    its result-file path and the correct outcome. Use accepted unless actual delivery is proven.
    If submission is ambiguous, record unknown and stop; never blindly send again.
+7. If the runner prepared an optional GitHub publication request, use only its four validated
+   dated/latest report paths. Confirm there are no unrelated changes before committing them.
+   Reconcile an existing generated branch/PR before creating another; use the app's native
+   pull-request tool and leave merge manual. A publication failure must not resend the email
+   or restart qualification.
 
 The official run ignores the private test recipient. Optional publication failures are warnings,
 not reasons to rerun qualification. Use only prepared, validated public artifacts for any generated
