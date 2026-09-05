@@ -27,6 +27,9 @@ unknown, not permission to send again. Missing mail capability is a blocker to r
 - `config/email-recipient.json` under that root has purpose `daily_test` and the private test recipient.
 - The reviewed team mailbox remains repository configuration, not a model-selected destination.
 - Optional private work-item query/context never enters public artifacts or assessment inputs.
+- Optional `config/adx.json` under the runtime root contains `schema_version: "1.0"`,
+  `cluster_uri` and `database`. Only the approved existing analytics database is used.
+  Missing or unavailable ADX produces a warning; local logs and eligible inline email continue.
 
 Keep service endpoints, identifiers, query URLs, receipts and credentials private.
 Do not enable the schedule from a private trial or point official automation at an incomplete branch.
