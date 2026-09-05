@@ -19,7 +19,8 @@ Run the weekday Agent Insights quality automation locally.
    pull-request tool and leave merge manual. A publication failure must not resend the email
    or restart qualification.
 
-The official run ignores the private test recipient. Optional publication failures are warnings,
-not reasons to rerun qualification. Use only prepared, validated public artifacts for any generated
+Eligible official reports use the fixed team mailbox; an ineligible run prepares a private failure
+notice instead. Never replace the recipient selected by the runner. Optional publication failures
+are warnings, not reasons to rerun qualification. Use only prepared, validated public artifacts for any generated
 GitHub publication; never copy private runtime data or provider receipts into a pull request.
 Do not enable or alter automation schedules.
