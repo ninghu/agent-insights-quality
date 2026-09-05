@@ -33,6 +33,11 @@ def parser() -> argparse.ArgumentParser:
     daily = commands.add_parser("run-daily", help="Run or resume today's Daily measurement")
     daily.add_argument("--test-run", action="store_true")
     daily.add_argument("--rerun", type=int, default=0)
+    daily.add_argument(
+        "--fresh-traffic", action="store_true", default=None,
+        help="Start a NEW private --test-run --rerun identity without reusing prior traffic; "
+             "resume keeps the frozen intent even if this flag is omitted",
+    )
     status = commands.add_parser("status", help="Show safe local run status")
     status.add_argument("--profile", choices=("daily", "staging"), default="daily")
     for command in ("email-claim", "email-result"):
@@ -218,7 +223,7 @@ async def _run(
     args, catalog, runtime, *, ports, integrations, today: date, staging_policy_migration=None,
 ) -> tuple[dict, int]:
     from .contracts import Environment
-    from .runner import Runner, planned_units, source_revision
+    from .runner import Runner, daily_traffic_intent, planned_units, source_revision
     from .selection import select_daily
     from .settings import load_settings
 
@@ -232,6 +237,8 @@ async def _run(
     test_run = is_daily and args.test_run
     if is_daily and (args.rerun < 1 if test_run else args.rerun != 0):
         raise QualityError("runner_test_identity_invalid")
+    if is_daily and args.fresh_traffic and not test_run:
+        raise QualityError("fresh_traffic_requires_test_rerun")
     if is_daily and not test_run:
         _official_source(catalog.root)
     _committed_inputs(catalog.root)
@@ -245,6 +252,20 @@ async def _run(
         run_id = active["run_id"]
         targets = tuple(item.target for item in selections)
     records = runtime.run(run_id)
+    traffic_intent = None
+    if is_daily:
+        reuse_run_id = None
+        if test_run and not args.fresh_traffic and (
+            records.read_completed("run", missing_ok=True) is None
+            and records.read_completed("traffic-intent", missing_ok=True) is None
+        ):
+            last = runtime.outbox("trials").read(today.isoformat(), missing_ok=True)
+            if last and last["run_id"] != run_id:
+                reuse_run_id = last["run_id"]
+        traffic_intent = daily_traffic_intent(
+            records, test_run=test_run, rerun=args.rerun, revision=revision,
+            fresh_traffic=args.fresh_traffic, reuse_run_id=reuse_run_id,
+        )
     metrics = begin_metrics(records)
     if not is_daily and active["completed"]:
         if metrics:
@@ -256,11 +277,6 @@ async def _run(
     if frozen is None:
         settings_path = catalog.root / "config" / "runtime.json"
         settings = load_settings(settings_path if settings_path.is_file() else None)
-    reuse_run_id = None
-    if test_run and records.read_completed("run", missing_ok=True) is None:
-        last = runtime.outbox("trials").read(today.isoformat(), missing_ok=True)
-        if last and last["run_id"] != run_id:
-            reuse_run_id = last["run_id"]
     # An empty staging selection has no reason to discover credentials or create providers.
     if not is_daily and not targets:
         value = {"profile": "staging", "selected": 0, "status": "unchanged", "results": [], "integrity_failure": False}
@@ -289,7 +305,10 @@ async def _run(
             runner = Runner(
                 catalog, runtime, run_id, cloud, sol, registry, settings=settings,
                 test_run=test_run, rerun=args.rerun if is_daily else 0,
-                revision=revision, reuse_run_id=reuse_run_id, event_outbox=integration.queue_event,
+                revision=revision,
+                reuse_run_id=traffic_intent["reuse_run_id"] if traffic_intent else None,
+                fresh_traffic=traffic_intent["fresh_traffic"] if traffic_intent else None,
+                event_outbox=integration.queue_event,
                 staging_policy_migration=staging_policy_migration,
                 metrics=metrics, assessment_settings=assessment,
             )

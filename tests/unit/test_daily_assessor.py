@@ -129,11 +129,18 @@ def test_unfinished_n1_resumes_frozen_sol_despite_new_astra_default_without_new_
     n1 = constructed[0][0]
     assert h.store.run(n1).read_completed("assessment-settings") == SOL.to_dict()
     assert h.store.run(n1).read_completed("delivery-inputs", missing_ok=True) is None
-    counts = len(h.cloud.invocations), len(h.cloud.starts), dict(h.cloud.resets)
+    requests = {item[2] for item in h.cloud.invocations}
+    operations = {item[2] for item in h.cloud.starts}
+    resets = dict(h.cloud.resets)
     write_settings(h.store.root, "daily-assessment.json", ASTRA)
     assert invoke("run-daily", "--test-run", "--rerun", "1") == 0
     assert [settings for _, settings in constructed] == [SOL, SOL]
-    assert (len(h.cloud.invocations), len(h.cloud.starts), dict(h.cloud.resets)) == counts
+    # Pipelined assessment can fail before later traffic starts. Resume finishes
+    # that traffic without replaying any previously submitted request or job.
+    assert len(h.cloud.invocations) == 100 and len(h.cloud.starts) == 5
+    assert all(sum(item[2] == request for item in h.cloud.invocations) == 1 for request in requests)
+    assert all(sum(item[2] == operation for item in h.cloud.starts) == 1 for operation in operations)
+    assert dict(h.cloud.resets) == resets
     for target in h.catalog.targets:
         assert h.store.run(n1).read(f"targets/{target.key}/source")["configured_assessor"] == SOL.to_dict()
 

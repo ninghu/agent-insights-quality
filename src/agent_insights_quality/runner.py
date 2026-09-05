@@ -88,6 +88,53 @@ def planned_units(targets: tuple[Target, ...]) -> tuple[PlannedUnit, ...]:
     )
 
 
+def daily_traffic_intent(
+    records: RecordStore, *, test_run: bool, rerun: int, revision: str,
+    fresh_traffic: bool | None = None, reuse_run_id: str | None = None,
+) -> dict:
+    """Freeze new-run intent before provider construction, including interrupted startup."""
+    if fresh_traffic is not None and type(fresh_traffic) is not bool or (
+        fresh_traffic and (not test_run or type(rerun) is not int or rerun < 1)
+    ):
+        raise QualityError("fresh_traffic_requires_test_rerun")
+    existing = records.read_completed("run", missing_ok=True)
+    frozen = records.read_completed("traffic-intent", missing_ok=True)
+    if frozen is None and existing is not None:
+        frozen = {
+            "fresh_traffic": existing.get("fresh_traffic", False),
+            "reuse_run_id": existing.get("reuse_run_id"),
+            "source_revision": existing["source_revision"],
+        }
+    if frozen is not None:
+        if set(frozen) != {"fresh_traffic", "reuse_run_id", "source_revision"} or (
+            type(frozen["fresh_traffic"]) is not bool
+            or not isinstance(frozen["source_revision"], str)
+            or frozen["reuse_run_id"] is not None and not isinstance(frozen["reuse_run_id"], str)
+            or frozen["fresh_traffic"] and (not test_run or rerun < 1 or frozen["reuse_run_id"] is not None)
+        ):
+            raise StateError("traffic_intent_invalid")
+        if fresh_traffic is not None and fresh_traffic != frozen["fresh_traffic"] or (
+            reuse_run_id is not None and reuse_run_id != frozen["reuse_run_id"]
+        ):
+            raise QualityError("run_traffic_intent_mismatch")
+        if frozen["fresh_traffic"] and frozen["source_revision"] != revision:
+            raise QualityError("fresh_resume_source_changed")
+    else:
+        if fresh_traffic and reuse_run_id is not None:
+            raise QualityError("run_traffic_intent_mismatch")
+        frozen = {
+            "fresh_traffic": bool(fresh_traffic), "reuse_run_id": reuse_run_id,
+            "source_revision": revision,
+        }
+    if existing is not None and (
+        existing.get("fresh_traffic", False) != frozen["fresh_traffic"]
+        or existing.get("reuse_run_id") != frozen["reuse_run_id"]
+    ):
+        raise StateError("traffic_intent_invalid")
+    records.save_completed("traffic-intent", frozen)
+    return frozen
+
+
 def restore_unit(value: Mapping[str, Any]) -> UnitResult:
     try:
         return UnitResult(
@@ -284,6 +331,7 @@ class Runner:
         sol: SolPort, registry: DeploymentRegistry, *,
         settings: RuntimeSettings | None = None, test_run: bool = False, rerun: int = 0,
         revision: str | None = None, reuse_run_id: str | None = None,
+        fresh_traffic: bool | None = None,
         now: Callable[[], datetime] = utcnow,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -330,6 +378,7 @@ class Runner:
         if self.metrics:
             self.metrics.configuration = self.settings.to_dict()
         self.test_run, self.rerun, self.reuse_run_id = test_run, rerun, reuse_run_id
+        self.fresh_traffic = fresh_traffic
         self.revision = revision or source_revision(catalog)
         self.now, self.monotonic, self.sleep = now, monotonic, sleep
         self.attempts = attempts
@@ -347,6 +396,7 @@ class Runner:
         self.deploy_limit = asyncio.Semaphore(self.settings.deployment_workers)
         self.query_limit = asyncio.Semaphore(self.settings.query_workers)
         self.assessment_limit = asyncio.Semaphore(self.settings.assessment_workers)
+        self.attempt_limit = asyncio.Semaphore(self.settings.daily_attempt_budget)
         self.integrity_failure = False
         self._stopped = False
         self._initialized = False
@@ -376,6 +426,14 @@ class Runner:
             target not in self.catalog.targets for target in targets
         ):
             raise QualityError("run_plan_invalid")
+        if kind == "daily":
+            intent = daily_traffic_intent(
+                self.run, test_run=self.test_run, rerun=self.rerun, revision=self.revision,
+                fresh_traffic=self.fresh_traffic, reuse_run_id=self.reuse_run_id,
+            )
+            self.fresh_traffic, self.reuse_run_id = intent["fresh_traffic"], intent["reuse_run_id"]
+        elif self.fresh_traffic is not None:
+            raise QualityError("fresh_traffic_requires_test_rerun")
         migration = self.staging_policy_migration.to_dict() if self.staging_policy_migration else None
         saved_migration = self.run.read_completed("staging-policy-migration", missing_ok=True)
         if saved_migration is not None and saved_migration != migration:
@@ -411,6 +469,7 @@ class Runner:
             self._save(self.run, "completed", "run", {
                 **expected, "source_revision": self.revision, "started_at": self.now().isoformat(),
                 "reuse_run_id": self.reuse_run_id,
+                **({"fresh_traffic": self.fresh_traffic} if kind == "daily" else {}),
                 "lane_run_id": self.lanes.directory.name,
             })
         self._save(self.run, "progress", "source", {
@@ -592,7 +651,9 @@ class Runner:
     async def _wait(self, target: Target, stage: str, deadline: datetime, start: float) -> bool:
         budget = (
             self.settings.insights_poll_timeout_seconds
-            if stage == "insights" else self.settings.poll_timeout_seconds
+            if stage == "insights" else self.settings.hydration_seconds
+            if stage == "evidence" and self.runtime.environment == "daily"
+            else self.settings.poll_timeout_seconds
         )
         remaining = min(
             (deadline - self.now()).total_seconds(),
@@ -820,7 +881,7 @@ class Runner:
         self._check()
         await self.cloud.activate(deployment)
         invocations = {}
-        for attempt in attempts:
+        async def one(attempt: Attempt) -> None:
             with binding(self.metrics, attempt=attempt.index), scope(self.metrics, "attempt", "traffic") as measured:
                 previous, session, blocked = None, None, None
                 try:
@@ -859,6 +920,23 @@ class Runner:
                 if self.metrics and not measured.get("fresh_turns"):
                     measured["receipt_status"] = measured["status"]
                     measured["status"] = "reused" if measured.get("reused_turns") else "skipped"
+        if self.runtime.environment == "daily":
+            # Travel's graph-wide BookingLedger mutates synthetic reservation state.
+            # Keep its attempts serial even though native conversations are isolated.
+            workers = 1 if target.unit_id.agent == "travel-agent" else self.settings.daily_attempt_workers
+            pending = iter(attempts)
+            async def worker() -> None:
+                for attempt in pending:
+                    self._check()
+                    # Fixed target workers acquire the global slot in the same order.
+                    with binding(self.metrics, attempt=attempt.index):
+                        async with limited(self.metrics, self.attempt_limit, "daily_attempt"):
+                            self._check()
+                            await one(attempt)
+            await self._gather(worker() for _ in range(workers))
+        else:
+            for attempt in attempts:
+                await one(attempt)
         if all(item.status != "blocked" for item in invocations.values()):
             self._save(work.records, "completed", work.key + "/traffic-done", {"completed": True})
         return invocations
@@ -873,6 +951,17 @@ class Runner:
             for step in attempt.steps
         ) for attempt in attempts)
 
+    @staticmethod
+    def _probe_roots_complete(attempts: tuple[Attempt, ...], invocations: Mapping, snapshot: Snapshot) -> bool:
+        attributable = snapshot.attributable_responses
+        return all(
+            receipt.response_id in attributable
+            for attempt in attempts for step in attempt.steps
+            if step.phase == "probe"
+            and (receipt := invocations.get((attempt.index, step.step_id))) is not None
+            and receipt.response is not None
+        )
+
     @measure("stage", "evidence")
     async def _evidence(
         self, target: Target, work: _Work, deployment: Deployment,
@@ -881,17 +970,39 @@ class Runner:
         key = work.key + "/evidence"
         self._event("started", target, stage="evidence")
         deadline = self._deadline(work.records, key + "/deadline", self.settings.hydration_seconds)
+        if self.runtime.environment == "daily" and work.records.read_completed(
+            key + "/grace-deadline", missing_ok=True,
+        ) is None:
+            retained = work.records.read(key, missing_ok=True)
+            if retained is not None:
+                previous = self._snapshot(work, retained["artifact"])
+                if self._ready_attempts(attempts, invocations, previous) >= self.settings.readiness_attempts:
+                    # Recover a crash between the visible snapshot and its grace
+                    # checkpoint without granting another observation interval.
+                    self._save(work.records, "completed", key + "/grace-deadline", {
+                        "until": (_datetime(previous.observed_at) + timedelta(
+                            seconds=self.settings.daily_evidence_grace_seconds,
+                        )).isoformat(),
+                    })
         start, extra_poll = self.monotonic(), False
         while True:
             self._check()
+            wait_until = deadline
+            grace = None
+            if self.runtime.environment == "daily":
+                grace = work.records.read_completed(key + "/grace-deadline", missing_ok=True)
+                if grace is not None:
+                    wait_until = min(deadline, _datetime(grace["until"]))
             try:
                 async with limited(self.metrics, self.query_limit, "evidence_query"):
                     snapshot = await collect_snapshot(
                         self.cloud, deployment, invocations.values(), observed_at=self.now(),
                     )
+                    if self.runtime.environment == "daily":
+                        snapshot = replace(snapshot, observed_at=self.now().isoformat())
             except QualityError as error:
                 self._fatal(error)
-                if error.retryable and await self._wait(target, "evidence", deadline, start):
+                if error.retryable and await self._wait(target, "evidence", wait_until, start):
                     continue
                 raise
             artifact = work.key + "/snapshots/" + uuid.uuid4().hex
@@ -904,7 +1015,17 @@ class Runner:
                     "attributable_attempts": ready, "query_complete": snapshot.query_complete,
                     "elapsed_seconds": None,
                 })
-            if extra_poll and snapshot.query_complete or not await self._wait(target, "evidence", deadline, start):
+            if self.runtime.environment == "daily":
+                if ready >= self.settings.readiness_attempts:
+                    if snapshot.query_complete and self._probe_roots_complete(attempts, invocations, snapshot):
+                        return snapshot, artifact
+                    grace_end = self._deadline(
+                        work.records, key + "/grace-deadline", self.settings.daily_evidence_grace_seconds,
+                    )
+                    wait_until = min(deadline, grace_end)
+            elif extra_poll and snapshot.query_complete:
+                return snapshot, artifact
+            if not await self._wait(target, "evidence", wait_until, start):
                 return snapshot, artifact
             extra_poll = ready >= self.settings.readiness_attempts and snapshot.query_complete
 
@@ -1358,7 +1479,8 @@ class Runner:
         agents = tuple(dict.fromkeys(target.unit_id.agent for target in targets))
         if any(not next(target for target in targets if target.unit_id.agent == agent).is_baseline for agent in agents):
             raise QualityError("daily_baseline_must_be_first")
-        prepared, outcomes = {}, {}
+        outcomes = {}
+        assessments = asyncio.Queue()
         lane_limit = asyncio.Semaphore(self.settings.daily_lanes)
         @observe(self.metrics, "lane", "daily", lambda agent: {"lane": agent})
         async def lane(agent: str) -> None:
@@ -1441,10 +1563,15 @@ class Runner:
                                 insight = await self._insights(
                                     target, work, monitor, invocations, evidence_key, prior_end,
                                 )
+                            # Read the immutable completion, never retain provider-owned
+                            # mutable card dictionaries across the next activation.
+                            insight = work.records.read_completed(work.key + "/insights")
                             visible, window = self._engine_visible(
                                 attempts, invocations, self._snapshot(work, insight["visible_snapshot"]), insight,
                             )
-                            prepared[target.key] = (target, work, attempts, invocations, snapshot, visible, insight, window)
+                            assessments.put_nowait((
+                                target, work, attempts, invocations, snapshot, visible, insight, window,
+                            ))
                         except QualityError as error:
                             unit_metric.update(status="failed", error_code=error.code)
                             self._failure(target, error, stage)
@@ -1473,7 +1600,6 @@ class Runner:
                                 or error.code in _INTEGRITY
                                 or self._lane_unresolved(agent)
                             )
-        await self._gather(lane(agent) for agent in agents)
         async def assess(values) -> None:
             target, work, attempts, invocations, snapshot, visible, insight, window = values
             try:
@@ -1494,7 +1620,23 @@ class Runner:
                         key=lambda item: item.value,
                     )),
                 )
-        await self._gather(assess(value) for value in prepared.values())
+        async def assessment_worker() -> None:
+            while (values := await assessments.get()) is not None:
+                target = values[0]
+                with binding(self.metrics, unit=target.key, lane=target.unit_id.agent):
+                    self._check()
+                    await assess(values)
+
+        async def produce() -> None:
+            await self._gather(lane(agent) for agent in agents)
+            for _ in range(self.settings.assessment_workers):
+                assessments.put_nowait(None)
+
+        # Workers belong to the same cancellation tree as lanes. Any fatal
+        # checkpoint failure cancels and drains both before ownership can unwind.
+        await self._gather([
+            produce(), *(assessment_worker() for _ in range(self.settings.assessment_workers)),
+        ])
         self.integrity_failure |= self.run.read_completed("integrity-failure", missing_ok=True) is not None
         with scope(self.metrics, "stage", "report"):
             result = aggregate_results(

@@ -245,7 +245,7 @@ class RunMetrics:
                 "queue": "Time awaiting the existing semaphore or recovery lock.",
                 "reuse": "No fresh call measured; elapsed_seconds is null, never a zero-latency success.",
                 "tokens": "Observed Sol response usage only; absent or invalid fields remain unknown.",
-                "unit": "daily_lane covers that version's lane interval; final assessment is a separate unit stage after all lanes.",
+                "unit": "daily_lane covers that version's lane interval; assessment is a separately bound unit stage overlapping later lane work.",
                 "start": "CLI segment begins after source/plan resolves the run ID; earlier startup is in command-status logs.",
             },
             "totals": {

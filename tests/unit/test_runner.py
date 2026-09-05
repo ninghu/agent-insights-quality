@@ -338,7 +338,7 @@ class Harness:
                 runner.logger.close()
 
 
-def test_end_to_end_five_lanes_baseline_first_and_assessment_after_lanes(tmp_path):
+def test_end_to_end_five_lanes_baseline_first_and_pipelined_assessment(tmp_path):
     h = Harness(tmp_path, agents=5, issues=4, deployment_workers=2)
     result = h.daily()
     assert result.status.value == "Full" and result.score == 100
@@ -347,7 +347,7 @@ def test_end_to_end_five_lanes_baseline_first_and_assessment_after_lanes(tmp_pat
     assert h.cloud.max_deploys == 2
     assert set(h.cloud.resets.values()) == {1}
     events = h.cloud.events
-    assert max(i for i, event in enumerate(events) if event[0] == "poll") < next(
+    assert max(i for i, event in enumerate(events) if event[0] == "poll") > next(
         i for i, event in enumerate(events) if event[0] == "assessment"
     )
     for agent in h.catalog.agents:

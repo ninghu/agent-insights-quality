@@ -124,6 +124,123 @@ def test_private_identity_validation_happens_before_ports(app, arguments):
     assert not app.port_calls
 
 
+@pytest.mark.parametrize("arguments", [
+    ("run-daily", "--fresh-traffic"),
+    ("run-daily", "--fresh-traffic", "--rerun", "5"),
+    ("run-daily", "--fresh-traffic", "--test-run"),
+    ("run-daily", "--fresh-traffic", "--test-run", "--rerun", "0"),
+])
+def test_fresh_traffic_is_explicit_private_nonzero_identity_only(app, arguments):
+    assert app.cli(*arguments) == 2
+    assert not app.port_calls and not app.cloud.invocations
+
+
+def test_fresh_help_explains_new_identity_and_resume():
+    help_text = cli.parser()._subparsers._group_actions[0].choices["run-daily"].format_help()
+    assert "--fresh-traffic" in help_text and "NEW private" in help_text and "frozen intent" in help_text
+
+
+def test_fresh_trial_runs_all_25_units_without_reusing_or_rewriting_prior_run(app, capsys):
+    expectation = app.catalog.targets[0].expectation
+    app.catalog = fake.catalog(app.catalog.root, agents=5, issues=4)
+    app.catalog = fake.replace(app.catalog, targets=tuple(
+        fake.replace(target, expectation=expectation) for target in app.catalog.targets
+    ))
+    assert app.cli("run-daily", "--test-run", "--rerun", "4") == 0
+    n4, _ = last_json(capsys)
+    old = app.store.run(n4["run_id"])
+    before = {path.relative_to(old.directory): path.read_bytes() for path in old.directory.rglob("*") if path.is_file()}
+    old_email = app.store.outbox("email").read(n4["delivery_id"])
+    requests = {item[2] for item in app.cloud.invocations}
+    jobs = {item[2] for item in app.cloud.starts}
+    assert len(requests) == 500 and len(jobs) == 25
+    assert app.cli("run-daily", "--test-run", "--rerun", "5", "--fresh-traffic") == 0
+    n5, _ = last_json(capsys)
+    fresh = app.store.run(n5["run_id"])
+    intent = fresh.read_completed("traffic-intent")
+    metadata = fresh.read_completed("run")
+    assert intent["fresh_traffic"] is True and intent["reuse_run_id"] is None
+    assert metadata["fresh_traffic"] is True and metadata["lane_run_id"] == n5["run_id"]
+    assert len(app.cloud.invocations) == 1000 and len(app.cloud.starts) == 50
+    assert not requests & {item[2] for item in app.cloud.invocations[500:]}
+    assert not jobs & {item[2] for item in app.cloud.starts[25:]}
+    assert set(app.cloud.resets.values()) == {2}
+    for target in app.catalog.targets:
+        binding = fresh.read(f"targets/{target.key}/source")
+        assert binding["traffic_run_id"] == n5["run_id"]
+        assert binding["assessment"]["run_id"] == n5["run_id"]
+    counts = len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls)
+    assert app.cli("run-daily", "--test-run", "--rerun", "5") == 0
+    last_json(capsys)
+    assert app.cli("run-daily", "--test-run", "--rerun", "5", "--fresh-traffic") == 0
+    last_json(capsys)
+    assert (len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls)) == counts
+    assert before == {path.relative_to(old.directory): path.read_bytes() for path in old.directory.rglob("*") if path.is_file()}
+    assert app.store.outbox("email").read(n4["delivery_id"]) == old_email
+    assert not app.store.outbox("events").directory.exists()
+    assert not app.store.outbox("publication").directory.exists()
+
+
+def test_default_trial_reuses_previous_and_cannot_be_restarted_by_fresh_flag(app, capsys):
+    assert app.cli("run-daily", "--test-run", "--rerun", "4") == 0
+    old, _ = last_json(capsys)
+    counts = len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls)
+    assert app.cli("run-daily", "--test-run", "--rerun", "5") == 0
+    reused, _ = last_json(capsys)
+    assert app.store.run(reused["run_id"]).read_completed("run")["reuse_run_id"] == old["run_id"]
+    assert (len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls)) == counts
+    port_count = len(app.port_calls)
+    assert app.cli("run-daily", "--test-run", "--rerun", "5", "--fresh-traffic") == 2
+    assert "run_traffic_intent_mismatch" in capsys.readouterr().err
+    assert len(app.port_calls) == port_count
+    assert (len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls)) == counts
+
+
+def test_fresh_intent_freezes_before_provider_start_and_source_cannot_change(app, monkeypatch, capsys):
+    assert app.cli("run-daily", "--test-run", "--rerun", "4") == 0
+    last_json(capsys)
+    n5 = "daily-" + fake.DAY.isoformat() + "-test-5"
+    attempts = []
+    @asynccontextmanager
+    async def interrupted(catalog, runtime, run_id, assessment):
+        attempts.append(run_id)
+        assert runtime.run(run_id).read_completed("traffic-intent") == {
+            "fresh_traffic": True, "reuse_run_id": None, "source_revision": "a" * 40,
+        }
+        raise OSError("synthetic provider startup interruption")
+        yield
+    assert cli.main(
+        ["run-daily", "--test-run", "--rerun", "5", "--fresh-traffic"],
+        root=app.catalog.root, runtime_factory=lambda profile: RuntimeStore(profile, root=app.store.root),
+        ports=interrupted, today=fake.DAY,
+    ) == 2
+    capsys.readouterr()
+    assert attempts == [n5]
+    monkeypatch.setattr(runner, "source_revision", lambda _: "b" * 40)
+    assert app.cli("run-daily", "--test-run", "--rerun", "5") == 2
+    assert "fresh_resume_source_changed" in capsys.readouterr().err
+    monkeypatch.setattr(runner, "source_revision", lambda _: "a" * 40)
+    assert app.cli("run-daily", "--test-run", "--rerun", "5") == 0
+    last_json(capsys)
+    assert app.store.run(n5).read_completed("run")["fresh_traffic"] is True
+    assert app.store.run(n5).read_completed("run")["reuse_run_id"] is None
+    assert len(app.cloud.invocations) == 200
+
+
+def test_official_new_day_remains_fresh_without_flag(app, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_official_source", lambda _: None)
+    assert app.cli("run-daily") == 0
+    first, _ = last_json(capsys)
+    assert app.cli("run-daily", day=date(2026, 9, 7)) == 0
+    second, _ = last_json(capsys)
+    assert first["run_id"] != second["run_id"]
+    for run_id in (first["run_id"], second["run_id"]):
+        metadata = app.store.run(run_id).read_completed("run")
+        assert metadata["fresh_traffic"] is False and metadata["reuse_run_id"] is None
+        assert metadata["lane_run_id"] == run_id
+    assert len(app.cloud.invocations) == 200 and set(app.cloud.resets.values()) == {2}
+
+
 def test_private_weekend_preserves_actual_date_and_current_candidate(app, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_official_source", lambda _: pytest.fail("Private trial switched to main"))
     weekend = date(2026, 9, 5)
