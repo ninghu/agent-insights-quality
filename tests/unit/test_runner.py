@@ -123,6 +123,7 @@ class Cloud:
         )
         self.events, self.rows, self.invocations = [], [], []
         self.deployments, self.active, self.jobs, self.cards = {}, {}, {}, {}
+        self.successful_windows = {}
         self.resets = Counter()
         self.ready_count = 10
         self.query_complete = True
@@ -226,8 +227,13 @@ class Cloud:
             "request_body": {"lookback_hours": lookback_hours}, "submission_state": "submitting",
         }
         persist(pending)
+        start = self.clock.now() - timedelta(hours=lookback_hours)
+        if monitor in self.successful_windows:
+            start = max(start, self.successful_windows[monitor])
         value = self.jobs.setdefault(operation_id, {
             "id": "job-" + operation_id, "status": "running", "target": target,
+            "window_start": start.isoformat(),
+            "window_end": self.clock.now().isoformat(),
         })
         if self.start_hook:
             self.start_hook(value, persist)
@@ -238,6 +244,7 @@ class Cloud:
         job = next(job for job in self.jobs.values() if job["id"] == run_id)
         self.events.append(("poll", job["target"]))
         if self.poll_status == "succeeded" and not job.get("reported"):
+            self.successful_windows[monitor] = datetime.fromisoformat(job["window_end"])
             if not job["target"].endswith("/v0"):
                 self.cards[monitor].append({
                     "id": job["target"], "title": "Synthetic expected defect",
@@ -246,7 +253,7 @@ class Cloud:
             job["reported"] = True
         return {
             "id": run_id, "status": self.poll_status,
-            "window_start": self.clock.now().isoformat(), "window_end": self.clock.now().isoformat(),
+            "window_start": job["window_start"], "window_end": job["window_end"],
         }
 
 
@@ -739,3 +746,321 @@ def test_daily_requires_baseline_first_even_for_direct_callers(tmp_path):
             asyncio.run(r.run_daily(targets))
         r.logger.close()
     assert not h.cloud.invocations
+
+
+def admission_service(h, *, rejected=0, unknown=0, metadata=True, extra_delay=0):
+    """Model admission-relative lookback and a successful service watermark."""
+    accepted, calls, boundaries = {}, [], {}
+
+    async def start(monitor, lookback_hours, operation_id, persist):
+        nonlocal rejected, unknown
+        target = h.cloud.active[monitor].target_key
+        calls.append((target, operation_id, lookback_hours, h.clock.now()))
+        persist({
+            "monitor_id": monitor, "operation_id": operation_id,
+            "request_body": {"lookback_hours": lookback_hours}, "submission_state": "submitting",
+        })
+        if not target.endswith("/v0") and rejected:
+            rejected -= 1
+            raise QualityError("synthetic_rate_limit", request_accepted=False, retryable=True, status=429)
+        if not target.endswith("/v0") and unknown:
+            unknown -= 1
+            raise QualityError("synthetic_no_response", request_accepted=None, retryable=True)
+        if extra_delay:
+            await h.clock.sleep(extra_delay)
+        if operation_id not in accepted:
+            admitted = h.clock.now()
+            window_start = admitted - timedelta(hours=lookback_hours)
+            if monitor in boundaries:
+                window_start = max(window_start, boundaries[monitor])
+            accepted[operation_id] = {
+                "id": operation_id, "target": target, "admitted": admitted,
+                "window_start": window_start, "window_end": admitted,
+            }
+        value = {"id": operation_id, "status": "running", "submission_state": "accepted"}
+        persist(value)
+        return value
+
+    async def poll(monitor, run_id):
+        job = accepted[run_id]
+        boundaries[monitor] = job["window_end"]
+        rows = [
+            row for row in h.cloud.rows
+            if row["operation_Id"] == "operation-" + job["target"]
+            and job["window_start"] <= datetime.fromisoformat(row["timestamp"]) <= job["window_end"]
+        ]
+        if rows and not job["target"].endswith("/v0"):
+            h.cloud.cards[monitor].append({"id": job["target"], "title": "Synthetic defect"})
+        result = {"id": run_id, "status": "succeeded"}
+        if metadata:
+            result.update(window_start=job["window_start"].isoformat(), window_end=job["window_end"].isoformat())
+        return result
+
+    h.cloud.start_insights, h.cloud.get_insights_run = start, poll
+    return calls, accepted
+
+
+@pytest.mark.parametrize("metadata", [False, True])
+def test_definite_rejections_renew_operation_and_cover_original_traffic_at_admission(tmp_path, metadata):
+    h = Harness(tmp_path)
+    calls, accepted = admission_service(h, rejected=3, metadata=metadata)
+    result = h.daily()
+    issue_calls = [item for item in calls if item[0].endswith("issue-001")]
+    assert len(issue_calls) == 4
+    assert len({item[1] for item in issue_calls}) == 4
+    assert result.status.value == "Full" and result.score == 100
+    job = accepted[issue_calls[-1][1]]
+    probe_times = [
+        datetime.fromisoformat(row["timestamp"]) for row in h.cloud.rows
+        if row["operation_Id"].endswith("issue-001")
+    ]
+    assert job["window_start"] <= min(probe_times)
+    assert len(h.cloud.invocations) == 40
+    payload = next(item for item in h.sol.calls if item["target"]["unit_id"]["logical_version"] == "issue-001")
+    assert payload["engine_started_at"] == job["admitted"].isoformat()
+    assert payload["engine_window"]["coverage_proven"] is True
+
+
+@pytest.mark.parametrize("metadata", [False, True])
+def test_uncertain_post_replays_exact_operation_but_excluded_window_cannot_be_engine_miss(tmp_path, metadata):
+    h = Harness(tmp_path)
+    calls, _ = admission_service(h, unknown=3, metadata=metadata)
+    result = h.daily()
+    issue_calls = [item for item in calls if item[0].endswith("issue-001")]
+    assert len(issue_calls) == 4
+    assert len({(item[1], item[2]) for item in issue_calls}) == 1
+    issue = next(item for item in result.units if item.planned.is_issue)
+    assert issue.scorable is False
+    assert result.score is None
+    assert len(h.cloud.invocations) == 40
+
+
+def test_saved_assessment_is_recovered_if_derived_result_checkpoint_crashes(tmp_path, monkeypatch):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    from agent_insights_quality.state import RecordStore
+    save = RecordStore.save_progress
+    crashed = False
+    def interrupt(records, key, value):
+        nonlocal crashed
+        if key.endswith("/source") and "result" in value and not crashed:
+            crashed = True
+            raise RuntimeError("synthetic crash before derived result")
+        save(records, key, value)
+    monkeypatch.setattr(RecordStore, "save_progress", interrupt)
+    with pytest.raises(RuntimeError, match="derived result"):
+        h.staging()
+    pending = h.store.run("stage").read("targets/" + h.catalog.targets[0].key + "/assessment")
+    assert len(h.cloud.invocations) == 20 and len(h.sol.calls) == 1
+    result = h.staging()
+    assert len(h.cloud.invocations) == 20 and len(h.sol.calls) == 1
+    assert result["results"][0]["assessment"]["artifact"] == pending["artifact"]
+    assert result["results"][0]["status"] == "PASS"
+
+
+def test_unknown_then_definite_rejection_cannot_retire_a_possibly_accepted_operation(tmp_path):
+    h = Harness(tmp_path)
+    calls, _ = admission_service(h)
+    original = h.cloud.start_insights
+    attempted = []
+    async def start(monitor, lookback, operation_id, persist):
+        if h.cloud.active[monitor].target_key.endswith("issue-001"):
+            attempted.append((operation_id, lookback))
+            if len(attempted) == 1:
+                raise QualityError("synthetic_unknown", retryable=True)
+            if len(attempted) == 2:
+                raise QualityError("synthetic_rejected_retry", retryable=True, request_accepted=False)
+        return await original(monitor, lookback, operation_id, persist)
+    h.cloud.start_insights = start
+    result = h.daily()
+    assert len(attempted) == 3 and len(set(attempted)) == 1
+    assert calls[-1][1:3] == attempted[-1]
+    assert result.score is None
+
+
+@pytest.mark.parametrize("metadata", [False, True])
+def test_lost_acceptance_response_keeps_exact_operation_and_truthful_admission_bounds(tmp_path, metadata):
+    h = Harness(tmp_path)
+    calls, accepted = admission_service(h, metadata=metadata)
+    original = h.cloud.start_insights
+    lost = False
+    async def start(monitor, lookback, operation_id, persist):
+        nonlocal lost
+        if not lost and h.cloud.active[monitor].target_key.endswith("issue-001"):
+            lost = True
+            await original(monitor, lookback, operation_id, lambda value: None)
+            raise QualityError("synthetic_lost_response", retryable=True)
+        return await original(monitor, lookback, operation_id, persist)
+    h.cloud.start_insights = start
+    result = h.daily()
+    issue_calls = [item for item in calls if item[0].endswith("issue-001")]
+    assert len(issue_calls) == 2 and issue_calls[0][1:3] == issue_calls[1][1:3]
+    window = next(item["engine_window"] for item in h.sol.calls
+                  if item["target"]["unit_id"]["logical_version"] == "issue-001")
+    if metadata:
+        assert result.score == 100
+        assert window["admission_earliest"] == accepted[issue_calls[0][1]]["admitted"].isoformat()
+    else:
+        assert result.score is None
+        assert window["admission_earliest"] < window["admission_latest"]
+
+
+@pytest.mark.parametrize("window", [
+    {"window_start": "invalid", "window_end": "also invalid"},
+    {"window_start": "2026-09-04T12:00:01+00:00", "window_end": "2026-09-04T12:00:00+00:00"},
+    {"window_start": True, "window_end": 42},
+    {"window_start": "2026-09-04T12:00:00+00:00"},
+])
+def test_optional_invalid_window_metadata_excludes_without_retraffic(tmp_path, window):
+    h = Harness(tmp_path)
+    start = h.cloud.start_insights
+    async def no_metadata(monitor, lookback, operation_id, persist):
+        def stripped(value):
+            return {key: item for key, item in value.items() if key not in {"window_start", "window_end"}}
+        return stripped(await start(monitor, lookback, operation_id, lambda value: persist(stripped(value))))
+    h.cloud.start_insights = no_metadata
+    original = h.cloud.get_insights_run
+    async def poll(monitor, run_id):
+        result = await original(monitor, run_id)
+        return {"id": result["id"], "status": result["status"], **window}
+    h.cloud.get_insights_run = poll
+    result = h.daily()
+    assert result.score is None and result.counts.noise_cards == 0
+    assert len(h.cloud.invocations) == 40
+    assert all("insights_window_metadata_invalid" in call["engine_window"]["reasons"] for call in h.sol.calls)
+
+
+def test_uncertain_engine_window_cannot_create_scored_noise(tmp_path):
+    h = Harness(tmp_path)
+    admission_service(h, unknown=3, metadata=False)
+    original_poll, original_sol = h.cloud.get_insights_run, h.sol.complete_json
+    async def poll(monitor, run_id):
+        value = await original_poll(monitor, run_id)
+        h.cloud.cards[monitor] = [{"id": "synthetic-noise-card-" + run_id}]
+        return value
+    async def sol(**kwargs):
+        value = await original_sol(**kwargs)
+        for card in value["cards"]:
+            if card["core"] == "correct":
+                card.update(core="incorrect", expected_match=False, root_group=None)
+        return value
+    h.cloud.get_insights_run, h.sol.complete_json = poll, sol
+    result = h.daily()
+    issue = next(item for item in result.units if item.planned.is_issue)
+    assert not issue.scorable and issue.counts.noise_cards == 0
+    assert any(not finding.scored for finding in issue.findings)
+
+
+@pytest.mark.parametrize("count", [5, 6])
+def test_engine_window_retains_six_probe_presence_rule(tmp_path, count):
+    from agent_insights_quality.telemetry import Snapshot, ResponseScope
+    h = Harness(tmp_path)
+    runner = h.runner()
+    first = h.clock.now()
+    receipts = {
+        (index, "probe"): Invocation(
+            str(index), str(index), None, (first + timedelta(seconds=index)).isoformat(),
+            (first + timedelta(seconds=index)).isoformat(), "completed", {"output": "synthetic"}, 200,
+        ) for index in range(1, 11)
+    }
+    snapshot = Snapshot(
+        first.isoformat(), first.isoformat(), (first + timedelta(seconds=11)).isoformat(),
+        tuple({"ref": f"row-{index}", "raw": {"timestamp": receipt.started_at}}
+              for (index, _), receipt in receipts.items()),
+        tuple(ResponseScope(str(index), ("one-operation",), (f"row-{index}",), (f"row-{index}",))
+              for index in range(1, 11)), True,
+    )
+    window = {
+        "basis": "bounded_submission", "start_latest": (first + timedelta(seconds=11 - count)).isoformat(),
+        "end_earliest": (first + timedelta(seconds=11)).isoformat(), "reasons": [],
+    }
+    visible, result = runner._engine_visible(attempts(h.catalog.targets[0]), receipts, snapshot, {"engine_window": window})
+    assert result["attributable_probe_attempts"] == count
+    assert result["coverage_proven"] == (count == 6)
+    assert len(visible.scopes) == 10 and len(receipts) == 10
+    runner.logger.close()
+
+
+def test_successful_watermark_limits_the_proven_window_even_with_long_lookback(tmp_path):
+    h = Harness(tmp_path)
+    runner = h.runner()
+    window = runner._engine_window({
+        "started_at": h.clock.now().isoformat(),
+        "submission_timing": {"first_post_at": h.clock.now().isoformat(), "response_at": h.clock.now().isoformat()},
+        "previous_successful_end": (h.clock.now() - timedelta(seconds=1)).isoformat(),
+        "request_body": {"lookback_hours": 0.1},
+    }, {"status": "succeeded"})
+    assert window["start_latest"] == (h.clock.now() - timedelta(seconds=1)).isoformat()
+    runner.logger.close()
+
+
+def test_crash_after_definite_rejection_renews_only_rejected_submission_on_resume(tmp_path, monkeypatch):
+    from agent_insights_quality.state import RecordStore
+    h = Harness(tmp_path)
+    calls, _ = admission_service(h, rejected=1, metadata=False)
+    save = RecordStore.save_progress
+    crashed = False
+    def interrupt(records, key, value):
+        nonlocal crashed
+        save(records, key, value)
+        if key.endswith("/insights/start") and value.get("submission_state") == "rejected" and not crashed:
+            crashed = True
+            raise RuntimeError("synthetic crash after definite rejection")
+    monkeypatch.setattr(RecordStore, "save_progress", interrupt)
+    with pytest.raises(RuntimeError, match="definite rejection"):
+        h.daily()
+    count = len(h.cloud.invocations)
+    h.clock.value += timedelta(hours=1)
+    assert h.daily().score == 100
+    issue_calls = [item for item in calls if item[0].endswith("issue-001")]
+    assert len(issue_calls) == 2 and issue_calls[0][1] != issue_calls[1][1]
+    assert issue_calls[1][2] > issue_calls[0][2]
+    assert len(h.cloud.invocations) == count == 40
+
+
+def test_crash_after_accepted_callback_does_not_restart_or_retimestamp_insights(tmp_path):
+    h = Harness(tmp_path)
+    crashed = False
+    def interrupt(value, persist):
+        nonlocal crashed
+        if value["target"].endswith("issue-001") and not crashed:
+            crashed = True
+            persist(value)
+            raise RuntimeError("synthetic crash after accepted callback")
+    h.cloud.start_hook = interrupt
+    with pytest.raises(RuntimeError, match="accepted callback"):
+        h.daily()
+    calls = len(h.cloud.invocations), len(h.cloud.starts)
+    original_end = next(job["window_end"] for job in h.cloud.jobs.values() if job["target"].endswith("issue-001"))
+    h.clock.value += timedelta(hours=1)
+    assert h.daily().score == 100
+    assert (len(h.cloud.invocations), len(h.cloud.starts)) == calls
+    payload = next(item for item in h.sol.calls if item["target"]["unit_id"]["logical_version"] == "issue-001")
+    assert payload["engine_started_at"] == original_end
+
+
+def test_child_evidence_outside_engine_window_is_retained_but_not_citable_as_visible(tmp_path):
+    from agent_insights_quality.telemetry import Snapshot, ResponseScope
+    h = Harness(tmp_path)
+    r = h.runner()
+    now = h.clock.now()
+    receipt = Invocation("request", "response", None, now.isoformat(), now.isoformat(),
+                         "completed", {"output": "synthetic"}, 200)
+    snapshot = Snapshot(
+        now.isoformat(), (now - timedelta(seconds=1)).isoformat(), (now + timedelta(seconds=20)).isoformat(),
+        (
+            {"ref": "anchor", "raw": {"timestamp": now.isoformat()}},
+            {"ref": "late-child", "raw": {"timestamp": (now + timedelta(seconds=10)).isoformat()}},
+            {"ref": "unknown-time", "raw": {"message": "synthetic"}},
+        ),
+        (ResponseScope("response", ("operation",), ("anchor",), ("anchor", "late-child", "unknown-time")),),
+        True,
+    )
+    visible, _ = r._engine_visible(attempts(h.catalog.targets[0]), {(1, "probe"): receipt}, snapshot, {
+        "engine_window": {
+            "basis": "provider_window", "reasons": [], "start_latest": (now - timedelta(seconds=1)).isoformat(),
+            "end_earliest": (now + timedelta(seconds=1)).isoformat(),
+        },
+    })
+    assert visible.records == snapshot.records
+    assert visible.scopes[0].evidence_refs == ("anchor",)
+    r.logger.close()

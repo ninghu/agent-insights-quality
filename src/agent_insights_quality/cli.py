@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import uuid
 
 from .errors import QualityError
 from .integration import RunIntegration, command_status
@@ -27,6 +28,7 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("generate-docs", help="Generate reviewed catalog views; never alter traffic")
     staging = commands.add_parser("run-staging", help="Run or resume incremental staging")
     staging.add_argument("--full", action="store_true")
+    staging.add_argument("--new-run", action="store_true", help="Start a new full run after the previous full run completed")
     daily = commands.add_parser("run-daily", help="Run or resume today's Daily measurement")
     daily.add_argument("--test-run", action="store_true")
     daily.add_argument("--rerun", type=int, default=0)
@@ -124,10 +126,65 @@ def _artifact_path(records, key: str) -> str:
     return str(records._path("artifacts", key))
 
 
+def _staging_plan(args, catalog, runtime, revision: str, today: date):
+    from .runner import choose_staging
+    from .selection import Selection
+    from .state import StateError
+
+    if args.new_run and not args.full:
+        raise QualityError("staging_new_run_requires_full")
+    key = "full" if args.full else "incremental"
+    active = runtime.outbox("staging").read(key, missing_ok=True)
+    if active is not None:
+        if set(active) != {"run_id", "source_revision", "report_date", "full", "completed"} or (
+            type(active["completed"]) is not bool or active["full"] is not args.full
+        ):
+            raise StateError("staging_resume_invalid")
+        if args.new_run and not active["completed"]:
+            raise QualityError("staging_unfinished_run_exists")
+    if active and active["source_revision"] == revision and not args.new_run:
+        report_date = date.fromisoformat(active["report_date"])
+        records = runtime.run(active["run_id"])
+        saved = records.read_completed("selection")
+        selections = tuple(
+            Selection(catalog.target(item["key"]), item["action"], tuple(item["reasons"]))
+            for item in saved["targets"]
+        )
+        return active, report_date, selections
+    run_id = f"staging-{today.isoformat()}-{revision[:12]}" + ("-full" if args.full else "")
+    run_id += "-" + uuid.uuid4().hex[:8]
+    selections = choose_staging(catalog, runtime, full=args.full)
+    runtime.run(run_id).save_completed("selection", {"targets": [
+        {"key": item.target.key, "action": item.action, "reasons": list(item.reasons)}
+        for item in selections
+    ]})
+    active = {
+        "run_id": run_id, "source_revision": revision, "report_date": today.isoformat(),
+        "full": args.full, "completed": False,
+    }
+    # Publish the resume reference before any provider calls or target work.
+    runtime.outbox("staging").save_progress(key, active)
+    return active, today, selections
+
+
+def _staging_status(runtime, records, active, result, warnings=()):
+    statuses = [item["status"] for item in result["results"]]
+    complete = "INCOMPLETE" not in statuses and not result["integrity_failure"]
+    runtime.outbox("staging").save_progress(
+        "full" if active["full"] else "incremental", {**active, "completed": complete},
+    )
+    return {
+        "run_id": active["run_id"], "profile": "staging", "selected": len(statuses),
+        "report_date": active["report_date"],
+        "statuses": {status: statuses.count(status) for status in ("PASS", "FAIL", "INCOMPLETE")},
+        "result_path": str(records._path("progress", "staging-result")), "warnings": sorted(warnings),
+    }, 0 if complete else 2
+
+
 async def _run(args, catalog, runtime, *, ports, integrations, today: date) -> tuple[dict, int]:
     from .contracts import Environment
-    from .runner import Runner, choose_staging, planned_units, source_revision
-    from .selection import Selection, select_daily
+    from .runner import Runner, planned_units, source_revision
+    from .selection import select_daily
     from .settings import load_assessment_settings, load_settings
 
     is_daily = args.command == "run-daily"
@@ -143,20 +200,12 @@ async def _run(args, catalog, runtime, *, ports, integrations, today: date) -> t
         targets = select_daily(catalog, today, test_run=test_run)
         selections = None
     else:
-        run_id = f"staging-{today.isoformat()}-{revision[:12]}" + ("-full" if args.full else "")
-        records = runtime.run(run_id)
-        saved = records.read_completed("selection", missing_ok=True)
-        if saved is None:
-            selections = choose_staging(catalog, runtime, full=args.full)
-            records.save_completed("selection", {"targets": [
-                {"key": item.target.key, "action": item.action, "reasons": list(item.reasons)}
-                for item in selections
-            ]})
-        else:
-            selections = tuple(Selection(catalog.target(item["key"]), item["action"], tuple(item["reasons"]))
-                               for item in saved["targets"])
+        active, today, selections = _staging_plan(args, catalog, runtime, revision, today)
+        run_id = active["run_id"]
         targets = tuple(item.target for item in selections)
     records = runtime.run(run_id)
+    if not is_daily and active["completed"]:
+        return _staging_status(runtime, records, active, records.read("staging-result"))
     frozen = records.read_completed("delivery-inputs", missing_ok=True) if is_daily else None
     recipient = _recipient(runtime) if is_daily and frozen is None else None
     if frozen is None:
@@ -171,9 +220,9 @@ async def _run(args, catalog, runtime, *, ports, integrations, today: date) -> t
             reuse_run_id = last["run_id"]
     # An empty staging selection has no reason to discover credentials or create providers.
     if not is_daily and not targets:
-        value = {"profile": "staging", "selected": 0, "status": "unchanged"}
+        value = {"profile": "staging", "selected": 0, "status": "unchanged", "results": [], "integrity_failure": False}
         records.save_progress("staging-result", value)
-        return value, 0
+        return _staging_status(runtime, records, active, value)
     async with integrations(
         catalog.root, runtime, run_id, allowed_units=planned_units(targets),
         report_date=today, test_run=test_run,
@@ -213,13 +262,7 @@ async def _run(args, catalog, runtime, *, ports, integrations, today: date) -> t
                     return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
                 result = await runner.run_staging(selections)
                 await integration.finish_publication()
-                statuses = [item["status"] for item in result["results"]]
-                return {
-                    "run_id": run_id, "profile": "staging", "selected": len(selections),
-                    "statuses": {status: statuses.count(status) for status in ("PASS", "FAIL", "INCOMPLETE")},
-                    "result_path": str(records._path("progress", "staging-result")),
-                    "warnings": sorted(integration.warnings),
-                }, 2 if "INCOMPLETE" in statuses or result["integrity_failure"] else 0
+                return _staging_status(runtime, records, active, result, integration.warnings)
             finally:
                 runner.logger.close()
 

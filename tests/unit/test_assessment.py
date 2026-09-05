@@ -148,6 +148,22 @@ def test_raw_payload_expectations_scope_window_and_missing_attempts_survive():
     assert result.status == "PASS"
 
 
+def test_engine_window_provenance_passes_losslessly_to_private_daily_assessment():
+    from agent_insights_quality.assessment_partition import expand_payload, intern_payload
+    data = evidence()
+    sol = Sol()
+    window = {
+        "basis": "bounded_submission", "admission_earliest": ENGINE,
+        "admission_latest": ENGINE, "start_latest": START, "end_earliest": ENGINE,
+        "end_latest": ENGINE, "attributable_probe_attempts": 10, "coverage_proven": True,
+        "reasons": [],
+    }
+    result = daily(data, sol, engine_window=window)
+    assert sol.calls[0]["engine_window"] == window
+    assert result.private_detail["input"]["engine_window"] == window
+    assert expand_payload(intern_payload(result.private_detail["input"])) == result.private_detail["input"]
+
+
 @pytest.mark.parametrize("mode", ["baseline", "deterministic", "model_mediated"])
 def test_six_role_observations_not_ten_perfect_responses(mode):
     result = stage(evidence(mode, missing=(7, 8, 9, 10)))

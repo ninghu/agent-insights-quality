@@ -25,7 +25,7 @@ from .selection import (
 )
 from .settings import RuntimeSettings
 from .state import RecordStore, RuntimeStore, StateError
-from .telemetry import Snapshot, collect_snapshot
+from .telemetry import Snapshot, _flat, collect_snapshot
 from .traffic import load_attempts
 
 _PENDING = {
@@ -684,7 +684,7 @@ class Runner:
             before = {"cards": list(await self.cloud.list_insights(monitor))}
             self._save(work.records, "artifact", base + "/before", before)
         intent = work.records.read(base + "/start", missing_ok=True)
-        if intent is None:
+        def new_intent() -> dict:
             first = min(_datetime(item.started_at) for item in invocations.values())
             start = self.now()
             allowance = 5.0
@@ -693,13 +693,21 @@ class Runner:
                 if gap <= 0:
                     raise QualityError("insights_window_not_isolated")
                 allowance = min(allowance, gap / 2)
-            intent = {
+            boundary = self.lanes.read(
+                f"agents/{target.unit_id.agent}/successful-window", missing_ok=True,
+            )
+            value = {
                 "operation_id": uuid.uuid4().hex, "monitor_id": monitor,
                 "request_body": {"lookback_hours": max((start - first).total_seconds() + allowance, 0.0000001) / 3600},
                 "started_at": start.isoformat(), "visible_snapshot": evidence_key,
                 "requested_window_start": (first - timedelta(seconds=allowance)).isoformat(),
+                "previous_successful_end": boundary["end_latest"] if boundary else None,
+                "submission_state": "prepared", "submission_timing": {"possibly_accepted": False},
             }
-            self._save(work.records, "progress", base + "/start", intent)
+            self._save(work.records, "progress", base + "/start", value)
+            return value
+        if intent is None:
+            intent = new_intent()
         if intent["monitor_id"] != monitor:
             raise StateError("insights_monitor_changed")
         work.records.read_artifact(intent["visible_snapshot"])
@@ -707,10 +715,32 @@ class Runner:
             for field in ("operation_id", "monitor_id", "request_body"):
                 if field in value and value[field] != intent[field]:
                     raise StateError("insights_submission_changed")
+            local = {key: intent[key] for key in (
+                "submission_timing", "started_at", "visible_snapshot",
+                "requested_window_start", "previous_successful_end",
+            ) if key in intent}
             intent.update(value)
+            intent.update(local)
+            if value.get("id") or value.get("submission_state") == "accepted":
+                intent["submission_timing"].setdefault("response_at", self.now().isoformat())
             self._save(work.records, "progress", base + "/start", intent)
         while not intent.get("id"):
             self._check()
+            timing = intent.setdefault("submission_timing", {
+                "possibly_accepted": True, "first_post_at": intent["started_at"],
+            })
+            if intent.get("submission_state") == "rejected" and not timing["possibly_accepted"]:
+                self._save(work.records, "artifact", base + "/rejections/" + intent["operation_id"], intent)
+                if not intent.get("retryable") or not await self._retry(work, base + "/retry", target, "insights"):
+                    raise QualityError(intent["error_code"], request_accepted=False)
+                intent = new_intent()
+                timing = intent["submission_timing"]
+            previously_uncertain = timing["possibly_accepted"]
+            submitted = self.now().isoformat()
+            timing.setdefault("first_post_at", submitted)
+            timing.update(last_post_at=submitted, possibly_accepted=True)
+            intent["submission_state"] = "submitting"
+            self._save(work.records, "progress", base + "/start", intent)
             try:
                 value = await self.cloud.start_insights(
                     monitor, intent["request_body"]["lookback_hours"], intent["operation_id"], persist,
@@ -722,6 +752,15 @@ class Runner:
                 self._fatal(error)
                 if intent.get("id"):
                     break
+                if error.request_accepted is False and not previously_uncertain and "response_at" not in timing:
+                    timing["possibly_accepted"] = False
+                    intent.update(submission_state="rejected", retryable=error.retryable, error_code=error.code)
+                    self._save(work.records, "progress", base + "/start", intent)
+                    continue
+                if error.request_accepted is True:
+                    timing.setdefault("response_at", self.now().isoformat())
+                intent["submission_state"] = "unknown" if error.request_accepted is not True else "accepted"
+                self._save(work.records, "progress", base + "/start", intent)
                 if error.retryable and await self._retry(work, base + "/retry", target, "insights"):
                     continue
                 raise
@@ -750,10 +789,103 @@ class Runner:
             self._save(work.records, "artifact", base + "/after", after)
         completed = {
             "before": before["cards"], "after": after["cards"], "run": result,
-            "started_at": intent["started_at"], "visible_snapshot": intent["visible_snapshot"],
+            "visible_snapshot": intent["visible_snapshot"],
+            "engine_window": self._engine_window(intent, result),
         }
+        completed["started_at"] = completed["engine_window"]["admission_earliest"]
+        self._save(self.lanes, "progress", f"agents/{target.unit_id.agent}/successful-window", {
+            "work_key": work.key, "end_latest": completed["engine_window"]["end_latest"],
+        })
         self._save(work.records, "completed", base, completed)
         return completed
+
+    def _engine_window(self, intent: dict, result: dict) -> dict:
+        timing = intent.get("submission_timing", {})
+        first = _datetime(timing.get("first_post_at", intent["started_at"]))
+        response = _datetime(timing.get("response_at", self.now().isoformat()))
+        lookback = timedelta(hours=intent["request_body"]["lookback_hours"])
+        previous = intent.get("previous_successful_end")
+        latest_start = response - lookback
+        if previous:
+            latest_start = max(latest_start, _datetime(previous))
+        window = {
+            "basis": "bounded_submission", "admission_earliest": first.isoformat(),
+            "admission_latest": response.isoformat(), "start_latest": latest_start.isoformat(),
+            "end_earliest": first.isoformat(), "end_latest": response.isoformat(),
+            "previous_successful_end": previous, "reasons": [],
+        }
+        # Window fields are optional metadata, never a required wire contract.
+        # With only id/status, the response bounds the admission-relative window.
+        provider = intent.get("provider_response", intent)
+        metadata = {**provider, **result}
+        supplied = {key: metadata[key] for key in ("window_start", "window_end") if key in metadata}
+        if supplied:
+            try:
+                lower = _datetime(supplied["window_start"])
+                upper = _datetime(supplied["window_end"])
+                if lower >= upper or previous and lower < _datetime(previous):
+                    raise ValueError("Window ordering")
+            except (KeyError, StateError, ValueError):
+                window["reasons"].append("insights_window_metadata_invalid")
+            else:
+                window.update(
+                    basis="provider_window", admission_earliest=upper.isoformat(),
+                    admission_latest=upper.isoformat(), start_latest=lower.isoformat(),
+                    end_earliest=upper.isoformat(), end_latest=upper.isoformat(),
+                )
+        if response < first:
+            window["reasons"].append("insights_submission_clock_invalid")
+        return window
+
+    def _engine_visible(
+        self, attempts: tuple[Attempt, ...], invocations: Mapping,
+        snapshot: Snapshot, insight: dict,
+    ) -> tuple[Snapshot, dict]:
+        window = dict(insight.get("engine_window") or {})
+        if not window:
+            window = {
+                "basis": "unavailable", "coverage_proven": False,
+                "reasons": ["insights_window_unavailable"],
+            }
+            covered = set()
+        elif window["reasons"]:
+            covered = set()
+        else:
+            lower, upper = _datetime(window["start_latest"]), _datetime(window["end_earliest"])
+            covered = {
+                value.response_id for value in invocations.values()
+                if value.response is not None and value.response_id
+                and lower <= _datetime(value.started_at) <= _datetime(value.completed_at) <= upper
+            }
+        refs = set()
+        if covered:
+            for row in snapshot.records:
+                raw = _flat(row["raw"])
+                timestamp = raw.get("timestamp", raw.get("TimeGenerated", raw.get("Timestamp")))
+                try:
+                    if lower <= _datetime(timestamp) <= upper:
+                        refs.add(row["ref"])
+                except StateError:
+                    # A missing timestamp cannot prove this record was in the
+                    # admitted window; other attributable anchors may still do so.
+                    continue
+        scopes = tuple(
+            replace(
+                scope,
+                anchor_refs=tuple(ref for ref in scope.anchor_refs if ref in refs),
+                evidence_refs=tuple(ref for ref in scope.evidence_refs if ref in refs),
+                reasons=scope.reasons if scope.response_id in covered else (
+                    *scope.reasons, "outside_proven_insights_window",
+                ),
+            )
+            for scope in snapshot.scopes
+        )
+        visible = replace(snapshot, scopes=scopes)
+        window["attributable_probe_attempts"] = self._ready_attempts(attempts, invocations, visible)
+        window["coverage_proven"] = window["attributable_probe_attempts"] >= self.settings.readiness_attempts
+        if not window["coverage_proven"]:
+            window["reasons"] = list(dict.fromkeys([*window["reasons"], "insights_window_coverage_unproven"]))
+        return visible, window
 
     def _failure(self, target: Target, error: QualityError, stage: str) -> None:
         self._fatal(error)
@@ -767,18 +899,52 @@ class Runner:
             self._save(self.run, "artifact", f"targets/{target.key}/errors/{uuid.uuid4().hex}", detail)
         self._save(self.run, "progress", f"targets/{target.key}/failure", value)
 
+    def _apply_assessment(self, target: Target, work: _Work, reference: dict, result: dict) -> None:
+        if self.runtime.environment == "staging":
+            fields = {
+                "result": {key: result[key] for key in ("status", "passing_attempts", "reasons")},
+                "status": result["status"],
+            }
+        else:
+            restore_unit(result["unit_result"])
+            fields = {"result": {key: result[key] for key in ("unit_result", "reasons")}}
+        self._update(
+            target, work, **fields, assessment={"run_id": self.run_id, "artifact": reference["artifact"]},
+            assessed_at=self.now().isoformat(),
+        )
+        self._save(self.run, "progress", f"targets/{target.key}/assessment", {
+            **reference, "status": "applied",
+        })
+
+    def _recover_assessment(self, target: Target, work: _Work) -> bool:
+        reference = self.run.read(f"targets/{target.key}/assessment", missing_ok=True)
+        if not reference or (
+            reference["source_revision"] != self.revision
+            or reference.get("work_key", work.key) != work.key
+            or reference["status"] not in {"pending", "saved"}
+        ):
+            return False
+        result = self.run.read_artifact(reference["artifact"], missing_ok=reference["status"] == "pending")
+        if result is None:
+            return False
+        self._apply_assessment(target, work, reference, result)
+        return True
+
     async def _assess(self, target: Target, work: _Work, operation: Callable[[], Awaitable]) -> dict:
         pending_key = f"targets/{target.key}/assessment"
         pending = self.run.read(pending_key, missing_ok=True)
-        if pending and pending["source_revision"] == self.revision and pending["status"] == "pending":
+        if pending and (
+            pending["source_revision"] == self.revision
+            and pending.get("work_key", work.key) == work.key
+            and pending["status"] in {"pending", "saved"}
+        ):
             artifact = pending["artifact"]
             saved = self.run.read_artifact(artifact, missing_ok=True)
         else:
             artifact = f"targets/{target.key}/assessments/{uuid.uuid4().hex}"
             saved = None
-        self._save(self.run, "progress", pending_key, {
-            "source_revision": self.revision, "artifact": artifact, "status": "pending",
-        })
+        reference = {"source_revision": self.revision, "work_key": work.key, "artifact": artifact}
+        self._save(self.run, "progress", pending_key, {**reference, "status": "pending"})
         if saved is None:
             self._event("started", target, stage="assessment")
             async with self.assessment_limit:
@@ -786,10 +952,8 @@ class Runner:
                 result = await operation()
                 saved = result.to_private_dict()
             self._save(self.run, "artifact", artifact, saved)
-        self._update(target, work, assessment={"run_id": self.run_id, "artifact": artifact})
-        self._save(self.run, "progress", pending_key, {
-            "source_revision": self.revision, "artifact": artifact, "status": "saved",
-        })
+        self._save(self.run, "progress", pending_key, {**reference, "status": "saved"})
+        self._apply_assessment(target, work, reference, saved)
         return saved
 
     async def run_staging(self, selections: tuple[Selection, ...]) -> dict[str, Any]:
@@ -806,8 +970,9 @@ class Runner:
                 try:
                     work = self._binding(target, selection)
                     attempts = self._plan(target, work)
+                    recovered = self._recover_assessment(target, work)
                     prior = self._prior_result(work)
-                    if prior and prior["status"] in {"PASS", "FAIL"}:
+                    if recovered or prior and prior["status"] in {"PASS", "FAIL"}:
                         self._load_traffic(target, work, attempts)
                         self._snapshot(work, work.binding["evidence_key"])
                         self._save(self.runtime.staging_index, "progress", target.key, work.binding)
@@ -831,13 +996,9 @@ class Runner:
                         snapshot, artifact = await self._evidence(target, work, deployment, attempts, invocations)
                         self._update(target, work, evidence_key=artifact)
                     stage = "assessment"
-                    result = await self._assess(target, work, lambda: assess_staging(
+                    await self._assess(target, work, lambda: assess_staging(
                         target, attempts, invocations, snapshot, self.sol,
                     ))
-                    self._update(target, work,
-                                 result={key: result[key] for key in ("status", "passing_attempts", "reasons")},
-                                 status=result["status"],
-                                 assessed_at=self.now().isoformat())
                 except QualityError as error:
                     self._failure(target, error, stage)
                     if work is None:
@@ -874,8 +1035,9 @@ class Runner:
                     try:
                         work = self._binding(target)
                         attempts = self._plan(target, work)
+                        recovered = self._recover_assessment(target, work)
                         prior = self._prior_result(work)
-                        if prior and not prior["unit_result"]["exclusion_reasons"]:
+                        if recovered or prior and not prior["unit_result"]["exclusion_reasons"]:
                             self._load_traffic(target, work, attempts)
                             work.records.read_completed(work.key + "/insights")
                             self._snapshot(work, work.binding["evidence_key"])
@@ -930,8 +1092,10 @@ class Runner:
                             insight = await self._insights(
                                 target, work, monitor, invocations, evidence_key, prior_end,
                             )
-                        visible = self._snapshot(work, insight["visible_snapshot"])
-                        prepared[target.key] = (target, work, attempts, invocations, snapshot, visible, insight)
+                        visible, window = self._engine_visible(
+                            attempts, invocations, self._snapshot(work, insight["visible_snapshot"]), insight,
+                        )
+                        prepared[target.key] = (target, work, attempts, invocations, snapshot, visible, insight, window)
                     except QualityError as error:
                         self._failure(target, error, stage)
                         previous = restore_unit(prior["unit_result"]) if prior else UnitResult(target.unit_id)
@@ -961,17 +1125,14 @@ class Runner:
                         )
         await self._gather(lane(agent) for agent in agents)
         async def assess(values) -> None:
-            target, work, attempts, invocations, snapshot, visible, insight = values
+            target, work, attempts, invocations, snapshot, visible, insight, window = values
             try:
                 result = await self._assess(target, work, lambda: assess_daily(
                     target, attempts, invocations, snapshot, self.sol,
                     before_cards=tuple(insight["before"]), after_cards=tuple(insight["after"]),
-                    engine_started_at=insight["started_at"], visible_snapshot=visible,
+                    engine_started_at=insight["started_at"], visible_snapshot=visible, engine_window=window,
                 ))
                 outcomes[target.key] = restore_unit(result["unit_result"])
-                self._update(target, work,
-                             result={key: result[key] for key in ("unit_result", "reasons")},
-                             assessed_at=self.now().isoformat())
             except QualityError as error:
                 self._failure(target, error, "assessment")
                 prior = self._prior_result(work)

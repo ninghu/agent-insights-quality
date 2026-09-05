@@ -420,3 +420,122 @@ def test_cli_official_flushes_logger_events_during_traffic_and_keeps_work_items_
     assert "Synthetic private quality item" not in json.dumps(app.sol.calls)
     assert "Synthetic private quality item" not in json.dumps(writes)
     assert "Synthetic private quality item" not in json.dumps(client.rows)
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_staging_resume_across_midnight_keeps_original_run_and_completed_traffic(app, monkeypatch, capsys, full):
+    from agent_insights_quality.state import RecordStore
+    app.catalog = fake.replace(app.catalog, targets=app.catalog.targets[:1])
+    app.cloud.environment = fake.replace(app.cloud.environment, profile="staging")
+    monkeypatch.setattr(runner, "choose_staging", lambda catalog, store, full=False: (
+        runner.Selection(catalog.targets[0], "traffic", ("full",) if full else ("missing",)),
+    ))
+    save = RecordStore.save_progress
+    broken = False
+    def interrupt(records, key, value):
+        nonlocal broken
+        if records.directory.name == "last-tests" and not broken:
+            broken = True
+            raise RuntimeError("synthetic crash before last-test index")
+        save(records, key, value)
+    monkeypatch.setattr(RecordStore, "save_progress", interrupt)
+    arguments = ("run-staging", "--full") if full else ("run-staging",)
+    with pytest.raises(RuntimeError, match="last-test"):
+        app.cli(*arguments)
+    assert len(app.cloud.invocations) == 20 and len(app.sol.calls) == 1
+    previous_run = app.port_calls[0][0]
+    assert app.cli(*arguments, day=date(2026, 9, 5)) == 0
+    value, _ = last_json(capsys)
+    assert value["run_id"] == previous_run
+    assert len(app.cloud.invocations) == 20 and len(app.sol.calls) == 1
+    records = RuntimeStore("staging", root=app.store.root).run(previous_run)
+    assert records.read_completed("run")["report_date"] == fake.DAY.isoformat()
+
+
+def test_completed_full_staging_needs_explicit_new_run_for_fresh_traffic(app, monkeypatch, capsys):
+    app.catalog = fake.replace(app.catalog, targets=app.catalog.targets[:1])
+    app.cloud.environment = fake.replace(app.cloud.environment, profile="staging")
+    monkeypatch.setattr(runner, "choose_staging", lambda catalog, store, full=False: (
+        runner.Selection(catalog.targets[0], "traffic", ("full",)),
+    ))
+    assert app.cli("run-staging", "--full") == 0
+    first, _ = last_json(capsys)
+    calls = len(app.cloud.invocations), len(app.sol.calls), len(app.port_calls)
+    assert app.cli("run-staging", "--full", day=date(2026, 9, 5)) == 0
+    resumed, _ = last_json(capsys)
+    assert resumed["run_id"] == first["run_id"] and resumed["report_date"] == fake.DAY.isoformat()
+    assert (len(app.cloud.invocations), len(app.sol.calls), len(app.port_calls)) == calls
+    assert app.cli("run-staging", "--full", "--new-run", day=date(2026, 9, 5)) == 0
+    fresh, _ = last_json(capsys)
+    assert fresh["run_id"] != first["run_id"] and fresh["report_date"] == "2026-09-05"
+    assert len(app.cloud.invocations) == calls[0] + 20
+
+
+def test_full_staging_midnight_recovery_retains_already_finished_units(app, monkeypatch, capsys):
+    from agent_insights_quality.state import RecordStore
+    app.catalog = fake.replace(app.catalog, targets=app.catalog.targets[:2])
+    app.cloud.environment = fake.replace(app.cloud.environment, profile="staging")
+    settings = app.catalog.root / "config"
+    settings.mkdir(parents=True)
+    (settings / "runtime.json").write_text(json.dumps({"staging_workers": 1, "hydration_seconds": 0}))
+    monkeypatch.setattr(runner, "choose_staging", lambda catalog, store, full=False: tuple(
+        runner.Selection(target, "traffic", ("full",)) for target in catalog.targets
+    ))
+    save = RecordStore.save_progress
+    crashed = False
+    def interrupt(records, key, value):
+        nonlocal crashed
+        if records.directory.name == "last-tests" and key == app.catalog.targets[1].key and not crashed:
+            crashed = True
+            raise RuntimeError("synthetic crash with baseline already indexed")
+        save(records, key, value)
+    monkeypatch.setattr(RecordStore, "save_progress", interrupt)
+    with pytest.raises(RuntimeError, match="already indexed"):
+        app.cli("run-staging", "--full")
+    calls = len(app.cloud.invocations), len(app.sol.calls)
+    assert calls == (40, 2)
+    previous_run = app.port_calls[0][0]
+    assert app.cli("run-staging", "--full", "--new-run") == 2
+    assert "staging_unfinished_run_exists" in capsys.readouterr().err
+    assert app.cli("run-staging", "--full", day=date(2026, 9, 5)) == 0
+    result, _ = last_json(capsys)
+    assert result["run_id"] == previous_run and result["statuses"]["PASS"] == 2
+    assert (len(app.cloud.invocations), len(app.sol.calls)) == calls
+
+
+def test_staging_source_changes_do_not_reuse_another_source_active_reference(app, monkeypatch, capsys):
+    app.catalog = fake.replace(app.catalog, targets=app.catalog.targets[:1])
+    app.cloud.environment = fake.replace(app.cloud.environment, profile="staging")
+    monkeypatch.setattr(runner, "choose_staging", lambda catalog, store, full=False: (
+        runner.Selection(catalog.targets[0], "traffic", ("deployment_changed",)),
+    ))
+    assert app.cli("run-staging") == 0
+    first, _ = last_json(capsys)
+    monkeypatch.setattr(runner, "source_revision", lambda _: "b" * 40)
+    assert app.cli("run-staging") == 0
+    second, _ = last_json(capsys)
+    assert second["run_id"] != first["run_id"]
+    assert len(app.cloud.invocations) == 40
+
+
+def test_missing_active_staging_selection_fails_closed_before_provider_calls(app, monkeypatch, capsys):
+    from agent_insights_quality.state import RecordStore
+    app.cloud.environment = fake.replace(app.cloud.environment, profile="staging")
+    save = RecordStore.save_completed
+    def interrupt(records, key, value):
+        if key == "run":
+            raise RuntimeError("synthetic early crash")
+        return save(records, key, value)
+    monkeypatch.setattr(RecordStore, "save_completed", interrupt)
+    monkeypatch.setattr(runner, "choose_staging", lambda catalog, store, full=False: (
+        runner.Selection(catalog.targets[0], "traffic", ("missing",)),
+    ))
+    with pytest.raises(RuntimeError, match="early crash"):
+        app.cli("run-staging")
+    staging = RuntimeStore("staging", root=app.store.root)
+    active = staging.outbox("staging").read("incremental")
+    staging.run(active["run_id"])._path("completed", "selection").unlink()
+    calls = len(app.port_calls)
+    assert app.cli("run-staging", day=date(2026, 9, 5)) == 2
+    assert "state_record_missing" in capsys.readouterr().err
+    assert len(app.port_calls) == calls and not app.cloud.invocations

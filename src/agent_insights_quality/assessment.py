@@ -647,6 +647,7 @@ async def assess_daily(
     *, before_cards: tuple[Mapping[str, Any], ...],
     after_cards: tuple[Mapping[str, Any], ...], engine_started_at: str,
     visible_snapshot: Snapshot | None = None, cards_complete: bool = True,
+    engine_window: Mapping[str, Any] | None = None,
     max_payload_bytes: int = 2_000_000,
 ) -> DailyAssessment:
     """Return a private assessment and public-vocabulary whole-unit result.
@@ -666,6 +667,7 @@ async def assess_daily(
         "card_snapshots": {"before": before_cards, "after": after_cards},
         "cards_complete": cards_complete, "engine_started_at": engine_started_at,
         "visible_snapshot": visible_snapshot.to_private_dict(),
+        **({"engine_window": _json_copy(engine_window)} if engine_window is not None else {}),
     })
     detail = {"input": payload, "initial": None, "review": None, "resolved": None}
     exclusions, reasons = set(), set()
