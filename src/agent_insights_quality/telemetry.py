@@ -17,6 +17,7 @@ _RESPONSE_FIELDS = (
     "azure.ai.agentserver.response_id",
     "response_id",
 )
+_HOST_RESPONSE_FIELDS = ("azure.ai.agentserver.response_id", "response_id")
 
 
 class QueryPort(Protocol):
@@ -137,6 +138,20 @@ def _values(properties: Mapping[str, Any], names: Iterable[str]) -> set[str]:
     return {value for name in names if (value := _string(properties.get(name)))}
 
 
+def _host_context(row: Mapping[str, Any], properties: Mapping[str, Any]) -> dict[str, set[str]]:
+    return {
+        **{
+            name: _values(properties, (name,))
+            for name in (
+                "azure.ai.agentserver.session_id",
+                "azure.ai.agentserver.conversation_id",
+                "gen_ai.agent.id",
+            )
+        },
+        "cloud_RoleInstance": _values(row, ("cloud_RoleInstance",)),
+    }
+
+
 @dataclass
 class _Node:
     operation: str
@@ -145,14 +160,29 @@ class _Node:
     agents: set[str] = field(default_factory=set)
     versions: set[str] = field(default_factory=set)
     responses: set[str] = field(default_factory=set)
+    host_responses: set[str] = field(default_factory=set)
     operations: set[str] = field(default_factory=set)
     refs: set[str] = field(default_factory=set)
+    host_context: dict[str, set[str]] = field(default_factory=dict)
 
     @property
     def conflicting(self) -> bool:
         return any(len(values) > 1 for values in (
             self.parents, self.agents, self.versions, self.operations,
         ))
+
+
+@dataclass(frozen=True)
+class _Record:
+    ref: str
+    row: dict[str, Any]
+    operation: str
+    associated: str
+    responses: set[str]
+    host_responses: set[str]
+    agents: set[str]
+    versions: set[str]
+    host_context: dict[str, set[str]]
 
 
 @dataclass(frozen=True)
@@ -269,7 +299,8 @@ def correlate(
         for index, row in enumerate(records, 1)
     )
     nodes: dict[tuple[str, str], _Node] = {}
-    normalized: list[tuple[str, dict[str, Any], str, str, set[str], set[str]]] = []
+    normalized: list[_Record] = []
+    host_claims: dict[tuple[str, str], set[str]] = defaultdict(set)
     problems = set(gaps)
     for item in raw_records:
         row = _flat(item["raw"])
@@ -280,6 +311,10 @@ def correlate(
             problems.add("telemetry_properties_invalid")
             properties = {}
         responses = _values(properties, _RESPONSE_FIELDS)
+        explicit_host = _values(properties, _HOST_RESPONSE_FIELDS)
+        agents = _values(properties, ("gen_ai.agent.name", "agent.name"))
+        versions = _values(properties, ("gen_ai.agent.version", "agent.version"))
+        host_context = _host_context(row, properties)
         table = _table(row)
         span = _string(row.get("id", row.get("Id", "")))
         parent = _string(row.get("operation_ParentId", row.get("ParentId", "")))
@@ -289,24 +324,28 @@ def correlate(
             node = nodes.setdefault((operation, span), _Node(operation, span))
             node.refs.add(item["ref"])
             node.parents.update({parent} if parent else set())
-            node.agents.update(_values(properties, ("gen_ai.agent.name", "agent.name")))
-            node.versions.update(_values(properties, ("gen_ai.agent.version", "agent.version")))
+            node.agents.update(agents)
+            node.versions.update(versions)
             node.responses.update(responses)
+            node.host_responses.update(explicit_host)
             node.operations.update(_values(properties, ("gen_ai.operation.name",)))
+            for name, values in host_context.items():
+                node.host_context.setdefault(name, set()).update(values)
         elif table == "genaicontent":
             associated = _string(row.get("SpanId", row.get("span_id", span)))
         else:
             associated = parent or _string(properties.get("span_id"))
-        explicit_host = _values(
-            properties, ("azure.ai.agentserver.response_id", "response_id"),
-        )
-        normalized.append(
-            (item["ref"], row, operation, associated, responses, explicit_host)
-        )
+        host_claims[(operation, associated)].update(explicit_host)
+        normalized.append(_Record(
+            item["ref"], row, operation, associated, responses, explicit_host,
+            agents, versions, host_context,
+        ))
 
     children: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
+    declared_children: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
     for key, node in nodes.items():
         for parent in node.parents:
+            declared_children[(node.operation, parent)].add(key)
             if (node.operation, parent) in nodes:
                 children[(node.operation, parent)].add(key)
 
@@ -365,12 +404,12 @@ def correlate(
     scopes: list[ResponseScope] = []
     for reference in references:
         seeds = {
-            (operation, associated)
-            for _, _, operation, associated, matches, host_matches in normalized
-            if reference in matches and (operation, associated) in nodes
+            (record.operation, record.associated)
+            for record in normalized
+            if reference in record.responses and (record.operation, record.associated) in nodes
             and (
-                reference in host_matches
-                or not nodes[(operation, associated)].operations & {"chat", "execute_tool"}
+                reference in record.host_responses
+                or not nodes[(record.operation, record.associated)].operations & {"chat", "execute_tool"}
             )
         }
         related: set[tuple[str, str]] = set()
@@ -405,12 +444,76 @@ def correlate(
             reasons.add("span_identity_conflict")
         if any(cyclic(key) for key in scope_nodes):
             reasons.add("span_parent_cycle")
-        evidence = {
-            record_ref
-            for record_ref, _, operation, associated, matches, _ in normalized
-            if (operation, associated) in scope_nodes | context_nodes
-            and not matches & known - {reference}
+        invocation_instances = {
+            instance
+            for key in scope_nodes
+            if nodes[key].operations == {"invoke_agent"} and identity_matches(nodes[key])
+            for instance in nodes[key].host_context.get("cloud_RoleInstance", set())
         }
+
+        def compatible_log(record: _Record) -> bool:
+            if (
+                record.host_responses and record.host_responses != {reference}
+                or record.agents and record.agents != {deployment.agent_name}
+                or record.versions and record.versions != {deployment.provider_version}
+            ):
+                return False
+            instances = record.host_context["cloud_RoleInstance"]
+            # The hosting root and its nested framework invocation may run on different hosts.
+            if instances and invocation_instances and not instances <= invocation_instances:
+                return False
+            lineage = ancestors((record.operation, record.associated)) & scope_nodes
+            for key in outer | lineage:
+                if key[0] != record.operation:
+                    continue
+                owner = nodes[key]
+                if (
+                    not identity_matches(owner)
+                    or owner.host_responses and owner.host_responses != {reference}
+                    or any(len(values) > 1 for values in owner.host_context.values())
+                ):
+                    return False
+                for name, values in record.host_context.items():
+                    if name == "cloud_RoleInstance":
+                        continue
+                    expected = owner.host_context.get(name, set())
+                    if len(values) > 1 or len(expected) > 1 or values and expected and values != expected:
+                        return False
+            return True
+
+        def exact_host_orphan(record: _Record) -> bool:
+            key = (record.operation, record.associated)
+            if (
+                reasons or len(outer) != 1 or not record.associated or key in nodes
+                or record.host_responses != {reference}
+                or record.agents != {deployment.agent_name}
+                or record.versions != {deployment.provider_version}
+                or host_claims[key] != {reference}
+                or declared_children[key] - scope_nodes
+            ):
+                return False
+            anchor = nodes[next(iter(outer))]
+            if (
+                record.operation != anchor.operation
+                or anchor.agents != record.agents or anchor.versions != record.versions
+            ):
+                return False
+            return True
+
+        evidence = set()
+        for record in normalized:
+            if record.responses & known - {reference}:
+                continue
+            in_graph = (record.operation, record.associated) in scope_nodes | context_nodes
+            if _table(record.row) == "traces":
+                if not compatible_log(record):
+                    continue
+                if not in_graph and exact_host_orphan(record):
+                    # Keep the raw log and its absent parent; it is not a synthetic span/edge.
+                    evidence.add(record.ref)
+                    problems.add("attributed_log_parent_missing")
+            if in_graph:
+                evidence.add(record.ref)
         scopes.append(ResponseScope(
             response_id=reference,
             operation_ids=tuple(sorted({key[0] for key in outer})),
