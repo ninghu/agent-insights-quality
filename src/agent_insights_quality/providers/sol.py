@@ -4,8 +4,10 @@ import asyncio
 import json
 import math
 import re
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import UTC
 from email.utils import format_datetime, parsedate_to_datetime
@@ -15,6 +17,7 @@ from jsonschema import Draft202012Validator, SchemaError, ValidationError
 
 from agent_insights_quality.contracts import Environment, JsonObject
 from agent_insights_quality.errors import QualityError
+from agent_insights_quality.state import StateError
 from agent_insights_quality.providers.transport import (
     AzureHttpTransport,
     HttpResponse,
@@ -166,6 +169,7 @@ class AzureSol:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
+        observer: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         if not deployment or not 1 <= attempts <= 5:
             raise QualityError("sol_configuration_invalid")
@@ -183,6 +187,71 @@ class AzureSol:
         self._cooldown_response: HttpResponse | None = None
         self._recovery_gate = asyncio.Lock()
         self._recovery_calls = 0
+        self.observer = observer
+        self.observer_warnings: set[str] = set()
+
+    def _notify(self, event: Mapping[str, Any]) -> None:
+        if self.observer is None:
+            return
+        try:
+            self.observer(event)
+        except (StateError, OSError):
+            self.observer_warnings.add("performance_persistence_failed")
+            try:
+                sys.stderr.write("WARNING performance_persistence_failed\n")
+            except (OSError, ValueError):
+                pass
+
+    @contextmanager
+    def _observed(self, kind: str, **fields):
+        if self.observer is None:
+            yield {}
+            return
+        started = self._monotonic()
+        event = {"kind": kind, "status": "completed", **fields}
+        self._notify({"kind": kind, "status": "started"})
+        try:
+            yield event
+        except BaseException as error:
+            event["status"] = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
+            if isinstance(error, QualityError):
+                event["request_accepted"] = error.request_accepted
+                event["http_status"] = error.status
+            raise
+        finally:
+            event["elapsed_seconds"] = self._monotonic() - started
+            self._notify(event)
+
+    async def _send_request(self, body: JsonObject) -> HttpResponse:
+        with self._observed("sol_http", request_accepted=None) as observation:
+            response = await self._client.request(
+                "POST", "/openai/v1/responses", body, api_version=None,
+            )
+            accepted = True if 200 <= response.status < 300 else (
+                False if 400 <= response.status < 500 and response.status != 408 else None
+            )
+            observation.update(
+                http_status=response.status, request_accepted=accepted,
+                status="accepted" if accepted else "rejected" if accepted is False else "unknown",
+            )
+        if self.observer is not None:
+            try:
+                value = response.object()
+            except QualityError:
+                value = {}
+            usage = value.get("usage")
+            usage = usage if isinstance(usage, Mapping) else {}
+            observed = {
+                field: value if type(value := usage.get(field)) is int and 0 <= value < 2**63 else None
+                for field in ("input_tokens", "output_tokens")
+            }
+            known = sum(value is not None for value in observed.values())
+            self._notify({
+                "kind": "sol_usage", "status": "observed", "http_status": response.status,
+                "usage_status": "known" if known == 2 else "partial" if known else "unknown",
+                **observed,
+            })
+        return response
 
     def _throttled(self, response: HttpResponse) -> None:
         until = self._monotonic() + _retry_delay(response, self._wall_clock())
@@ -216,7 +285,8 @@ class AzureSol:
                 raise self._wait_error("server_wait_exceeds_limit", sent)
             if delay > deadline - now:
                 raise self._wait_error("total_wait_budget", sent)
-            await self.sleep(delay)
+            with self._observed("sol_cooldown", requested_seconds=delay):
+                await self.sleep(delay)
             if self._monotonic() <= now:
                 raise self._wait_error("clock_did_not_advance", sent)
         raise self._wait_error("cooldown_extension_limit", sent)
@@ -226,9 +296,7 @@ class AzureSol:
         sent = 0
         response = None
         if self._cooldown_response is None:
-            response = await self._client.request(
-                "POST", "/openai/v1/responses", body, api_version=None,
-            )
+            response = await self._send_request(body)
             sent = 1
             if response.status != 429:
                 return response
@@ -246,15 +314,14 @@ class AzureSol:
             if remaining <= 0:
                 raise self._wait_error("total_wait_budget", sent)
             try:
-                await asyncio.wait_for(self._recovery_gate.acquire(), timeout=remaining)
+                with self._observed("sol_recovery_queue"):
+                    await asyncio.wait_for(self._recovery_gate.acquire(), timeout=remaining)
             except TimeoutError:
                 raise self._wait_error("queue_wait_budget", sent) from None
             acquired = True
             while sent < self.attempts:
                 await self._wait_for_cooldown(deadline, sent)
-                response = await self._client.request(
-                    "POST", "/openai/v1/responses", body, api_version=None,
-                )
+                response = await self._send_request(body)
                 sent += 1
                 if response.status != 429:
                     return response

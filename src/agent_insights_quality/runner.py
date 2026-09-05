@@ -15,6 +15,7 @@ from .catalogs import Catalog
 from .contracts import Attempt, CloudPort, Deployment, Invocation, SolPort, Step, Target
 from .errors import QualityError
 from .events import RunLogger
+from .performance import ObservedCloud, ObservedSol, RunMetrics, binding, limited, measure, observe, scope
 from .registry import DeploymentRegistry
 from .results import (
     CardVerdict, Contribution, CoreVerdict, DiagnosticVerdict, ExclusionReason,
@@ -291,6 +292,7 @@ class Runner:
         changes_since: Callable[[str], SourceChanges] | None = None,
         event_outbox: Callable[[dict[str, Any]], None] | None = None,
         staging_policy_migration: StagingPolicyMigration | None = None,
+        metrics: RunMetrics | None = None,
     ) -> None:
         if runtime.environment != cloud.environment.profile:
             raise QualityError("runner_environment_mismatch")
@@ -309,8 +311,13 @@ class Runner:
         self.staging_policy_migration = staging_policy_migration
         self.catalog, self.runtime, self.run_id = catalog, runtime, run_id
         self.run = runtime.run(run_id)
-        self.cloud, self.sol, self.registry = cloud, sol, registry
+        self.metrics = metrics
+        self.cloud = ObservedCloud(cloud, metrics) if metrics is not None else cloud
+        self.sol = ObservedSol(sol, metrics) if metrics is not None else sol
+        self.registry = registry
         self.settings = settings or RuntimeSettings()
+        if self.metrics:
+            self.metrics.configuration = self.settings.to_dict()
         self.test_run, self.rerun, self.reuse_run_id = test_run, rerun, reuse_run_id
         self.revision = revision or source_revision(catalog)
         self.now, self.monotonic, self.sleep = now, monotonic, sleep
@@ -556,7 +563,8 @@ class Runner:
         if remaining <= 0:
             return False
         self._event("heartbeat", target, stage=stage)
-        await self.sleep(min(self.settings.poll_interval_seconds, remaining))
+        with scope(self.metrics, "wait", "hydration" if stage == "evidence" else "poll", stage=stage):
+            await self.sleep(min(self.settings.poll_interval_seconds, remaining))
         self._check()
         return True
 
@@ -568,16 +576,20 @@ class Runner:
             return False
         self._save(work.records, "progress", key, {"retries": count + 1})
         self._event("retry", target, stage=stage, counters={"retry_count": count + 1})
-        await self.sleep(min(
-            self.settings.retry_backoff_seconds * 2**count,
-            self.settings.retry_max_backoff_seconds,
-        ))
+        with scope(self.metrics, "wait", "retry_backoff", stage=stage):
+            await self.sleep(min(
+                self.settings.retry_backoff_seconds * 2**count,
+                self.settings.retry_max_backoff_seconds,
+            ))
         self._check()
         return True
 
+    @measure("stage", "deployment")
     async def _deployment(self, target: Target, work: _Work) -> Deployment:
         key = work.key + "/deployment"
         if work.records.read_completed(work.key + "/traffic-done", missing_ok=True):
+            if self.metrics:
+                self.metrics.reuse("stage", "deployment")
             return Deployment(**work.records.read(key))
         self._event("started", target, stage="deployment")
         raw = work.records.read(key, missing_ok=True)
@@ -585,7 +597,7 @@ class Runner:
         revision = self.deployment_source(target)
         deadline = self._deadline(work.records, key + "/deadline", self.settings.poll_timeout_seconds)
         start = self.monotonic()
-        async with self.deploy_limit:
+        async with limited(self.metrics, self.deploy_limit, "deployment"):
             while True:
                 def persist(value: Deployment) -> None:
                     nonlocal existing
@@ -625,10 +637,14 @@ class Runner:
 
     async def _session(self, target: Target, work: _Work, deployment: Deployment, index: int) -> str | None:
         if target.is_prompt:
+            if self.metrics:
+                self.metrics.reuse("port_call", "create_session", skipped=True)
             return None
         key = work.key + f"/traffic/attempt-{index:02d}/session"
         saved = work.records.read(key, missing_ok=True)
         if saved and saved["status"] == "ready":
+            if self.metrics:
+                self.metrics.reuse("port_call", "create_session")
             return saved["session_id"]
         if saved and saved["status"] != "rejected":
             raise QualityError("session_outcome_unresolved")
@@ -659,6 +675,7 @@ class Runner:
                         continue
                 raise
 
+    @measure("turn", "invoke")
     async def _invoke(
         self, target: Target, work: _Work, deployment: Deployment, attempt: Attempt,
         step: Step, session: str | None, previous: str | None,
@@ -666,6 +683,8 @@ class Runner:
         key = work.key + f"/traffic/attempt-{attempt.index:02d}/{step.step_id}"
         raw = work.records.read(key, missing_ok=True)
         if raw and raw["status"] != "blocked":
+            if self.metrics:
+                self.metrics.reuse("turn", "invoke", receipt_status=raw["status"])
             receipt = Invocation(**raw)
             if receipt.status == "submitting":
                 receipt = replace(receipt, status="unknown", completed_at=self.now().isoformat(),
@@ -735,6 +754,19 @@ class Runner:
         self._save(work.records, "completed", work.key + "/plan", execution)
         return attempts
 
+    def _reused_traffic(self, target: Target, attempts: tuple[Attempt, ...], invocations: Mapping) -> None:
+        if self.metrics:
+            with binding(self.metrics, unit=target.key, lane=target.unit_id.agent):
+                for attempt in attempts:
+                    self.metrics.reuse("attempt", "traffic", attempt=attempt.index)
+                    for step in attempt.steps:
+                        value = invocations.get((attempt.index, step.step_id))
+                        self.metrics.reuse(
+                            "turn", "invoke", attempt=attempt.index, turn=step.step_id,
+                            receipt_status=value.status if value else "missing",
+                        )
+
+    @measure("stage", "traffic")
     async def _traffic(
         self, target: Target, work: _Work, deployment: Deployment, attempts: tuple[Attempt, ...],
     ) -> dict:
@@ -742,39 +774,53 @@ class Runner:
             invocations = self._load_traffic(target, work, attempts)
             if len(invocations) != sum(len(item.steps) for item in attempts):
                 raise StateError("traffic_checkpoint_missing")
+            if self.metrics:
+                self.metrics.reuse("stage", "traffic")
+                self._reused_traffic(target, attempts, invocations)
             return invocations
         self._event("started", target, stage="traffic")
         self._check()
         await self.cloud.activate(deployment)
         invocations = {}
         for attempt in attempts:
-            previous, session, blocked = None, None, None
-            try:
-                session = await self._session(target, work, deployment, attempt.index)
-            except QualityError as error:
-                self._fatal(error)
-                self._failure(target, error, "traffic")
-                if error.code in _INTEGRITY:
-                    raise
-                blocked = error.code
-            for step in attempt.steps:
-                if blocked:
-                    key = work.key + f"/traffic/attempt-{attempt.index:02d}/{step.step_id}"
-                    saved = work.records.read(key, missing_ok=True)
-                    receipt = Invocation(**saved) if saved else Invocation(
-                        uuid.uuid4().hex, None, session, self.now().isoformat(),
-                        self.now().isoformat(), "blocked", error_code=blocked,
-                    )
-                    self._save(work.records, "progress", key, asdict(receipt))
-                else:
-                    receipt = await self._invoke(target, work, deployment, attempt, step, session, previous)
-                invocations[(attempt.index, step.step_id)] = receipt
-                self._event("checkpoint", target, stage="traffic", attempt=attempt.index)
-                if receipt.response is None or target.is_prompt and not receipt.response_id:
-                    blocked = "conversation_continuation_unavailable"
-                if receipt.error_code == "invocation_response_pending":
-                    blocked = "invocation_outcome_unresolved"
-                previous = receipt.response_id
+            with binding(self.metrics, attempt=attempt.index), scope(self.metrics, "attempt", "traffic") as measured:
+                previous, session, blocked = None, None, None
+                try:
+                    session = await self._session(target, work, deployment, attempt.index)
+                except QualityError as error:
+                    self._fatal(error)
+                    self._failure(target, error, "traffic")
+                    if error.code in _INTEGRITY:
+                        raise
+                    blocked = error.code
+                for step in attempt.steps:
+                    if blocked:
+                        key = work.key + f"/traffic/attempt-{attempt.index:02d}/{step.step_id}"
+                        saved = work.records.read(key, missing_ok=True)
+                        receipt = Invocation(**saved) if saved else Invocation(
+                            uuid.uuid4().hex, None, session, self.now().isoformat(),
+                            self.now().isoformat(), "blocked", error_code=blocked,
+                        )
+                        self._save(work.records, "progress", key, asdict(receipt))
+                        if self.metrics:
+                            self.metrics.reuse(
+                                "turn", "invoke", skipped=True, turn=step.step_id, receipt_status=receipt.status,
+                            )
+                            self.metrics.increment_scope("attempt", "traffic", "skipped_turns")
+                    else:
+                        receipt = await self._invoke(target, work, deployment, attempt, step, session, previous)
+                    invocations[(attempt.index, step.step_id)] = receipt
+                    self._event("checkpoint", target, stage="traffic", attempt=attempt.index)
+                    if receipt.status != "completed":
+                        measured["status"] = receipt.status
+                    if receipt.response is None or target.is_prompt and not receipt.response_id:
+                        blocked = "conversation_continuation_unavailable"
+                    if receipt.error_code == "invocation_response_pending":
+                        blocked = "invocation_outcome_unresolved"
+                    previous = receipt.response_id
+                if self.metrics and not measured.get("fresh_turns"):
+                    measured["receipt_status"] = measured["status"]
+                    measured["status"] = "reused" if measured.get("reused_turns") else "skipped"
         if all(item.status != "blocked" for item in invocations.values()):
             self._save(work.records, "completed", work.key + "/traffic-done", {"completed": True})
         return invocations
@@ -789,6 +835,7 @@ class Runner:
             for step in attempt.steps
         ) for attempt in attempts)
 
+    @measure("stage", "evidence")
     async def _evidence(
         self, target: Target, work: _Work, deployment: Deployment,
         attempts: tuple[Attempt, ...], invocations: Mapping,
@@ -800,7 +847,7 @@ class Runner:
         while True:
             self._check()
             try:
-                async with self.query_limit:
+                async with limited(self.metrics, self.query_limit, "evidence_query"):
                     snapshot = await collect_snapshot(
                         self.cloud, deployment, invocations.values(), observed_at=self.now(),
                     )
@@ -813,6 +860,12 @@ class Runner:
             self._save(work.records, "artifact", artifact, snapshot.to_private_dict())
             self._save(work.records, "progress", key, {"artifact": artifact})
             ready = self._ready_attempts(attempts, invocations, snapshot)
+            if self.metrics:
+                self.metrics.record({
+                    "kind": "readiness", "name": "evidence", "unit": target.key, "status": "observed",
+                    "attributable_attempts": ready, "query_complete": snapshot.query_complete,
+                    "elapsed_seconds": None,
+                })
             if extra_poll and snapshot.query_complete or not await self._wait(target, "evidence", deadline, start):
                 return snapshot, artifact
             extra_poll = ready >= self.settings.readiness_attempts and snapshot.query_complete
@@ -870,6 +923,7 @@ class Runner:
                     raise
         return saved["id"]
 
+    @measure("stage", "insights")
     async def _insights(
         self, target: Target, work: _Work, monitor: str, invocations: Mapping,
         evidence_key: str, prior_end: str | None,
@@ -877,6 +931,8 @@ class Runner:
         base = work.key + "/insights"
         completed = work.records.read_completed(base, missing_ok=True)
         if completed:
+            if self.metrics:
+                self.metrics.reuse("stage", "insights")
             return completed
         self._event("started", target, stage="insights")
         before = work.records.read_artifact(base + "/before", missing_ok=True)
@@ -1138,6 +1194,7 @@ class Runner:
         self._apply_assessment(target, work, reference, result)
         return True
 
+    @measure("stage", "assessment")
     async def _assess(self, target: Target, work: _Work, operation: Callable[[], Awaitable]) -> dict:
         pending_key = f"targets/{target.key}/assessment"
         pending = self.run.read(pending_key, missing_ok=True)
@@ -1155,24 +1212,30 @@ class Runner:
         self._save(self.run, "progress", pending_key, {**reference, "status": "pending"})
         if saved is None:
             self._event("started", target, stage="assessment")
-            async with self.assessment_limit:
+            async with limited(self.metrics, self.assessment_limit, "assessment"):
                 self._check()
                 result = await operation()
                 saved = result.to_private_dict()
             self._save(self.run, "artifact", artifact, saved)
+        elif self.metrics:
+            self.metrics.reuse("stage", "assessment")
         self._save(self.run, "progress", pending_key, {**reference, "status": "saved"})
         self._apply_assessment(target, work, reference, saved)
         return saved
 
+    @measure("run", "staging")
     async def run_staging(self, selections: tuple[Selection, ...]) -> dict[str, Any]:
         from .assessment import assess_staging, reassess_staging_policy
 
         if not self._initialized or self.runtime.environment != "staging":
             raise QualityError("runner_not_initialized")
         semaphore = asyncio.Semaphore(self.settings.staging_workers)
+        @observe(self.metrics, "unit", "staging", lambda selection: {
+            "unit": selection.target.key, "lane": selection.target.unit_id.agent,
+        })
         async def one(selection: Selection) -> dict:
             target = selection.target
-            async with semaphore:
+            async with limited(self.metrics, semaphore, "staging_worker"):
                 work = None
                 stage = "deployment"
                 try:
@@ -1185,13 +1248,17 @@ class Runner:
                         prior["status"] in {"PASS", "FAIL"}
                         or policy_reassessment and prior.get("policy_version") == STAGING_POLICY.version
                     ):
-                        self._load_traffic(target, work, attempts)
+                        invocations = self._load_traffic(target, work, attempts)
+                        self._reused_traffic(target, attempts, invocations)
+                        if self.metrics:
+                            self.metrics.reuse("unit", "staging")
                         self._snapshot(work, work.binding["evidence_key"])
                         self._index_staging(target, work)
                         return {"unit": target.key, **work.binding}
                     if selection.action == "reassess" or policy_reassessment:
                         stage = "evidence"
                         invocations = self._load_traffic(target, work, attempts)
+                        self._reused_traffic(target, attempts, invocations)
                         if work.binding.get("refresh_evidence"):
                             deployment = Deployment(**work.records.read(work.key + "/deployment"))
                             snapshot, artifact = await self._evidence(
@@ -1237,6 +1304,7 @@ class Runner:
         self._event("completed")
         return summary
 
+    @measure("run", "daily")
     async def run_daily(self, targets: tuple[Target, ...]) -> QualityResult:
         from .assessment import assess_daily
 
@@ -1247,104 +1315,119 @@ class Runner:
             raise QualityError("daily_baseline_must_be_first")
         prepared, outcomes = {}, {}
         lane_limit = asyncio.Semaphore(self.settings.daily_lanes)
+        @observe(self.metrics, "lane", "daily", lambda agent: {"lane": agent})
         async def lane(agent: str) -> None:
-            async with lane_limit:
+            async with limited(self.metrics, lane_limit, "daily_lane"):
                 blocked = False
                 for target in (item for item in targets if item.unit_id.agent == agent):
-                    work = None
-                    prior = None
-                    stage = "deployment"
-                    try:
-                        work = self._binding(target)
-                        attempts = self._plan(target, work)
-                        recovered = self._recover_assessment(target, work)
-                        prior = self._prior_result(work)
-                        if recovered or prior and not prior["unit_result"]["exclusion_reasons"]:
-                            self._load_traffic(target, work, attempts)
-                            work.records.read_completed(work.key + "/insights")
-                            self._snapshot(work, work.binding["evidence_key"])
-                            outcomes[target.key] = restore_unit(prior["unit_result"])
-                            continue
-                        insight = work.records.read_completed(work.key + "/insights", missing_ok=True)
-                        if insight:
-                            invocations = self._load_traffic(target, work, attempts)
-                            if work.binding.get("refresh_evidence") or prior and (
-                                ExclusionReason.INCOMPLETE_EVIDENCE.value
-                                in prior["unit_result"]["exclusion_reasons"]
-                            ):
-                                deployment = Deployment(**work.records.read(work.key + "/deployment"))
-                                snapshot, artifact = await self._evidence(
-                                    target, work, deployment, attempts, invocations,
-                                )
-                                self._update(target, work, evidence_key=artifact, refresh_evidence=False)
-                            else:
-                                snapshot = self._snapshot(
-                                    work, work.binding.get("evidence_key", insight["visible_snapshot"]),
-                                )
-                        else:
-                            if blocked:
-                                outcomes[target.key] = restore_unit(prior["unit_result"]) if prior else UnitResult(
-                                    target.unit_id, exclusion_reasons=(ExclusionReason.INCOMPLETE_EXECUTION,),
-                                )
+                    with binding(self.metrics, unit=target.key), scope(self.metrics, "unit", "daily_lane") as unit_metric:
+                        work = None
+                        prior = None
+                        stage = "deployment"
+                        try:
+                            work = self._binding(target)
+                            attempts = self._plan(target, work)
+                            recovered = self._recover_assessment(target, work)
+                            prior = self._prior_result(work)
+                            if recovered or prior and not prior["unit_result"]["exclusion_reasons"]:
+                                invocations = self._load_traffic(target, work, attempts)
+                                self._reused_traffic(target, attempts, invocations)
+                                if self.metrics:
+                                    self.metrics.reuse("unit", "daily_lane")
+                                work.records.read_completed(work.key + "/insights")
+                                self._snapshot(work, work.binding["evidence_key"])
+                                outcomes[target.key] = restore_unit(prior["unit_result"])
                                 continue
-                            deployment = await self._deployment(target, work)
-                            stage = "insights"
-                            monitor = await self._monitor(target)
-                            stage = "traffic"
-                            invocations = await self._traffic(target, work, deployment, attempts)
-                            prior_end = self._traffic_window(target, work, invocations)
-                            if any(
-                                item.status == "unknown" or item.error_code == "invocation_response_pending"
-                                for item in invocations.values()
-                            ):
-                                raise QualityError("invocation_outcome_unresolved")
-                            intent = work.records.read(work.key + "/insights/start", missing_ok=True)
-                            stage = "evidence"
-                            if intent:
-                                evidence_key = intent["visible_snapshot"]
-                                snapshot = self._snapshot(work, evidence_key)
+                            insight = work.records.read_completed(work.key + "/insights", missing_ok=True)
+                            if insight:
+                                invocations = self._load_traffic(target, work, attempts)
+                                self._reused_traffic(target, attempts, invocations)
+                                if self.metrics:
+                                    self.metrics.reuse("stage", "insights")
+                                if work.binding.get("refresh_evidence") or prior and (
+                                    ExclusionReason.INCOMPLETE_EVIDENCE.value
+                                    in prior["unit_result"]["exclusion_reasons"]
+                                ):
+                                    deployment = Deployment(**work.records.read(work.key + "/deployment"))
+                                    snapshot, artifact = await self._evidence(
+                                        target, work, deployment, attempts, invocations,
+                                    )
+                                    self._update(target, work, evidence_key=artifact, refresh_evidence=False)
+                                else:
+                                    snapshot = self._snapshot(
+                                        work, work.binding.get("evidence_key", insight["visible_snapshot"]),
+                                    )
+                                    if self.metrics:
+                                        self.metrics.reuse("stage", "evidence")
                             else:
-                                snapshot, evidence_key = await self._evidence(
-                                    target, work, deployment, attempts, invocations,
+                                if blocked:
+                                    if self.metrics:
+                                        self.metrics.reuse("unit", "daily_lane", skipped=True)
+                                    outcomes[target.key] = restore_unit(prior["unit_result"]) if prior else UnitResult(
+                                        target.unit_id, exclusion_reasons=(ExclusionReason.INCOMPLETE_EXECUTION,),
+                                    )
+                                    continue
+                                deployment = await self._deployment(target, work)
+                                stage = "insights"
+                                monitor = await self._monitor(target)
+                                stage = "traffic"
+                                invocations = await self._traffic(target, work, deployment, attempts)
+                                prior_end = self._traffic_window(target, work, invocations)
+                                if any(
+                                    item.status == "unknown" or item.error_code == "invocation_response_pending"
+                                    for item in invocations.values()
+                                ):
+                                    raise QualityError("invocation_outcome_unresolved")
+                                intent = work.records.read(work.key + "/insights/start", missing_ok=True)
+                                stage = "evidence"
+                                if intent:
+                                    evidence_key = intent["visible_snapshot"]
+                                    snapshot = self._snapshot(work, evidence_key)
+                                    if self.metrics:
+                                        self.metrics.reuse("stage", "evidence")
+                                else:
+                                    snapshot, evidence_key = await self._evidence(
+                                        target, work, deployment, attempts, invocations,
+                                    )
+                                self._update(target, work, evidence_key=evidence_key)
+                                if self._ready_attempts(attempts, invocations, snapshot) < self.settings.readiness_attempts:
+                                    raise QualityError("trace_readiness_insufficient")
+                                stage = "insights"
+                                insight = await self._insights(
+                                    target, work, monitor, invocations, evidence_key, prior_end,
                                 )
-                            self._update(target, work, evidence_key=evidence_key)
-                            if self._ready_attempts(attempts, invocations, snapshot) < self.settings.readiness_attempts:
-                                raise QualityError("trace_readiness_insufficient")
-                            stage = "insights"
-                            insight = await self._insights(
-                                target, work, monitor, invocations, evidence_key, prior_end,
+                            visible, window = self._engine_visible(
+                                attempts, invocations, self._snapshot(work, insight["visible_snapshot"]), insight,
                             )
-                        visible, window = self._engine_visible(
-                            attempts, invocations, self._snapshot(work, insight["visible_snapshot"]), insight,
-                        )
-                        prepared[target.key] = (target, work, attempts, invocations, snapshot, visible, insight, window)
-                    except QualityError as error:
-                        self._failure(target, error, stage)
-                        previous = restore_unit(prior["unit_result"]) if prior else UnitResult(target.unit_id)
-                        reason = (
-                            ExclusionReason.INCOMPLETE_EVIDENCE if stage == "evidence"
-                            else ExclusionReason.INCOMPLETE_EXECUTION
-                        )
-                        outcomes[target.key] = replace(
-                            previous, exclusion_reasons=tuple(sorted(
-                                {*previous.exclusion_reasons, reason}, key=lambda item: item.value,
-                            )),
-                        )
-                        # Terminal failures/missing traces can be excluded. The next
-                        # exact lookback must start after their retained traffic.
-                        active_start = (
-                            work.records.read(work.key + "/insights/start", missing_ok=True) if work else None
-                        )
-                        blocked = (
-                            error.code in {
-                                "monitor_creation_unresolved", "monitor_reset_unresolved",
-                                "insights_reset_pending", "deployment_route_unconfirmed",
-                                "prior_insights_unresolved", "invocation_outcome_unresolved",
-                            }
-                            or active_start is not None and error.code != "insights_run_failed"
-                            or error.code in _INTEGRITY
-                            or self._lane_unresolved(agent)
-                        )
+                            prepared[target.key] = (target, work, attempts, invocations, snapshot, visible, insight, window)
+                        except QualityError as error:
+                            unit_metric.update(status="failed", error_code=error.code)
+                            self._failure(target, error, stage)
+                            previous = restore_unit(prior["unit_result"]) if prior else UnitResult(target.unit_id)
+                            reason = (
+                                ExclusionReason.INCOMPLETE_EVIDENCE if stage == "evidence"
+                                else ExclusionReason.INCOMPLETE_EXECUTION
+                            )
+                            outcomes[target.key] = replace(
+                                previous, exclusion_reasons=tuple(sorted(
+                                    {*previous.exclusion_reasons, reason}, key=lambda item: item.value,
+                                )),
+                            )
+                            # Terminal failures/missing traces can be excluded. The next
+                            # exact lookback must start after their retained traffic.
+                            active_start = (
+                                work.records.read(work.key + "/insights/start", missing_ok=True) if work else None
+                            )
+                            blocked = (
+                                error.code in {
+                                    "monitor_creation_unresolved", "monitor_reset_unresolved",
+                                    "insights_reset_pending", "deployment_route_unconfirmed",
+                                    "prior_insights_unresolved", "invocation_outcome_unresolved",
+                                }
+                                or active_start is not None and error.code != "insights_run_failed"
+                                or error.code in _INTEGRITY
+                                or self._lane_unresolved(agent)
+                            )
         await self._gather(lane(agent) for agent in agents)
         async def assess(values) -> None:
             target, work, attempts, invocations, snapshot, visible, insight, window = values
@@ -1367,16 +1450,17 @@ class Runner:
                 )
         await self._gather(assess(value) for value in prepared.values())
         self.integrity_failure |= self.run.read_completed("integrity-failure", missing_ok=True) is not None
-        result = aggregate_results(
-            planned_units(targets), (outcomes[target.key] for target in targets),
-            integrity_failure=self.integrity_failure,
-        )
-        artifact = "results/" + uuid.uuid4().hex
-        self._save(self.run, "artifact", artifact, result.to_dict())
-        self._save(self.run, "progress", "quality-result", {
-            "artifact": artifact, "source_revision": self.revision,
-        })
-        self._event("completed", stage="report")
+        with scope(self.metrics, "stage", "report"):
+            result = aggregate_results(
+                planned_units(targets), (outcomes[target.key] for target in targets),
+                integrity_failure=self.integrity_failure,
+            )
+            artifact = "results/" + uuid.uuid4().hex
+            self._save(self.run, "artifact", artifact, result.to_dict())
+            self._save(self.run, "progress", "quality-result", {
+                "artifact": artifact, "source_revision": self.revision,
+            })
+            self._event("completed", stage="report")
         return result
 
     def _lane_unresolved(self, agent: str) -> bool:

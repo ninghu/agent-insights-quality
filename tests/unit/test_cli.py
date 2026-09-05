@@ -707,3 +707,109 @@ def test_next_source_reconciles_unindexed_active_hosted_turns(
         assert prior_run.read_completed("environment") == staging.run(current["run_id"]).read_completed("environment")
     assert all(sum(call[2] == request for call in app.cloud.invocations) == 1 for request in partial_requests)
     assert prior_run.read("staging-result", missing_ok=True) is None
+
+
+def test_private_daily_metrics_are_segmented_paths_only_and_never_use_adx(app, capsys):
+    from agent_insights_quality.integration import RunIntegration
+    from agent_insights_quality.performance import RunMetrics
+    adx = app.store.root / "config" / "adx.json"
+    adx.write_text(json.dumps({"schema_version": "1.0", "cluster_uri": "https://synthetic.invalid", "database": "synthetic"}))
+    def forbidden(*args, **kwargs):
+        pytest.fail("Private metrics accessed ADX or public publication")
+    def integrations(*args, **kwargs):
+        return RunIntegration(*args, **kwargs, adx_factory=forbidden,
+                              outbox_factory=forbidden, write_report=forbidden)
+    @asynccontextmanager
+    async def ports(*args):
+        yield app.cloud, app.sol, app.registry
+    segments = []
+    def metrics(records):
+        value = RunMetrics(records, monotonic=app.clock.monotonic, segment_id=f"segment-{len(segments)}")
+        segments.append(value)
+        return value
+    def invoke():
+        return cli.main(
+            ["run-daily", "--test-run", "--rerun", "1"], root=app.catalog.root,
+            runtime_factory=lambda _: app.store, ports=ports, integrations=integrations,
+            metrics_factory=metrics, today=fake.DAY,
+        )
+    assert invoke() == 0
+    first, _ = last_json(capsys)
+    report = json.loads(Path(first["performance_path"]).read_text())
+    assert "observations" in report and "observations" not in first
+    assert report["sol_usage"]["input_tokens"] is report["sol_usage"]["output_tokens"] is None
+    assert report["totals"]["model_call:sol"]["count"] == len(app.sol.calls)
+    original = Path(first["performance_path"]).read_bytes()
+    count = len(app.cloud.invocations), len(app.sol.calls), len(app.cloud.starts)
+    assert invoke() == 0
+    resumed, _ = last_json(capsys)
+    assert resumed["performance_path"] != first["performance_path"]
+    assert Path(first["performance_path"]).read_bytes() == original
+    assert (len(app.cloud.invocations), len(app.sol.calls), len(app.cloud.starts)) == count
+    second = json.loads(Path(resumed["performance_path"]).read_text())
+    reused = next(item for item in second["observations"] if item["kind"] == "run")
+    assert reused["status"] == "reused" and reused["elapsed_seconds"] is None
+    assert not app.store.outbox("publication").directory.exists()
+    assert not app.store.outbox("events").directory.exists()
+    assert not (app.catalog.root / "reports").exists()
+    assert app.cli("status") == 0
+    status, _ = last_json(capsys)
+    assert status["runs"][0]["performance_path"] == resumed["performance_path"]
+    assert "observations" not in json.dumps(status)
+
+
+def test_unwritable_private_metrics_do_not_block_valid_inline_email(app, monkeypatch, capsys):
+    from agent_insights_quality.state import CheckpointError, RecordStore
+    save = RecordStore.save_progress
+    def fail(records, key, value):
+        if key.startswith("performance/"):
+            raise CheckpointError()
+        return save(records, key, value)
+    monkeypatch.setattr(RecordStore, "save_progress", fail)
+    assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
+    result, error = last_json(capsys)
+    assert result["status"] == "Full"
+    assert result["email_status"] == "prepared"
+    assert "performance_path" not in result
+    assert "logging_failed" in result["warnings"]
+    assert "performance_persistence_failed" in error
+    email = read_email(app.store.outbox("email"), result["delivery_id"])
+    assert "Operational logging reported a failure" in email.request.html
+
+
+def test_production_sol_receives_optional_metrics_observer_without_wire_changes(tmp_path, monkeypatch):
+    import asyncio
+    from agent_insights_quality import bootstrap, providers, registry
+    from agent_insights_quality.performance import RunMetrics, begin_metrics, metric_session
+    from agent_insights_quality.settings import AssessmentSettings
+    h = fake.Harness(tmp_path)
+    fake.fake_storage(monkeypatch)
+    captured = {}
+    async def discover(profile):
+        return h.cloud.environment
+    monkeypatch.setattr(bootstrap, "discover_environment", discover)
+    monkeypatch.setattr(bootstrap, "azure_json", lambda _: {
+        "properties": {"ConnectionString": "InstrumentationKey=synthetic"},
+    })
+    monkeypatch.setattr(providers, "AzureRuntime", lambda *args, **kwargs: h.cloud)
+    def sol(environment, *, deployment, observer):
+        captured.update(deployment=deployment, observer=observer)
+        return h.sol
+    monkeypatch.setattr(providers, "AzureSol", sol)
+    class Blob:
+        def __init__(self, *args):
+            pass
+        async def read(self):
+            return None
+        async def close(self):
+            pass
+    monkeypatch.setattr(registry, "AzureRegistryBlob", Blob)
+    with h.store.ownership(), metric_session(
+        lambda records: RunMetrics(records, segment_id="synthetic"),
+    ):
+        metrics = begin_metrics(h.store.run("factory"))
+        async def create():
+            async with cli.production_ports(h.catalog, h.store, "factory", AssessmentSettings()):
+                assert captured["observer"].__self__ is metrics
+                assert captured["deployment"] == "sol-assessment"
+        asyncio.run(create())

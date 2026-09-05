@@ -19,6 +19,7 @@ import uuid
 from .errors import QualityError
 from .integration import RunIntegration, command_status
 from .integration import private_path as _private_path, read_object as _read_object
+from .performance import RunMetrics, begin_metrics, current_metrics, metric_session, scope
 
 
 def parser() -> argparse.ArgumentParser:
@@ -111,7 +112,10 @@ async def production_ports(catalog, runtime, run_id, assessment_settings):
     hosted_variables = hosted_environment(environment, connection)
     records.save_completed("hosted-environment", hosted_variables)
     cloud = AzureRuntime(environment, images=images, hosted_environment=hosted_variables)
-    sol = AzureSol(environment, deployment=assessment_settings.deployment_name)
+    metrics = current_metrics()
+    sol = AzureSol(environment, deployment=assessment_settings.deployment_name, **(
+        {"observer": metrics.observe_sol} if metrics is not None else {}
+    ))
     blob = AzureRegistryBlob(environment)
     registry = DeploymentRegistry(blob, runtime.outbox("registry"))
     try:
@@ -213,7 +217,10 @@ async def _run(
         run_id = active["run_id"]
         targets = tuple(item.target for item in selections)
     records = runtime.run(run_id)
+    metrics = begin_metrics(records)
     if not is_daily and active["completed"]:
+        if metrics:
+            metrics.reuse("run", "staging")
         return _staging_status(runtime, records, active, records.read("staging-result"))
     frozen = records.read_completed("delivery-inputs", missing_ok=True) if is_daily else None
     recipient = _recipient(runtime) if is_daily and frozen is None else None
@@ -237,14 +244,19 @@ async def _run(
         report_date=today, test_run=test_run,
     ) as integration:
         if frozen is not None:
+            if metrics:
+                metrics.reuse("run", "daily")
             result = integration.frozen_result()
             environment = Environment(**records.read_completed("environment"))
-            published = integration.publish_report(result, environment, frozen["source_revision"])
-            await integration.finish_publication()
-            email = integration.prepare_delivery(
-                result, environment, frozen["source_revision"], rerun=args.rerun,
-                recipient=lambda: frozen["recipient"],
-            )
+            with scope(metrics, "stage", "delivery_report"):
+                published = integration.publish_report(result, environment, frozen["source_revision"])
+                await integration.finish_publication()
+                if metrics and metrics.health_warnings:
+                    integration.warn("logging_failed")
+                email = integration.prepare_delivery(
+                    result, environment, frozen["source_revision"], rerun=args.rerun,
+                    recipient=lambda: frozen["recipient"],
+                )
             return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
         async with ports(catalog, runtime, run_id, assessment) as (cloud, sol, registry):
             runner = Runner(
@@ -252,6 +264,7 @@ async def _run(
                 test_run=test_run, rerun=args.rerun if is_daily else 0,
                 revision=revision, reuse_run_id=reuse_run_id, event_outbox=integration.queue_event,
                 staging_policy_migration=staging_policy_migration,
+                metrics=metrics,
             )
             try:
                 integration.attach_logger(runner.logger)
@@ -262,11 +275,14 @@ async def _run(
                 })
                 if is_daily:
                     result = await runner.run_daily(targets)
-                    published = integration.publish_report(result, cloud.environment, revision)
-                    await integration.finish_publication()
-                    email = integration.prepare_delivery(
-                        result, cloud.environment, revision, rerun=args.rerun, recipient=lambda: recipient,
-                    )
+                    with scope(metrics, "stage", "delivery_report"):
+                        published = integration.publish_report(result, cloud.environment, revision)
+                        await integration.finish_publication()
+                        if metrics and metrics.health_warnings:
+                            integration.warn("logging_failed")
+                        email = integration.prepare_delivery(
+                            result, cloud.environment, revision, rerun=args.rerun, recipient=lambda: recipient,
+                        )
                     if test_run:
                         runtime.outbox("trials").save_progress(today.isoformat(), {"run_id": run_id})
                     return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
@@ -312,6 +328,9 @@ def _status(runtime) -> dict:
         else:
             staged = records.read("staging-result", missing_ok=True)
             runs.append({"run_id": path.name, "status": "recorded" if staged else "unfinished"})
+        performance = records.read("performance/latest", missing_ok=True)
+        if performance:
+            runs[-1]["performance_path"] = _artifact_path(records, performance["artifact"])
     return {"profile": runtime.environment, "runs": runs}
 
 
@@ -327,7 +346,7 @@ def _catalog(root):
 
 def main(
     argv=None, *, root: Path | None = None, runtime_factory=None, ports=None, integrations=None,
-    today=None, staging_policy_migration=None,
+    today=None, staging_policy_migration=None, metrics_factory=RunMetrics,
 ) -> int:
     args = parser().parse_args(argv)
     from .catalogs import validate_catalog
@@ -357,11 +376,17 @@ def main(
         with runtime.ownership():
             if args.command.startswith("run-"):
                 with command_status(runtime, args.command):
-                    value, code = asyncio.run(_run(
-                        args, _catalog(root), runtime, ports=ports, integrations=integrations,
-                        today=today or date.today(),
-                        staging_policy_migration=staging_policy_migration,
-                    ))
+                    with metric_session(metrics_factory) as performance:
+                        value, code = asyncio.run(_run(
+                            args, _catalog(root), runtime, ports=ports, integrations=integrations,
+                            today=today or date.today(),
+                            staging_policy_migration=staging_policy_migration,
+                        ))
+                    if performance[0] is not None:
+                        if performance[0].artifact_path:
+                            value["performance_path"] = performance[0].artifact_path
+                        if performance[0].health_warnings:
+                            value["warnings"] = sorted({*value.get("warnings", []), "logging_failed"})
             elif args.command == "email-claim":
                 outbox = runtime.outbox("email")
                 request = claim_email(outbox, args.delivery_id, claim_id=args.claim_id)
