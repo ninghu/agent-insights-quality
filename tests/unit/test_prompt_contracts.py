@@ -272,6 +272,60 @@ def test_healthcare_approval_oracles_cover_negation_and_changed_identity():
     assert "not" in denied and "confirm" in denied
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        "guardrails", "booking-confirm", "booking-correction",
+        "transition-review", "transition-confirm",
+    ],
+)
+@pytest.mark.parametrize("nested_slot", ["object", "array"])
+def test_healthcare_envelope_schema_rejects_nested_slot_identity(case, nested_slot):
+    semantic = assertions(healthcare_baseline_cases()[case])
+    validator = Draft202012Validator(semantic["json_schema"])
+    envelope = copy.deepcopy(semantic["exact_json_fields"])
+    validator.validate(envelope)
+    slot_id = envelope["slot"]
+    assert isinstance(slot_id, str)
+    envelope["slot"] = (
+        {"identifier": slot_id} if nested_slot == "object" else [slot_id]
+    )
+
+    # Finding the correct identifier somewhere in the output cannot satisfy slot:string.
+    assert slot_id in json.dumps(envelope)
+    errors = list(validator.iter_errors(envelope))
+    assert len(errors) == 1
+    assert errors[0].validator == "type"
+    assert list(errors[0].absolute_path) == ["slot"]
+
+
+def test_healthcare_pending_proposal_can_disclose_gap_without_nesting_slot():
+    request = healthcare_baseline_cases()["guardrails"]
+    semantic = assertions(request)
+    unavailable_date = re.search(
+        r"Schedule evidence for (\d{4}-\d{2}-\d{2}) is explicitly unavailable",
+        text(request),
+    ).group(1)
+    assert any(
+        unavailable_date in claim and "unavailable" in claim
+        for claim in semantic["required_claims"]
+    )
+    assert re.search(
+        rf"{re.escape(semantic['exact_json_fields']['slot'])} open", text(request)
+    )
+    envelope = {
+        **semantic["exact_json_fields"],
+        "message": "Please confirm",
+        "warning": f"Schedule evidence for {unavailable_date} is unavailable.",
+    }
+    Draft202012Validator(semantic["json_schema"]).validate(envelope)
+    assert envelope["approval"] == "pending"
+    assert envelope["slot"] == semantic["exact_json_fields"]["slot"]
+    assert unavailable_date in envelope["warning"]
+    without_warning = {key: value for key, value in envelope.items() if key != "warning"}
+    assert unavailable_date not in json.dumps(without_warning)
+
+
 def test_healthcare_scope_fixture_contains_distinguishable_records():
     request = healthcare_baseline_cases()["scope"]
     semantic = assertions(request)
