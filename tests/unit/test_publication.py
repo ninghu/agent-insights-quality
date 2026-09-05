@@ -32,7 +32,7 @@ from agent_insights_quality.state import CheckpointError, RuntimeStore, StateCon
 
 
 RUN = "daily-2026-09-04-r0"
-METADATA = {"report_date": "2026-09-04", "source_commit": "a" * 40, "region": "SwedenCentral"}
+METADATA = {"report_date": "2026-09-04", "source_commit": "a" * 40, "region": "Sweden Central"}
 
 
 def quality(excluded=0):
@@ -107,9 +107,11 @@ class FakeClient:
 
 
 @pytest.mark.parametrize("excluded,status", [(0, "Full"), (1, "Partial"), (2, "Partial")])
-def test_one_envelope_and_same_result_reach_adx_without_rescoring(tmp_path, excluded, status):
+@pytest.mark.parametrize("region", ["Sweden Central", "SwedenCentral", "swedencentral"])
+def test_one_envelope_and_same_result_reach_adx_without_rescoring(tmp_path, excluded, status, region):
     result, plan = quality(excluded)
-    envelope = build_public_report(result, allowed_units=plan, framework_run_id=RUN, **METADATA)
+    metadata = METADATA | {"region": region}
+    envelope = build_public_report(result, allowed_units=plan, framework_run_id=RUN, **metadata)
     assert set(envelope) == {"schema_version", "report_date", "source_commit", "region", "framework_run_id", "report"}
     assert envelope["report"] == result.to_dict() == public_projection(result, allowed_units=plan)
     assert envelope["report"]["status"] == status
@@ -123,7 +125,7 @@ def test_one_envelope_and_same_result_reach_adx_without_rescoring(tmp_path, excl
     runtime, client = RuntimeStore("daily", root=tmp_path), FakeClient()
     with runtime.ownership():
         box = outbox(runtime)
-        assert box.queue_report(result, **METADATA) == "report"
+        assert box.queue_report(result, **metadata) == "report"
         assert box.read_request("report")["body"] == envelope
         assert not client.commands
         flushed = box.flush(client)
@@ -131,7 +133,7 @@ def test_one_envelope_and_same_result_reach_adx_without_rescoring(tmp_path, excl
     row = client.rows[0]
     assert row["Payload"] == envelope["report"]
     assert row["SourceCommit"] == envelope["source_commit"]
-    assert row["Region"] == envelope["region"]
+    assert row["Region"] == envelope["region"] == region
     assert row["ReportDate"] == envelope["report_date"]
     assert row["FrameworkRunId"] == envelope["framework_run_id"]
     assert not client.closed

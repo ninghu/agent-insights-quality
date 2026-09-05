@@ -85,7 +85,7 @@ def _metadata(report_date: str, source_commit: str, region: str) -> dict[str, st
         or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", report_date) is None
         or not isinstance(source_commit, str)
         or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
-        or region not in ("swedencentral", "SwedenCentral")
+        or region not in ("swedencentral", "SwedenCentral", "Sweden Central")
     ):
         raise PublicationError("publication_metadata_invalid")
     try:
