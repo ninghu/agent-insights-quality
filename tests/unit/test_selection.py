@@ -91,6 +91,7 @@ def test_missing_full_incomplete_and_unchanged_failure(catalog):
     ("src/agent_insights_quality/providers/sol.py", {"all"}, "reassess"),
     ("src/agent_insights_quality/cli.py", set(), "traffic"),
     ("src/agent_insights_quality/assessment.py", {"all"}, "reassess"),
+    ("src/agent_insights_quality/staging_policy.py", {"all"}, "reassess"),
     ("src/agent_insights_quality/assessment_partition.py", {"all"}, "reassess"),
     ("src/agent_insights_quality/telemetry.py", {"all"}, "reassess"),
     ("src/agent_insights_quality/prompts/staging.md", {"all"}, "reassess"),

@@ -110,6 +110,7 @@ def evaluation_inputs(target: Target) -> tuple[Path, ...]:
         root / "schemas" / "traffic.schema.json",
         *((root / "schemas" / "prompt-traffic.schema.json",) if target.is_prompt else ()),
         root / "src" / "agent_insights_quality" / "assessment.py",
+        root / "src" / "agent_insights_quality" / "staging_policy.py",
         root / "src" / "agent_insights_quality" / "assessment_partition.py",
         root / "src" / "agent_insights_quality" / "providers" / "sol.py",
         root / "src" / "agent_insights_quality" / "telemetry.py",

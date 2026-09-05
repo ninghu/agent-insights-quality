@@ -39,6 +39,7 @@ from .results import (
     UnitResult,
 )
 from .telemetry import Snapshot
+from .staging_policy import STAGING_POLICY, StagingPolicy
 
 
 class AssessmentError(QualityError):
@@ -110,6 +111,8 @@ class StageResult:
     judgments: tuple[dict[str, Any], ...]
     reasons: tuple[str, ...]
     private_detail: dict[str, Any]
+    policy_version: str
+    minimum_required: int
 
     def to_private_dict(self) -> dict[str, Any]:
         return deepcopy(asdict(self))
@@ -356,12 +359,12 @@ def _validate_attempts(evidence: _Evidence, output: dict, *, staging: bool) -> N
 async def assess_staging(
     target: Target, attempts: tuple[Attempt, ...],
     invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot, sol: SolPort,
-    *, max_payload_bytes: int = 2_000_000,
+    *, max_payload_bytes: int = 2_000_000, policy: StagingPolicy = STAGING_POLICY,
 ) -> StageResult:
-    """Judge all ten; six proofs pass, not six responses or labels.
+    """Judge all ten, then apply the reviewed staging policy to proven observations.
 
     Insufficient evidence is not a behavior failure. A strict-role proven
-    violation disqualifies even after six successes. For probability-tolerant
+    violation disqualifies even after meeting the minimum. For probability-tolerant
     issues, sufficiently evidenced permitted nonobservations consume attempts.
     """
     evidence = _evidence(target, attempts, invocations, snapshot)
@@ -401,6 +404,20 @@ async def assess_staging(
         part["status"] = "completed"
         output["attempts"].extend(result["attempts"])
     detail["output"] = output
+    return _aggregate_staging(target, evidence, output, detail, policy, oversized=oversized)
+
+
+def _aggregate_staging(
+    target: Target, evidence: _Evidence, output: dict, detail: dict,
+    policy: StagingPolicy, *, oversized: bool = False,
+) -> StageResult:
+    if not isinstance(policy, StagingPolicy):
+        raise AssessmentError("staging_policy_invalid")
+    if not Draft202012Validator(STAGING_SCHEMA).is_valid(output):
+        raise AssessmentError("assessment_output_invalid", private_detail=detail)
+    if sorted(item["index"] for item in output["attempts"]) != list(range(1, 11)):
+        raise AssessmentError("assessment_attempt_coverage_invalid", private_detail=detail)
+    _validate_attempts(evidence, output, staging=True)
     judgments = tuple(sorted(output["attempts"], key=lambda item: item["index"]))
     proven = [
         item for item in judgments
@@ -408,23 +425,67 @@ async def assess_staging(
     ]
     eligible = [
         item for item in proven if item["index"] in evidence.complete
-    ] if snapshot.query_complete else []
+    ] if evidence.payload["snapshot"]["query_complete"] else []
     passing = sum(item["observed"] and not item["contract_violation"] for item in eligible)
-    if oversized:
+    def result(status, reasons=()):
         return StageResult(
-            "INCOMPLETE", passing, judgments, ("assessment_conversation_too_large",), detail,
+            status, passing, judgments, reasons, detail, policy.version, policy.minimum_required,
         )
     if target.validation_mode != "model_mediated" and any(
         item["contract_violation"] for item in proven
     ):
-        passing = sum(item["observed"] for item in proven) if snapshot.query_complete else 0
-        return StageResult("FAIL", passing, judgments, ("proven_contract_violation",), detail)
-    if passing >= 6:
-        return StageResult("PASS", passing, judgments, (), detail)
+        passing = sum(item["observed"] for item in proven) if evidence.payload["snapshot"]["query_complete"] else 0
+        return result("FAIL", ("proven_contract_violation",))
+    if oversized:
+        return result("INCOMPLETE", ("assessment_conversation_too_large",))
+    if passing >= policy.minimum_required:
+        return result("PASS")
     unknown = 10 - len(eligible)
-    status = "FAIL" if passing + unknown < 6 else "INCOMPLETE"
+    status = "FAIL" if passing + unknown < policy.minimum_required else "INCOMPLETE"
     reason = "observation_threshold_not_met" if status == "FAIL" else "insufficient_evidence"
-    return StageResult(status, passing, judgments, (reason,), detail)
+    return result(status, (reason,))
+
+
+def reassess_staging_policy(
+    target: Target, attempts: tuple[Attempt, ...],
+    invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot,
+    previous: Mapping[str, Any], *, policy: StagingPolicy = STAGING_POLICY,
+) -> StageResult:
+    """Revalidate retained ten-attempt proof and aggregate it without model calls.
+
+    The runner must separately establish that only policy changed. Matching the
+    raw input here prevents a changed request, expectation or snapshot from
+    inheriting an older judgment's authority. Prior status/counts are not proof.
+    """
+    evidence = _evidence(target, attempts, invocations, snapshot)
+    value = _json_copy(previous)
+    detail = value.get("private_detail")
+    if not isinstance(detail, dict) or detail.get("input") != evidence.payload:
+        raise AssessmentError("assessment_policy_input_mismatch")
+    output = detail.get("output")
+    if not isinstance(output, dict) or not isinstance(value.get("judgments"), list):
+        raise AssessmentError("assessment_policy_judgments_incomplete")
+    partitions = detail.get("partitions")
+    if not isinstance(partitions, list) or not partitions or any(
+        not isinstance(part, dict) or part.get("status") != "completed"
+        or not isinstance(part.get("output"), dict)
+        or not isinstance(part["output"].get("attempts"), list)
+        for part in partitions
+    ):
+        raise AssessmentError("assessment_policy_judgments_incomplete")
+    result = _aggregate_staging(target, evidence, output, detail, policy)
+    merged = [item for part in partitions for item in part["output"]["attempts"]]
+    if value["judgments"] != list(result.judgments) or (
+        len(merged) != 10
+        or any(not isinstance(item, dict) or type(item.get("index")) is not int for item in merged)
+        or sorted(merged, key=lambda item: item["index"]) != list(result.judgments)
+    ):
+        raise AssessmentError("assessment_policy_judgments_mismatch")
+    detail["policy_reassessment"] = {
+        "previous_policy_version": value.get("policy_version"),
+        "previous_minimum_required": value.get("minimum_required"),
+    }
+    return result
 
 
 def _card_id(card: Mapping[str, Any]) -> str:

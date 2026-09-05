@@ -165,15 +165,17 @@ def test_engine_window_provenance_passes_losslessly_to_private_daily_assessment(
 
 
 @pytest.mark.parametrize("mode", ["baseline", "deterministic", "model_mediated"])
-def test_six_role_observations_not_ten_perfect_responses(mode):
-    result = stage(evidence(mode, missing=(7, 8, 9, 10)))
+def test_eight_role_observations_not_ten_perfect_responses(mode):
+    result = stage(evidence(mode, missing=(9, 10)))
     assert result.status == "PASS"
-    assert result.passing_attempts == 6
+    assert result.passing_attempts == 8
     assert len(result.judgments) == 10
+    assert result.minimum_required == 8
+    assert result.policy_version == "staging-observations-v2"
 
 
 @pytest.mark.parametrize("mode", ["baseline", "deterministic"])
-def test_strict_violation_disqualifies_even_after_six_proofs(mode):
+def test_strict_violation_disqualifies_even_after_eight_proofs(mode):
     def violate(payload):
         value = output(payload, stage=True)
         value["attempts"][-1].update(observed=False, contract_violation=True)
@@ -184,7 +186,7 @@ def test_strict_violation_disqualifies_even_after_six_proofs(mode):
     assert result.reasons == ("proven_contract_violation",)
 
 
-@pytest.mark.parametrize("observations,status", [(6, "PASS"), (5, "FAIL")])
+@pytest.mark.parametrize("observations,status", [(8, "PASS"), (7, "FAIL")])
 def test_probability_nonobservations_consume_attempts_without_strict_veto(observations, status):
     def subset(payload):
         value = output(payload, stage=True)

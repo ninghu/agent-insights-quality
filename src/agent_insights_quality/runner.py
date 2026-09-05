@@ -25,6 +25,7 @@ from .selection import (
 )
 from .settings import RuntimeSettings
 from .state import RecordStore, RuntimeStore, StateError
+from .staging_policy import STAGING_POLICY, StagingPolicyMigration
 from .telemetry import Snapshot, _flat, collect_snapshot
 from .traffic import load_attempts
 
@@ -207,13 +208,25 @@ def choose_staging(
     }
     for selection in selections:
         record = history.get(selection.target.key)
-        if selection.reasons == ("incomplete",) and not any(
+        if not full and record and record.get("assessment") and record.get("evidence_key") and (
+            _policy_only_change(catalog, changes[record["source_revision"]])
+        ):
+            selection = replace(
+                selection, action="reassess", reasons=(*selection.reasons, "staging_policy_changed"),
+            )
+        elif selection.reasons == ("incomplete",) and not any(
             (catalog.root / path).resolve() in collectors
             for path in changes[record["source_revision"]].paths
         ) and _retained_assessment_evidence(store, selection.target, record):
             selection = replace(selection, action="reassess", reasons=(*selection.reasons, "assessment_retry"))
         result.append(selection)
     return tuple(result)
+
+
+def _policy_only_change(catalog: Catalog, changes: SourceChanges) -> bool:
+    return {(catalog.root / path).resolve() for path in changes.paths} == {
+        catalog.root / "src" / "agent_insights_quality" / "staging_policy.py",
+    }
 
 
 def _retained_assessment_evidence(store: RuntimeStore, target: Target, record: dict) -> bool:
@@ -277,6 +290,7 @@ class Runner:
         deployment_source: Callable[[Target], str] | None = None,
         changes_since: Callable[[str], SourceChanges] | None = None,
         event_outbox: Callable[[dict[str, Any]], None] | None = None,
+        staging_policy_migration: StagingPolicyMigration | None = None,
     ) -> None:
         if runtime.environment != cloud.environment.profile:
             raise QualityError("runner_environment_mismatch")
@@ -286,6 +300,13 @@ class Runner:
             raise QualityError("runner_test_identity_invalid")
         if reuse_run_id and (not test_run or reuse_run_id == run_id):
             raise QualityError("runner_reuse_invalid")
+        if staging_policy_migration is not None and (
+            runtime.environment != "staging"
+            or not isinstance(staging_policy_migration, StagingPolicyMigration)
+            or staging_policy_migration.destination_policy != STAGING_POLICY
+        ):
+            raise QualityError("staging_policy_migration_invalid")
+        self.staging_policy_migration = staging_policy_migration
         self.catalog, self.runtime, self.run_id = catalog, runtime, run_id
         self.run = runtime.run(run_id)
         self.cloud, self.sol, self.registry = cloud, sol, registry
@@ -337,6 +358,12 @@ class Runner:
             target not in self.catalog.targets for target in targets
         ):
             raise QualityError("run_plan_invalid")
+        migration = self.staging_policy_migration.to_dict() if self.staging_policy_migration else None
+        saved_migration = self.run.read_completed("staging-policy-migration", missing_ok=True)
+        if saved_migration is not None and saved_migration != migration:
+            raise QualityError("staging_policy_migration_mismatch")
+        if migration is not None:
+            self._save(self.run, "completed", "staging-policy-migration", migration)
         expected = {
             "kind": kind, "report_date": report_date.isoformat(),
             "test_run": self.test_run, "rerun": self.rerun,
@@ -410,7 +437,7 @@ class Runner:
                 old = latest
         if old is None and self.reuse_run_id:
             old = self.runtime.run(self.reuse_run_id).read(key, missing_ok=True)
-        changed, evaluate, recollect = False, False, False
+        changed, evaluate, recollect, policy_only = False, False, False, False
         if old:
             if not {"source_revision", "traffic_source_revision", "traffic_run_id", "work_key"} <= old.keys():
                 raise StateError("target_checkpoint_invalid")
@@ -418,6 +445,7 @@ class Runner:
                 raise StateError("target_checkpoint_invalid")
             if old["source_revision"] != self.revision:
                 changes = self._changes_since(old["source_revision"])
+                policy_only = self.runtime.environment == "staging" and _policy_only_change(self.catalog, changes)
                 recollect = any(
                     (self.catalog.root / path).resolve()
                     == self.catalog.root / "src" / "agent_insights_quality" / "telemetry.py"
@@ -434,13 +462,31 @@ class Runner:
             if selection and not own:
                 changed |= bool({"full", "deployment_changed", "traffic_changed"} & set(selection.reasons))
                 evaluate |= selection.action == "reassess"
+            approved_migration = (
+                self.staging_policy_migration is not None
+                and old["source_revision"] == self.staging_policy_migration.source_revision
+                and selection is not None and selection.action == "reassess"
+                and not recollect
+            )
+            policy_only |= approved_migration
         if old and not changed:
             if self.runtime.run(old["traffic_run_id"]).read_completed("environment") != asdict(self.cloud.environment):
                 raise StateError("retained_environment_mismatch")
             binding = dict(old)
             if evaluate:
+                binding.pop("policy_reassessment", None)
+                if policy_only and old.get("assessment") and old.get("evidence_key"):
+                    binding["policy_reassessment"] = {
+                        **old["assessment"], "assessment_source_revision": old["source_revision"],
+                        "judgment_source_revision": old.get("judgment_source_revision", old["source_revision"]),
+                        "policy_source_revision": self.revision,
+                    }
+                    if approved_migration:
+                        binding["policy_reassessment"]["migration"] = self.staging_policy_migration.to_dict()
                 binding.pop("result", None)
                 binding.pop("assessment", None)
+                binding.pop("policy_version", None)
+                binding.pop("minimum_required", None)
                 binding["refresh_evidence"] = recollect
             if evaluate:
                 binding["source_revision"] = self.revision
@@ -1055,9 +1101,15 @@ class Runner:
 
     def _apply_assessment(self, target: Target, work: _Work, reference: dict, result: dict) -> None:
         if self.runtime.environment == "staging":
+            policy = {key: result[key] for key in ("policy_version", "minimum_required") if key in result}
             fields = {
-                "result": {key: result[key] for key in ("status", "passing_attempts", "reasons")},
-                "status": result["status"],
+                "result": {
+                    **{key: result[key] for key in ("status", "passing_attempts", "reasons")}, **policy,
+                },
+                "status": result["status"], **policy,
+                "judgment_source_revision": work.binding.get("policy_reassessment", {}).get(
+                    "judgment_source_revision", self.revision,
+                ),
             }
         else:
             restore_unit(result["unit_result"])
@@ -1113,7 +1165,7 @@ class Runner:
         return saved
 
     async def run_staging(self, selections: tuple[Selection, ...]) -> dict[str, Any]:
-        from .assessment import assess_staging
+        from .assessment import assess_staging, reassess_staging_policy
 
         if not self._initialized or self.runtime.environment != "staging":
             raise QualityError("runner_not_initialized")
@@ -1128,12 +1180,16 @@ class Runner:
                     attempts = self._plan(target, work)
                     recovered = self._recover_assessment(target, work)
                     prior = self._prior_result(work)
-                    if recovered or prior and prior["status"] in {"PASS", "FAIL"}:
+                    policy_reassessment = work.binding.get("policy_reassessment")
+                    if recovered or prior and (
+                        prior["status"] in {"PASS", "FAIL"}
+                        or policy_reassessment and prior.get("policy_version") == STAGING_POLICY.version
+                    ):
                         self._load_traffic(target, work, attempts)
                         self._snapshot(work, work.binding["evidence_key"])
                         self._index_staging(target, work)
                         return {"unit": target.key, **work.binding}
-                    if selection.action == "reassess":
+                    if selection.action == "reassess" or policy_reassessment:
                         stage = "evidence"
                         invocations = self._load_traffic(target, work, attempts)
                         if work.binding.get("refresh_evidence"):
@@ -1152,22 +1208,30 @@ class Runner:
                         snapshot, artifact = await self._evidence(target, work, deployment, attempts, invocations)
                         self._update(target, work, evidence_key=artifact)
                     stage = "assessment"
-                    await self._assess(target, work, lambda: assess_staging(
-                        target, attempts, invocations, snapshot, self.sol,
-                    ))
+                    async def assess():
+                        if policy_reassessment:
+                            previous = self.runtime.run(policy_reassessment["run_id"]).read_artifact(
+                                policy_reassessment["artifact"],
+                            )
+                            result = reassess_staging_policy(target, attempts, invocations, snapshot, previous)
+                            result.private_detail["policy_reassessment"].update(policy_reassessment)
+                            return result
+                        return await assess_staging(target, attempts, invocations, snapshot, self.sol)
+                    await self._assess(target, work, assess)
                 except QualityError as error:
                     self._failure(target, error, stage)
                     if work is None:
                         raise
                     self._update(
                         target, work, status="INCOMPLETE", reason=error.code, failure_run_id=self.run_id,
+                        policy_version=STAGING_POLICY.version, minimum_required=STAGING_POLICY.minimum_required,
                     )
                 self._index_staging(target, work)
                 return {"unit": target.key, **work.binding}
         records = await self._gather(one(item) for item in selections)
         summary = {
             "profile": "staging", "selected": len(selections), "results": records,
-            "integrity_failure": self.integrity_failure,
+            "integrity_failure": self.integrity_failure, "staging_policy": STAGING_POLICY.to_dict(),
         }
         self._save(self.run, "progress", "staging-result", summary)
         self._event("completed")

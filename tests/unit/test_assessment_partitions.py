@@ -225,15 +225,16 @@ def test_shared_operation_over_all_attempts_stays_indivisible():
 
 
 @pytest.mark.parametrize("mode,observations,status", [
-    ("baseline", 6, "PASS"), ("deterministic", 6, "PASS"),
-    ("model_mediated", 6, "PASS"), ("model_mediated", 5, "FAIL"),
+    ("baseline", 8, "PASS"), ("deterministic", 8, "PASS"),
+    ("model_mediated", 8, "PASS"), ("model_mediated", 7, "FAIL"),
 ])
-def test_partitioning_preserves_six_of_ten_threshold(mode, observations, status):
+def test_partitioning_preserves_eight_of_ten_staging_threshold(mode, observations, status):
     data = independent(mode)
     sol = StageSol(observations=observations)
     result = fake.stage(data, sol, max_payload_bytes=single_group_limit(raw_payload(data)))
     assert result.status == status and result.passing_attempts == observations
     assert len(sol.calls) == len(result.judgments) == 10
+    assert result.minimum_required == 8
 
 
 @pytest.mark.parametrize("mode", ["baseline", "deterministic"])

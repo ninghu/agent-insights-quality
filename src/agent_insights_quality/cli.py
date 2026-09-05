@@ -182,13 +182,21 @@ def _staging_status(runtime, records, active, result, warnings=()):
     }, 0 if complete else 2
 
 
-async def _run(args, catalog, runtime, *, ports, integrations, today: date) -> tuple[dict, int]:
+async def _run(
+    args, catalog, runtime, *, ports, integrations, today: date, staging_policy_migration=None,
+) -> tuple[dict, int]:
     from .contracts import Environment
     from .runner import Runner, planned_units, source_revision
     from .selection import select_daily
     from .settings import load_assessment_settings, load_settings
 
     is_daily = args.command == "run-daily"
+    if staging_policy_migration is not None:
+        from .staging_policy import STAGING_POLICY, StagingPolicyMigration
+        if is_daily or not isinstance(staging_policy_migration, StagingPolicyMigration) or (
+            staging_policy_migration.destination_policy != STAGING_POLICY
+        ):
+            raise QualityError("staging_policy_migration_invalid")
     test_run = is_daily and args.test_run
     if is_daily and (args.rerun < 1 if test_run else args.rerun != 0):
         raise QualityError("runner_test_identity_invalid")
@@ -243,6 +251,7 @@ async def _run(args, catalog, runtime, *, ports, integrations, today: date) -> t
                 catalog, runtime, run_id, cloud, sol, registry, settings=settings,
                 test_run=test_run, rerun=args.rerun if is_daily else 0,
                 revision=revision, reuse_run_id=reuse_run_id, event_outbox=integration.queue_event,
+                staging_policy_migration=staging_policy_migration,
             )
             try:
                 integration.attach_logger(runner.logger)
@@ -316,7 +325,10 @@ def _catalog(root):
         raise QualityError("catalog_input_invalid") from error
 
 
-def main(argv=None, *, root: Path | None = None, runtime_factory=None, ports=None, integrations=None, today=None) -> int:
+def main(
+    argv=None, *, root: Path | None = None, runtime_factory=None, ports=None, integrations=None,
+    today=None, staging_policy_migration=None,
+) -> int:
     args = parser().parse_args(argv)
     from .catalogs import validate_catalog
     from .email import claim_email, record_email_outcome
@@ -326,6 +338,8 @@ def main(argv=None, *, root: Path | None = None, runtime_factory=None, ports=Non
     ports = production_ports if ports is None else ports
     integrations = RunIntegration if integrations is None else integrations
     try:
+        if staging_policy_migration is not None and args.command != "run-staging":
+            raise QualityError("staging_policy_migration_invalid")
         if args.command in {"validate", "generate-docs"}:
             catalog = _catalog(root)
             if args.command == "generate-docs":
@@ -346,6 +360,7 @@ def main(argv=None, *, root: Path | None = None, runtime_factory=None, ports=Non
                     value, code = asyncio.run(_run(
                         args, _catalog(root), runtime, ports=ports, integrations=integrations,
                         today=today or date.today(),
+                        staging_policy_migration=staging_policy_migration,
                     ))
             elif args.command == "email-claim":
                 outbox = runtime.outbox("email")

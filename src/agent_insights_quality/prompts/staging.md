@@ -6,7 +6,7 @@ Assess EVERY supplied attempt exactly once, retaining its original index. The
 complete plan has ten attempts; a size-bounded request may contain only the
 indices listed in assessment_partition.attempt_indices. Do not emit judgments
 for other partitions or renumber attempts. Code merges exact coverage of all ten
-before applying the unchanged threshold. Setup and probe turns and any attempts
+before applying the reviewed, versioned staging policy. Setup and probe turns and any attempts
 sharing a conversation, operation or evidence form one indivisible group.
 Preserve unavailable execution as insufficient, not a
 behavioral failure. The reviewed target expectation and each step's expectation
@@ -20,8 +20,8 @@ issues, observed means the independently proven intended defect and
 contract_violation means a sufficiently evidenced violation of the deterministic
 activation/behavior contract. For model_mediated issues, permitted nonobservations
 are not contract violations. Never mark both observed and contract_violation.
-Neither can be true when sufficient is false. Six qualifying observations are
-required by code after merging all partitions; judge every supplied attempt
+Neither can be true when sufficient is false. Code applies the minimum observation
+requirement only after merging all partitions; judge every supplied attempt
 regardless of prior batch outcomes or how many have already succeeded.
 Raw envelopes not assigned to a planned conversation remain shared context in
 every partition. Their presence does not authorize citing them for a turn.
