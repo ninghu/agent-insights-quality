@@ -304,6 +304,7 @@ class Harness:
         self.registry = Registry()
         self.settings = RuntimeSettings(
             hydration_seconds=0, poll_interval_seconds=1, poll_timeout_seconds=3,
+            insights_poll_timeout_seconds=3,
             retry_backoff_seconds=1, **settings,
         )
 
@@ -534,6 +535,40 @@ def test_native_insights_retry_keeps_exact_body_and_callback_identity(tmp_path):
     assert len(h.cloud.starts) == 3
 
 
+@pytest.mark.parametrize("completion_delay", [730, 800])
+def test_insights_can_finish_after_deployment_wait_budget_without_new_submission(tmp_path, completion_delay):
+    h = Harness(tmp_path)
+    h.settings = replace(
+        h.settings, poll_timeout_seconds=600,
+        insights_poll_timeout_seconds=1200, poll_interval_seconds=60,
+    )
+    poll = h.cloud.get_insights_run
+    first_poll = {}
+
+    async def delayed(monitor, run_id):
+        start = first_poll.setdefault(run_id, h.clock.elapsed)
+        job = next(job for job in h.cloud.jobs.values() if job["id"] == run_id)
+        is_baseline = job["target"].endswith("/v0")
+        h.cloud.poll_status = (
+            "running" if is_baseline and h.clock.elapsed - start < completion_delay
+            else "succeeded"
+        )
+        return await poll(monitor, run_id)
+
+    h.cloud.get_insights_run = delayed
+    result = h.daily()
+    assert result.status.value == "Full" and result.score == 100
+    assert completion_delay <= h.clock.elapsed < 1200
+    assert len(h.cloud.starts) == 2 and len(h.cloud.invocations) == 40
+    assert set(h.cloud.resets.values()) == {1}
+    target = h.catalog.targets[0]
+    records = h.store.run("trial")
+    work = records.read(f"targets/{target.key}/source")["work_key"]
+    deployment_deadline = records.read_completed(work + "/deployment/deadline")
+    insights_deadline = records.read_completed(work + "/insights/deadline")
+    assert datetime.fromisoformat(insights_deadline["until"]) > datetime.fromisoformat(deployment_deadline["until"])
+
+
 def test_poll_timeout_then_resume_polls_same_job_no_reset_or_new_post(tmp_path):
     h = Harness(tmp_path)
     h.cloud.poll_status = "running"
@@ -541,8 +576,14 @@ def test_poll_timeout_then_resume_polls_same_job_no_reset_or_new_post(tmp_path):
     assert sum(h.clock.waits) == 3
     first_start = h.cloud.starts[0]
     first_count = len(h.cloud.invocations)
+    records = h.store.run("trial")
+    work = records.read(f"targets/{h.catalog.targets[0].key}/source")["work_key"]
+    original_deadline = records.read_completed(work + "/insights/deadline")
+    h.settings = replace(h.settings, insights_poll_timeout_seconds=12)
     h.cloud.poll_status = "succeeded"
     assert h.daily().score == 100
+    assert records.read_completed(work + "/insights/deadline") == original_deadline
+    assert sum(h.clock.waits) == 3
     assert h.cloud.starts[0] == first_start and len(h.cloud.starts) == 2
     assert len(h.cloud.invocations) == first_count + 20
     assert set(h.cloud.resets.values()) == {1}

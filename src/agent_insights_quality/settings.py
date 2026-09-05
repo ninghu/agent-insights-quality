@@ -35,6 +35,7 @@ class RuntimeSettings:
     hydration_seconds: int = 120
     poll_interval_seconds: int = 5
     poll_timeout_seconds: int = 600
+    insights_poll_timeout_seconds: int = 1200
     retry_limit: int = 3
     retry_backoff_seconds: int = 2
     retry_max_backoff_seconds: int = 60
@@ -53,6 +54,7 @@ class RuntimeSettings:
             "hydration_seconds": (0, 600),
             "poll_interval_seconds": (1, 60),
             "poll_timeout_seconds": (1, 3600),
+            "insights_poll_timeout_seconds": (1, 3600),
             "retry_limit": (0, 8),
             "retry_backoff_seconds": (1, 60),
             "retry_max_backoff_seconds": (1, 120),
@@ -66,6 +68,7 @@ class RuntimeSettings:
             raise QualityError("settings_invalid")
         if (
             self.poll_interval_seconds > self.poll_timeout_seconds
+            or self.poll_interval_seconds > self.insights_poll_timeout_seconds
             or self.retry_backoff_seconds > self.retry_max_backoff_seconds
         ):
             raise QualityError("settings_invalid")

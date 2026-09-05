@@ -590,9 +590,13 @@ class Runner:
         return _datetime(value["until"])
 
     async def _wait(self, target: Target, stage: str, deadline: datetime, start: float) -> bool:
+        budget = (
+            self.settings.insights_poll_timeout_seconds
+            if stage == "insights" else self.settings.poll_timeout_seconds
+        )
         remaining = min(
             (deadline - self.now()).total_seconds(),
-            self.settings.poll_timeout_seconds - (self.monotonic() - start),
+            budget - (self.monotonic() - start),
         )
         if remaining <= 0:
             return False
@@ -1054,7 +1058,7 @@ class Runner:
                 if error.retryable and await self._retry(work, base + "/retry", target, "insights"):
                     continue
                 raise
-        deadline = self._deadline(work.records, base + "/deadline", self.settings.poll_timeout_seconds)
+        deadline = self._deadline(work.records, base + "/deadline", self.settings.insights_poll_timeout_seconds)
         start = self.monotonic()
         while True:
             self._check()

@@ -39,9 +39,21 @@ uncertain window coverage is excluded from Engine scoring, not counted as a miss
 A new email delivery test uses an explicit nonzero rerun identity; an
 ambiguous previous send is reconciled, never sent again blindly.
 
+New Insights polling has a separate `insights_poll_timeout_seconds` budget (default 1200).
+Deployment polling retains `poll_timeout_seconds` (default 600); trace hydration is separate.
+A local wait timeout is not a native failed run. Resume queries the original accepted operation
+before deciding its outcome, without rewriting its existing deadline or creating another analysis.
+
 Local `runner.log` and `events.jsonl` preserve starts, heartbeats, retries and outcomes across
 restart. They work without ADX. Raw evidence is kept separately. Status reads do not take the
 writer lock or perform live work.
+
+New Daily runs may select an assessor through private `config/daily-assessment.json`, with exactly
+`deployment_name`, `model`, `model_version` and `credential` (`azure_cli`). Staging continues to
+use private `config/assessment.json` or the Sol defaults. Existing runs resume their frozen
+assessment settings, regardless of changes to those files. A new run with a different assessor
+reuses matching execution evidence where applicable, but creates new judgments and records the
+configured model identity; it never relabels earlier judgments from another model.
 
 ## Interactive long-running work
 

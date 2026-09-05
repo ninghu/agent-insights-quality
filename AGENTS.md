@@ -52,7 +52,9 @@ staging/Daily fallbacks or stale procedural docs/skills as new authority.
 - Correlate actual endpoint responses, turns and trace scope without conflating response/model/
   operation IDs. Collect batched raw evidence per target; disclose gaps, truncation and ambiguity.
   Save the evidence visible before Insights starts; later evidence cannot prove earlier visibility.
-- Assessment calls the deployed GPT-5.6 Sol directly with raw evidence and reviewed expectations.
+- Assessment calls the explicitly configured deployed model directly with raw evidence and reviewed
+  expectations (staging defaults to GPT-5.6 Sol; new Daily runs may use a private assessor override).
+  Freeze the assessor per run; a model change requires new judgments, not relabeling old output.
   Validate structured judgments/citations; a card's claim cannot independently prove its defect.
 - Persist per-turn results and small atomic source/provider/stage checkpoints. Resume matching
   unfinished work; repair only affected units. Reconcile ambiguous remote outcomes before retrying,
