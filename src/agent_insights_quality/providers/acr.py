@@ -7,16 +7,34 @@ import json
 import re
 import subprocess
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, TypeVar
 
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.contracts import JsonObject, Target
 from agent_insights_quality.errors import QualityError
 from agent_insights_quality.providers.artifacts import source_zip
 from agent_insights_quality.providers.callbacks import safe_persist
+
+T = TypeVar("T")
+
+
+async def _drain_on_cancel(operation: Coroutine[Any, Any, T]) -> T:
+    task = asyncio.create_task(operation)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # A cancelled waiter does not stop a subprocess or its source upload.
+        # Let its owner persist the native outcome before releasing runtime ownership.
+        drained = asyncio.gather(task, return_exceptions=True)
+        while not drained.done():
+            try:
+                await asyncio.shield(drained)
+            except asyncio.CancelledError:
+                continue
+        raise
 
 
 @dataclass(frozen=True)
@@ -35,7 +53,7 @@ class AzureCommandRunner:
     async def run(
         self, arguments: Sequence[str], *, cwd: Path | None = None
     ) -> CommandResult:
-        return await asyncio.to_thread(self._run, arguments, cwd)
+        return await _drain_on_cancel(asyncio.to_thread(self._run, arguments, cwd))
 
     def _run(self, arguments: Sequence[str], cwd: Path | None) -> CommandResult:
         try:
@@ -55,7 +73,7 @@ class AzureCommandRunner:
 
 
 class AcrImageBuilder:
-    """One source-built image at a time, with native ACR run checkpoints and OCI pinning."""
+    """Source-built images with retained private contexts, native runs, and OCI pinning."""
 
     def __init__(
         self,
@@ -138,6 +156,7 @@ class AcrImageBuilder:
         if image is not None:
             self._save(
                 {
+                    **(known or {}),
                     "artifact_key": key,
                     "image": image,
                     "state": "completed",
@@ -159,57 +178,51 @@ class AcrImageBuilder:
         }
         try:
             self.workspace.mkdir(parents=True, exist_ok=True)
-            temporary = tempfile.TemporaryDirectory(
+            root = Path(tempfile.mkdtemp(
                 prefix="acr-source-", dir=self.workspace
-            )
+            ))
         except OSError:
             raise QualityError(
                 "acr_workspace_unavailable", request_accepted=False
             ) from None
-        with temporary as directory:
-            root = Path(directory)
-            try:
-                for name, body in context.items():
-                    path = root / name
-                    if (
-                        path.resolve() == root.resolve()
-                        or not path.resolve().is_relative_to(root.resolve())
-                    ):
-                        raise QualityError(
-                            "acr_context_path_invalid", request_accepted=False
-                        )
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(body)
-            except OSError:
-                raise QualityError(
-                    "acr_context_unavailable", request_accepted=False
-                ) from None
-            self._save(record)
-            try:
-                result = await self.command.run(
-                    [
-                        "acr",
-                        "build",
-                        "--registry",
-                        self.registry_name,
-                        "--image",
-                        self.repository + ":" + tag,
-                        "--file",
-                        "v0/Dockerfile",
-                        "--no-wait",
-                        "--no-logs",
-                        "--only-show-errors",
-                        "--output",
-                        "json",
-                        ".",
-                    ],
-                    cwd=root,
-                )
-            except (QualityError, OSError):
-                self._save({**record, "state": "unknown"})
-                raise QualityError("acr_build_unknown", request_accepted=None) from None
-            saved = self._submitted(record, result)
+        try:
+            for name, body in context.items():
+                path = root / name
+                if (
+                    path.resolve() == root.resolve()
+                    or not path.resolve().is_relative_to(root.resolve())
+                ):
+                    raise QualityError(
+                        "acr_context_path_invalid", request_accepted=False
+                    )
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(body)
+        except OSError:
+            raise QualityError(
+                "acr_context_unavailable", request_accepted=False
+            ) from None
+        record["context_path"] = str(root)
+        self._save(record)
+        saved = await _drain_on_cancel(self._submit(record, root))
         return await self._poll(saved, tag)
+
+    async def _submit(self, record: JsonObject, root: Path) -> JsonObject:
+        try:
+            # The CLI wrapper suppresses output with --no-wait. --no-logs waits
+            # for the run and returns its structured result, never console logs.
+            result = await self.command.run(
+                [
+                    "acr", "build", "--registry", self.registry_name,
+                    "--image", self.repository + ":" + record["tag"],
+                    "--file", "v0/Dockerfile", "--no-logs",
+                    "--only-show-errors", "--output", "json", ".",
+                ],
+                cwd=root,
+            )
+        except (QualityError, OSError):
+            self._save({**record, "state": "unknown"})
+            raise QualityError("acr_build_unknown", request_accepted=None) from None
+        return self._submitted(record, result)
 
     def _submitted(self, record: JsonObject, result: CommandResult) -> JsonObject:
         if result.returncode:
@@ -222,8 +235,9 @@ class AcrImageBuilder:
             raise QualityError(
                 "acr_build_identity_missing", request_accepted=None
             ) from None
-        run_id = value.get("runId") if isinstance(value, dict) else None
-        if not isinstance(run_id, str) or not run_id:
+        properties = self._run_properties(value)
+        run_id = properties.get("runId")
+        if not isinstance(run_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", run_id) is None:
             self._save({**record, "state": "unknown"})
             raise QualityError("acr_build_identity_missing", request_accepted=None)
         saved = {**record, "state": "pending", "run_id": run_id}
@@ -232,9 +246,12 @@ class AcrImageBuilder:
 
     async def _poll(self, record: JsonObject, tag: str) -> str:
         value = await self._read("task", "show-run", "--run-id", record["run_id"])
-        if not isinstance(value, dict):
+        properties = self._run_properties(value)
+        if properties.get("runId") != record["run_id"]:
+            raise QualityError("acr_run_identity_mismatch", request_accepted=True)
+        status = properties.get("status")
+        if not isinstance(status, str):
             raise QualityError("acr_response_invalid")
-        status = value.get("status")
         if status in {"Failed", "Canceled", "Error", "Timeout"}:
             self._save({**record, "state": "failed", "provider_response": value})
             raise QualityError("acr_build_failed", request_accepted=True)
@@ -251,3 +268,12 @@ class AcrImageBuilder:
             {**record, "state": "completed", "image": image, "provider_response": value}
         )
         return image
+
+    @staticmethod
+    def _run_properties(value: object) -> JsonObject:
+        if not isinstance(value, dict):
+            return {}
+        # Current ARM-backed CLI models nest run fields under properties;
+        # older CLI serializers flatten the same native fields.
+        properties = value.get("properties", value)
+        return properties if isinstance(properties, dict) else {}

@@ -3,6 +3,7 @@ import ast
 import hashlib
 import json
 import shlex
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -11,7 +12,7 @@ import pytest
 from agent_insights_quality.contracts import Target
 from agent_insights_quality.catalogs import load_catalog
 from agent_insights_quality.errors import QualityError
-from agent_insights_quality.providers import AcrImageBuilder, CommandResult
+from agent_insights_quality.providers import AcrImageBuilder, AzureCommandRunner, CommandResult
 from agent_insights_quality.providers.artifacts import (
     prepare_artifact,
     source_files,
@@ -102,7 +103,7 @@ def test_scoped_acr_build_is_checkpointed_and_digest_pinned(target, tmp_path):
     commands = Commands(
         [],
         {"runId": "native-run"},
-        {"status": "Succeeded"},
+        {"runId": "native-run", "status": "Succeeded"},
         ["agent-insights-quality-support"],
         [{"name": "source-" + key, "digest": digest}],
     )
@@ -125,10 +126,13 @@ def test_scoped_acr_build_is_checkpointed_and_digest_pinned(target, tmp_path):
     assert saved[1]["run_id"] == "native-run"
     builds = [command for command in commands.calls if command[:2] == ["acr", "build"]]
     assert len(builds) == 1
-    assert "--no-wait" in builds[0] and "--no-logs" in builds[0]
+    assert "--no-wait" not in builds[0] and "--no-logs" in builds[0]
     assert "login" not in " ".join(" ".join(command) for command in commands.calls)
     assert commands.contexts == [files]
-    assert list((tmp_path / "builds").iterdir()) == []
+    context_path = Path(saved[0]["context_path"])
+    assert list((tmp_path / "builds").iterdir()) == [context_path]
+    assert (context_path / "v0" / "source" / "app.py").read_bytes() == files["v0/source/app.py"]
+    assert saved[-1]["context_path"] == str(context_path)
 
 
 def test_native_image_is_reused_across_environment_builders(target, tmp_path):
@@ -148,7 +152,7 @@ def test_native_image_is_reused_across_environment_builders(target, tmp_path):
 
 def test_pending_native_build_resumes_without_uploading_again(target, tmp_path):
     files = source_files(target, container=True)
-    commands = Commands([], {"runId": "native-run"}, {"status": "Running"})
+    commands = Commands([], {"runId": "native-run"}, {"runId": "native-run", "status": "Running"})
     saved = []
     builder = AcrImageBuilder(
         "exampleregistry", workspace=tmp_path, persist=saved.append, command=commands
@@ -156,7 +160,7 @@ def test_pending_native_build_resumes_without_uploading_again(target, tmp_path):
     with pytest.raises(QualityError, match="acr_build_pending"):
         asyncio.run(builder.ensure_image(target, "r", files))
     key = saved[-1]["artifact_key"]
-    resumed_commands = Commands([], {"status": "Running"})
+    resumed_commands = Commands([], {"runId": "native-run", "status": "Running"})
     resumed = AcrImageBuilder(
         "exampleregistry",
         workspace=tmp_path,
@@ -260,7 +264,9 @@ def test_real_support_sources_satisfy_selected_acr_build_context(version, tmp_pa
             if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module:
                 assert "v0/source/" + node.module.replace(".", "/") + ".py" in context
     assert not any(name.startswith("issues/") for name in context)
-    commands = Commands([], {"runId": "synthetic-native-run"}, {"status": "Running"})
+    commands = Commands([], {"runId": "synthetic-native-run"}, {
+        "runId": "synthetic-native-run", "status": "Running",
+    })
     builder = AcrImageBuilder(
         "exampleregistry", workspace=tmp_path, persist=lambda value: None, command=commands,
     )
@@ -270,3 +276,175 @@ def test_real_support_sources_satisfy_selected_acr_build_context(version, tmp_pa
     command = next(call for call in commands.calls if call[:2] == ["acr", "build"])
     assert command[command.index("--file") + 1] == "v0/Dockerfile"
     assert "--build-arg" not in command
+
+
+@pytest.mark.parametrize("stdout", ["", "not json", "Queued a build with ID: native-run", "null", "{}"])
+def test_invalid_submission_output_retains_context_and_never_runs_cleanup(
+    target, tmp_path, monkeypatch, stdout,
+):
+    import agent_insights_quality.providers.acr as acr
+
+    def forbidden(*args, **kwargs):
+        raise PermissionError("Synthetic Windows cleanup failure")
+
+    monkeypatch.setattr(acr.tempfile, "TemporaryDirectory", forbidden)
+    saved = []
+    commands = Commands([], CommandResult(0, stdout))
+    builder = AcrImageBuilder(
+        "exampleregistry", workspace=tmp_path / "private-builds", persist=saved.append, command=commands,
+    )
+    context = source_files(target, container=True)
+    with pytest.raises(QualityError, match="acr_build_identity_missing"):
+        asyncio.run(builder.ensure_image(target, "r", context))
+    assert saved[-1]["state"] == "unknown"
+    root = Path(saved[-1]["context_path"])
+    assert root.parent == tmp_path / "private-builds"
+    assert {path.relative_to(root).as_posix(): path.read_bytes()
+            for path in root.rglob("*") if path.is_file()} == context
+    assert len(commands.calls) == 2
+
+
+def test_native_arm_run_properties_are_supported_without_console_parsing(target, tmp_path):
+    context = source_files(target, container=True)
+    key = hashlib.sha256(source_zip(context)).hexdigest()
+    native = {"id": "/synthetic/runs/native-run", "properties": {
+        "runId": "native-run", "status": "Succeeded",
+    }}
+    commands = Commands(
+        [], native, native, ["agent-insights-quality-support"],
+        [{"name": "source-" + key, "digest": "sha256:" + "c" * 64}],
+    )
+    saved = []
+    builder = AcrImageBuilder(
+        "exampleregistry", workspace=tmp_path, persist=saved.append, command=commands,
+    )
+    image = asyncio.run(builder.ensure_image(target, "r", context))
+    assert image.endswith("@sha256:" + "c" * 64)
+    assert saved[1]["run_id"] == "native-run"
+    assert saved[-1]["provider_response"] == native
+    assert Path(saved[-1]["context_path"]).exists()
+
+
+def test_restart_unknown_submission_reconciles_only_the_exact_native_image(target, tmp_path):
+    context = source_files(target, container=True)
+    saved = []
+    builder = AcrImageBuilder(
+        "exampleregistry", workspace=tmp_path, persist=saved.append,
+        command=Commands([], CommandResult(0, "")),
+    )
+    with pytest.raises(QualityError, match="acr_build_identity_missing"):
+        asyncio.run(builder.ensure_image(target, "r", context))
+    known = saved[-1]
+    commands = Commands(["agent-insights-quality-support"], [
+        {"name": "source-unrelated", "digest": "sha256:" + "b" * 64},
+        {"name": known["tag"], "digest": "sha256:" + "a" * 64},
+    ])
+    restarted = AcrImageBuilder(
+        "exampleregistry", workspace=tmp_path, persist=saved.append,
+        records={known["artifact_key"]: known}, command=commands,
+    )
+    image = asyncio.run(restarted.ensure_image(target, "r", context))
+    assert image.endswith("@sha256:" + "a" * 64)
+    assert saved[-1]["context_path"] == known["context_path"]
+    assert saved[-1]["state"] == "completed"
+    assert all(call[1] == "repository" for call in commands.calls)
+
+
+def test_pending_native_run_poll_rejects_another_run_identity(target, tmp_path):
+    context = source_files(target, container=True)
+    key = hashlib.sha256(source_zip(context)).hexdigest()
+    record = {"artifact_key": key, "state": "pending", "run_id": "expected-native-run"}
+    commands = Commands([], {"properties": {"runId": "unrelated-run", "status": "Succeeded"}})
+    builder = AcrImageBuilder(
+        "exampleregistry", workspace=tmp_path, persist=lambda value: None,
+        records={key: record}, command=commands,
+    )
+    with pytest.raises(QualityError, match="acr_run_identity_mismatch"):
+        asyncio.run(builder.ensure_image(target, "r", context))
+    assert len(commands.calls) == 2
+
+
+def test_failed_cli_result_remains_unknown_with_its_context(target, tmp_path):
+    saved = []
+    builder = AcrImageBuilder(
+        "exampleregistry", workspace=tmp_path, persist=saved.append,
+        command=Commands([], CommandResult(1, "Synthetic CLI failure")),
+    )
+    with pytest.raises(QualityError, match="acr_build_unknown") as error:
+        asyncio.run(builder.ensure_image(target, "r", source_files(target, container=True)))
+    assert error.value.request_accepted is None
+    assert error.value.__cause__ is None and error.value.__context__ is None
+    assert saved[-1]["state"] == "unknown"
+    assert Path(saved[-1]["context_path"]).is_dir()
+
+
+def test_cancelled_cli_command_drains_the_worker_before_returning(tmp_path, monkeypatch):
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    command = AzureCommandRunner()
+
+    def blocking(arguments, cwd):
+        entered.set()
+        assert release.wait(timeout=5), "Worker was not released"
+        assert cwd.is_dir()
+        finished.set()
+        return CommandResult(0, "{}")
+
+    monkeypatch.setattr(command, "_run", blocking)
+
+    async def exercise():
+        task = asyncio.create_task(command.run(["synthetic-command"], cwd=tmp_path))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert finished.is_set()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("stdout,state", [
+    ('{"properties":{"runId":"native-run","status":"Queued"}}', "pending"),
+    ("", "unknown"),
+])
+def test_cancelled_build_drains_and_checkpoints_its_actual_outcome(
+    target, tmp_path, stdout, state,
+):
+    saved = []
+
+    async def exercise():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class BlockingCommands:
+            async def run(self, arguments, *, cwd=None):
+                if arguments[1] == "repository":
+                    return CommandResult(0, "[]")
+                entered.set()
+                await release.wait()
+                assert (cwd / "v0" / "source" / "app.py").is_file()
+                return CommandResult(0, stdout)
+
+        builder = AcrImageBuilder(
+            "exampleregistry", workspace=tmp_path, persist=saved.append, command=BlockingCommands(),
+        )
+        task = asyncio.create_task(builder.ensure_image(target, "r", source_files(target, container=True)))
+        await entered.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert saved[-1]["state"] == state
+        assert Path(saved[-1]["context_path"]).is_dir()
+        if state == "pending":
+            assert saved[-1]["run_id"] == "native-run"
+
+    asyncio.run(exercise())
