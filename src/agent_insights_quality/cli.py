@@ -113,9 +113,13 @@ async def production_ports(catalog, runtime, run_id, assessment_settings):
     records.save_completed("hosted-environment", hosted_variables)
     cloud = AzureRuntime(environment, images=images, hosted_environment=hosted_variables)
     metrics = current_metrics()
-    sol = AzureSol(environment, deployment=assessment_settings.deployment_name, **(
-        {"observer": metrics.observe_sol} if metrics is not None else {}
-    ))
+    output_mode = "json_text" if (
+        assessment_settings.model, assessment_settings.model_version
+    ) == ("gpt-6-astra", "2026-09-03") else "json_schema"
+    sol = AzureSol(
+        environment, deployment=assessment_settings.deployment_name, output_mode=output_mode,
+        **({"observer": metrics.observe_sol} if metrics is not None else {}),
+    )
     blob = AzureRegistryBlob(environment)
     registry = DeploymentRegistry(blob, runtime.outbox("registry"))
     try:

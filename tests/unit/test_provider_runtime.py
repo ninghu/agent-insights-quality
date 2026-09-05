@@ -40,6 +40,7 @@ from agent_insights_quality.providers.transport import (
     ARM_SCOPE,
     FOUNDRY_SCOPE,
     JsonClient,
+    encode,
 )
 from agent_insights_quality.results import UnitId
 
@@ -913,8 +914,18 @@ def test_structured_sol_exact_deployment_schema_and_bounded_rejection_retry(
     assert json.loads(body["input"]) == {"evidence": [1]}
     assert body["store"] is False
     assert first.url == environment.project_endpoint + "/openai/v1/responses"
+    assert first.body == encode({
+        "model": "sol-assessment",
+        "instructions": "Judge synthetic input",
+        "input": encode({"evidence": [1]}).decode("utf-8"),
+        "store": False,
+        "text": {"format": {
+            "type": "json_schema", "name": "assessment", "strict": True, "schema": SCHEMA,
+        }},
+    })
 
 
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
 @pytest.mark.parametrize(
     "value,code",
     [
@@ -947,13 +958,15 @@ def test_structured_sol_exact_deployment_schema_and_bounded_rejection_retry(
     ],
 )
 def test_sol_errors_keep_private_response_but_only_safe_exception_text(
-    environment, value, code
+    environment, value, code, output_mode,
 ):
-    sol = AzureSol(environment, transport=FakeTransport(response(value)))
+    transport = FakeTransport(response(value))
+    sol = AzureSol(environment, transport=transport, output_mode=output_mode)
     with pytest.raises(SolResponseError) as error:
         run(sol.complete_json(instructions="synthetic", payload={}, schema=SCHEMA))
     assert str(error.value) == code
     assert error.value.response == value
+    assert len(transport.requests) == 1
 
 
 @pytest.mark.parametrize("header, expected", [
@@ -997,11 +1010,12 @@ def test_sol_server_wait_beyond_local_budget_is_not_retried_early(environment):
     assert waits == [] and len(transport.requests) == 1
 
 
-def test_sol_unknown_post_not_retried(environment):
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
+def test_sol_unknown_post_not_retried(environment, output_mode):
     transport = FakeTransport(TimeoutError("synthetic private error"))
     with pytest.raises(QualityError) as error:
         run(
-            AzureSol(environment, transport=transport).complete_json(
+            AzureSol(environment, transport=transport, output_mode=output_mode).complete_json(
                 instructions="synthetic", payload={}, schema=SCHEMA
             )
         )
@@ -1238,15 +1252,16 @@ def test_primary_result_does_not_replace_actual_telemetry_source():
     assert result.records[0]["columns"][0] == {"name": "telemetry_table"}
 
 
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
 @pytest.mark.parametrize("status", [400, 429, 503])
 def test_sol_http_failures_preserve_private_payload_without_fallback(
-    environment, status
+    environment, status, output_mode,
 ):
     value = {"error": {"message": "synthetic private error"}}
     transport = FakeTransport(response(value, status))
     with pytest.raises(SolResponseError, match="sol_http_error") as error:
         run(
-            AzureSol(environment, transport=transport, attempts=1).complete_json(
+            AzureSol(environment, transport=transport, attempts=1, output_mode=output_mode).complete_json(
                 instructions="synthetic", payload={}, schema=SCHEMA
             )
         )
@@ -1255,41 +1270,93 @@ def test_sol_http_failures_preserve_private_payload_without_fallback(
     assert len(transport.requests) == 1
 
 
-def test_sol_invalid_response_json_is_explicit_private_diagnostic(environment):
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
+def test_sol_invalid_response_json_is_explicit_private_diagnostic(environment, output_mode):
     transport = FakeTransport(HttpResponse(200, body=b"malformed synthetic payload"))
     with pytest.raises(SolResponseError, match="sol_response_invalid_json") as error:
         run(
-            AzureSol(environment, transport=transport).complete_json(
+            AzureSol(environment, transport=transport, output_mode=output_mode).complete_json(
                 instructions="synthetic", payload={}, schema=SCHEMA
             )
         )
     assert error.value.response == {"raw_body": "malformed synthetic payload"}
 
 
-def test_sol_schema_is_validated_before_submission(environment):
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
+def test_sol_schema_is_validated_before_submission(environment, output_mode):
     transport = FakeTransport()
     with pytest.raises(QualityError, match="sol_schema_invalid"):
         run(
-            AzureSol(environment, transport=transport).complete_json(
+            AzureSol(environment, transport=transport, output_mode=output_mode).complete_json(
                 instructions="synthetic", payload={}, schema={"type": "not-a-type"}
             )
         )
     assert not transport.requests
 
 
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
 @pytest.mark.parametrize(
     "text",
     [
         '{"verdict":"first","verdict":"second"}',
         '{"verdict":NaN}',
+        '{"verdict":Infinity}',
+        '{"verdict":-Infinity}',
+        '{"nested":{"verdict":"first","verdict":"second"}}',
+        '```json\n{"verdict":"synthetic"}\n```',
+        'Advisory text\n{"verdict":"synthetic"}',
+        '{"verdict":"synthetic"}\nAdvisory text',
+        '{"verdict":"synthetic"',
+        '[]',
     ],
 )
-def test_sol_ambiguous_or_nonfinite_json_is_rejected(environment, text):
-    transport = FakeTransport(response(sol_output(text)))
+def test_sol_ambiguous_or_nonfinite_json_is_rejected(environment, text, output_mode):
+    value = sol_output(text)
+    transport = FakeTransport(response(value))
+    with pytest.raises(SolResponseError, match="sol_output_schema_invalid") as error:
+        run(
+            AzureSol(environment, transport=transport, output_mode=output_mode).complete_json(
+                instructions="synthetic", payload={}, schema={"type": "object"},
+            )
+        )
+    assert error.value.response == value
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
+def test_unsupported_output_format_error_never_triggers_protocol_or_model_fallback(environment, output_mode):
+    value = {"error": {
+        "type": "invalid_request_error", "param": "text.format", "code": None,
+        "message": "Synthetic unsupported json_schema for configured model version",
+    }}
+    transport = FakeTransport(response(value, 400))
+    with pytest.raises(SolResponseError, match="^sol_http_error$") as error:
+        run(AzureSol(
+            environment, transport=transport, deployment="astra-assessment", output_mode=output_mode,
+        ).complete_json(instructions="synthetic", payload={}, schema=SCHEMA))
+    assert error.value.response == value
+    assert error.value.status == 400 and error.value.request_accepted is False
+    assert not error.value.retryable and len(transport.requests) == 1
+    body = json.loads(transport.requests[0].body)
+    assert body["model"] == "astra-assessment"
+    assert ("text" in body) is (output_mode == "json_schema")
+
+
+@pytest.mark.parametrize("output_mode", ["json_object", "unknown", "", None])
+def test_unsupported_output_mode_is_rejected_before_submission(environment, output_mode):
+    transport = FakeTransport()
+    with pytest.raises(QualityError, match="^sol_configuration_invalid$"):
+        AzureSol(environment, transport=transport, output_mode=output_mode)
+    assert not transport.requests
+
+
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
+def test_locally_unconstrained_output_still_requires_a_json_object(environment, output_mode):
+    transport = FakeTransport(response(sol_output('["synthetic"]')))
     with pytest.raises(SolResponseError, match="sol_output_schema_invalid"):
         run(
-            AzureSol(environment, transport=transport).complete_json(
-                instructions="synthetic", payload={}, schema=SCHEMA
+            AzureSol(environment, transport=transport, output_mode=output_mode).complete_json(
+                instructions="synthetic", payload={}, schema={},
             )
         )
 

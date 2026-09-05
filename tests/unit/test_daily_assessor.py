@@ -319,7 +319,18 @@ def test_missing_prior_assessor_identity_fails_closed_without_relabeling_old_jud
     assert (len(h.cloud.invocations), len(h.cloud.starts), len(h.sol.calls)) == counts
 
 
-def test_new_daily_constructor_gets_requested_alias_and_observer_without_changing_provider_body(tmp_path, monkeypatch):
+@pytest.mark.parametrize("configured,output_mode", [
+    (SOL, "json_schema"),
+    (ASTRA, "json_text"),
+    (replace(ASTRA, deployment_name="reviewed-assessor"), "json_text"),
+    (replace(SOL, deployment_name="astra-assessment"), "json_schema"),
+    (replace(ASTRA, model="gpt-6-astra-preview"), "json_schema"),
+    (replace(ASTRA, model="unknown-assessor"), "json_schema"),
+    (replace(ASTRA, model_version="2026-09-04"), "json_schema"),
+])
+def test_production_protocol_uses_frozen_exact_model_not_alias_or_new_defaults(
+    tmp_path, monkeypatch, configured, output_mode,
+):
     from agent_insights_quality import bootstrap, providers, registry
     from agent_insights_quality.performance import begin_metrics, metric_session
     h = fake.Harness(tmp_path)
@@ -331,9 +342,15 @@ def test_new_daily_constructor_gets_requested_alias_and_observer_without_changin
     })
     monkeypatch.setattr(providers, "AzureRuntime", lambda *args, **kwargs: h.cloud)
     captured = {}
-    def assessor(environment, *, deployment, observer):
-        captured.update(deployment=deployment, observer=observer)
-        return h.sol
+    clock = sol_fake.Clock()
+    transport = sol_fake.Transport(clock, sol_fake.success())
+    original = providers.AzureSol
+    def assessor(environment, *, deployment, observer, output_mode="json_schema"):
+        captured.update(deployment=deployment, observer=observer, output_mode=output_mode)
+        return original(
+            environment, transport=transport, deployment=deployment, observer=observer,
+            output_mode=output_mode, sleep=clock.sleep, monotonic=lambda: clock.now,
+        )
     monkeypatch.setattr(providers, "AzureSol", assessor)
     class Blob:
         def __init__(self, *args):
@@ -343,20 +360,33 @@ def test_new_daily_constructor_gets_requested_alias_and_observer_without_changin
         async def close(self):
             pass
     monkeypatch.setattr(registry, "AzureRegistryBlob", Blob)
-    write_settings(h.store.root, "daily-assessment.json", ASTRA)
+    write_settings(h.store.root, "daily-assessment.json", configured)
     with h.store.ownership(), metric_session(lambda records: RunMetrics(records, segment_id="new-assessor")):
         records = h.store.run("n2")
+        assert cli._assessment_for_run(h.store, records) == configured
+        write_settings(h.store.root, "daily-assessment.json", SOL if configured == ASTRA else ASTRA)
         settings = cli._assessment_for_run(h.store, records)
         metrics = begin_metrics(records)
         async def construct():
-            async with cli.production_ports(h.catalog, h.store, "n2", settings):
-                assert captured["deployment"] == "astra-assessment"
+            async with cli.production_ports(h.catalog, h.store, "n2", settings) as (_, sol, _):
+                assert captured["deployment"] == configured.deployment_name
+                assert captured["output_mode"] == output_mode
                 assert captured["observer"].__self__ is metrics
-                assert records.read_completed("assessment-settings") == ASTRA.to_dict()
+                assert records.read_completed("assessment-settings") == configured.to_dict()
+                assert await sol_fake.complete(sol) == {"ok": True}
         asyncio.run(construct())
+    assert len(transport.requests) == 1 and not clock.waits
+    body = json.loads(transport.requests[0][1].body)
+    assert body["model"] == configured.deployment_name
+    if output_mode == "json_text":
+        assert "text" not in body
+        assert json.loads(body["instructions"].split("\nOutput JSON Schema:\n")[1]) == sol_fake.SCHEMA
+    else:
+        assert body["text"]["format"]["type"] == "json_schema"
+        assert body["instructions"] == "Synthetic"
 
 
-def test_astra_alias_changes_only_structured_client_model_field_and_usage_is_actual():
+def test_deployment_alias_alone_preserves_default_strict_wire_and_actual_usage():
     settings = AssessmentSettings.from_dict(ASTRA.to_dict())
     clock = sol_fake.Clock()
     response = json.loads(sol_fake.success().body)

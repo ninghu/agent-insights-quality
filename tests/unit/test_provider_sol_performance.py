@@ -23,6 +23,7 @@ def response(usage=None):
     return HttpResponse(200, {}, json.dumps(value).encode())
 
 
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
 @pytest.mark.parametrize("usage,expected", [
     ({"input_tokens": 10, "output_tokens": 3, "private_extra": "never-copy"}, (10, 3, "known")),
     ({"input_tokens": 0, "output_tokens": 0}, (0, 0, "known")),
@@ -30,7 +31,7 @@ def response(usage=None):
     ({"input_tokens": -1, "output_tokens": True}, (None, None, "unknown")),
     (None, (None, None, "unknown")),
 ])
-def test_only_actual_sol_usage_is_retained_without_modifying_result_or_wire(tmp_path, usage, expected):
+def test_only_actual_sol_usage_is_retained_without_modifying_result_or_wire(tmp_path, usage, expected, output_mode):
     runtime = RuntimeStore("daily", root=tmp_path)
     with runtime.ownership():
         metrics = RunMetrics(runtime.run("trial"), segment_id="usage")
@@ -41,12 +42,15 @@ def test_only_actual_sol_usage_is_retained_without_modifying_result_or_wire(tmp_
             metrics.observe_sol(event)
         plain = fake.Transport(clock, response(usage))
         measured = fake.Transport(clock, response(usage))
-        assert asyncio.run(fake.complete(fake.provider(clock, plain))) == {"ok": True}
-        assert asyncio.run(fake.complete(fake.provider(clock, measured, observer=observe))) == {"ok": True}
+        assert asyncio.run(fake.complete(fake.provider(clock, plain, output_mode=output_mode))) == {"ok": True}
+        assert asyncio.run(fake.complete(fake.provider(
+            clock, measured, observer=observe, output_mode=output_mode,
+        ))) == {"ok": True}
         assert plain.requests == measured.requests
         value = next(item for item in events if item["kind"] == "sol_usage")
         assert (value["input_tokens"], value["output_tokens"], value["usage_status"]) == expected
         assert "private_extra" not in json.dumps(events)
+        assert "headers" not in json.dumps(events) and "Synthetic" not in json.dumps(events)
         metrics.finalize()
         report = runtime.run("trial").read_artifact(metrics.artifact_key)
         assert report["sol_usage"]["input_tokens"] == expected[0]
@@ -55,7 +59,8 @@ def test_only_actual_sol_usage_is_retained_without_modifying_result_or_wire(tmp_
         assert not report["active"]
 
 
-def test_http_time_queue_and_actual_429_cooldown_are_separate_and_retry_unchanged(tmp_path):
+@pytest.mark.parametrize("output_mode", ["json_schema", "json_text"])
+def test_http_time_queue_and_actual_429_cooldown_are_separate_and_retry_unchanged(tmp_path, output_mode):
     runtime = RuntimeStore("daily", root=tmp_path)
     def execute(observer=None):
         clock = fake.Clock()
@@ -65,7 +70,7 @@ def test_http_time_queue_and_actual_429_cooldown_are_separate_and_retry_unchange
                 clock.now += 2
                 return value
         transport = Transport(clock, fake.limited({"Retry-After": "60"}), response({"input_tokens": 20, "output_tokens": 4}))
-        sol = fake.provider(clock, transport, observer=observer)
+        sol = fake.provider(clock, transport, observer=observer, output_mode=output_mode)
         result = asyncio.run(fake.complete(sol))
         return result, clock, transport
     with runtime.ownership():
@@ -75,6 +80,7 @@ def test_http_time_queue_and_actual_429_cooldown_are_separate_and_retry_unchange
         assert a == b == {"ok": True}
         assert ca.waits == cb.waits == [60]
         assert ta.requests == tb.requests
+        assert tb.requests[0][1].body == tb.requests[1][1].body
         completed = [event for event in events if event["status"] != "started"]
         http = [event for event in completed if event["kind"] == "sol_http"]
         assert [item["elapsed_seconds"] for item in http] == [2, 2]

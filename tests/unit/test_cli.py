@@ -204,8 +204,9 @@ def test_production_factory_scoped_metadata_and_current_constructor_contracts(tm
     def cloud(environment, **kwargs):
         received.update(environment=environment, **kwargs)
         return h.cloud
-    def sol(environment, *, deployment):
+    def sol(environment, *, deployment, output_mode="json_schema"):
         received["sol_deployment"] = deployment
+        received["sol_output_mode"] = output_mode
         return h.sol
     class Blob:
         def __init__(self, environment):
@@ -231,6 +232,7 @@ def test_production_factory_scoped_metadata_and_current_constructor_contracts(tm
     asyncio.run(construct())
     assert len(metadata) == 1 and h.cloud.environment.application_insights_resource_id in metadata[0]
     assert received["sol_deployment"] == "sol-assessment"
+    assert received["sol_output_mode"] == "json_schema"
     assert received["hosted_environment"] == {
         "FOUNDRY_PROJECT_ENDPOINT": h.cloud.environment.project_endpoint,
         "APPLICATIONINSIGHTS_CONNECTION_STRING": "InstrumentationKey=synthetic-private",
@@ -792,8 +794,8 @@ def test_production_sol_receives_optional_metrics_observer_without_wire_changes(
         "properties": {"ConnectionString": "InstrumentationKey=synthetic"},
     })
     monkeypatch.setattr(providers, "AzureRuntime", lambda *args, **kwargs: h.cloud)
-    def sol(environment, *, deployment, observer):
-        captured.update(deployment=deployment, observer=observer)
+    def sol(environment, *, deployment, observer, output_mode="json_schema"):
+        captured.update(deployment=deployment, observer=observer, output_mode=output_mode)
         return h.sol
     monkeypatch.setattr(providers, "AzureSol", sol)
     class Blob:
@@ -812,4 +814,5 @@ def test_production_sol_receives_optional_metrics_observer_without_wire_changes(
             async with cli.production_ports(h.catalog, h.store, "factory", AssessmentSettings()):
                 assert captured["observer"].__self__ is metrics
                 assert captured["deployment"] == "sol-assessment"
+                assert captured["output_mode"] == "json_schema"
         asyncio.run(create())
