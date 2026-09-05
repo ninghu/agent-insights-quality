@@ -471,16 +471,19 @@ def test_scope_leak_oracle_selects_an_actual_foreign_record():
     assert len(foreign_record_ids) > 1
 
 
-def test_scope_leak_repair_selects_only_its_deployable_version():
+@pytest.mark.parametrize(
+    "key", ["healthcare-agent/issue-012", "weather-agent/issue-006"]
+)
+def test_prompt_issue_repair_selects_only_its_deployable_version(key):
     catalog = load_catalog(ROOT)
-    key = "healthcare-agent/issue-012"
     records = {
         target.key: LastTest(
             "reviewed-source", "FAIL" if target.key == key else "PASS", "2026-09-01"
         )
         for target in catalog.targets
     }
-    version = Path("agents", "healthcare-agent", "issues", "issue-012")
+    agent, issue = key.split("/")
+    version = Path("agents", agent, "issues", issue)
     selected = select_staging(
         catalog, last_tests=records,
         changed_paths=[
@@ -539,9 +542,20 @@ def test_unnecessary_clarification_pairs_do_not_add_weather_evidence():
 
 def test_overgeneration_template_exceeds_bound_without_adding_facts():
     definition = read_json(PROMPT_ROOTS[0] / "issues" / "issue-006" / "definition.json")
-    templates = re.findall(r"`([^`]*<location>[^`]*)`", definition["definition"]["instructions"])
-    repeated = templates[-1]
+    _, active, other = re.split(
+        r"\n(?:Repeated-current|Other-request) branch: ",
+        definition["definition"]["instructions"],
+    )
+    templates = re.findall(r"`([^`]*<location>[^`]*)`", active)
+    assert len(templates) == 1
+    repeated = templates[0]
+    assert repeated.count("<location>") == 8
+    assert re.findall(r"`([^`]*<location>[^`]*)`", other)[0].count("<location>") == 1
+    activation = re.search(r"exact sentence `([^`]+)`", active).group(1)
+    for request in phase_steps(traffic("weather-agent", "issue-006"), "setup"):
+        assert not text(request).endswith(activation)
     for request in phase_steps(traffic("weather-agent", "issue-006"), "probe"):
+        assert text(request).endswith(activation)
         location = re.search(r"evidence for ([^:]+):", text(request)).group(1)
         condition = re.search(r"condition=(\w+)", text(request)).group(1)
         temperature = re.search(r"temperature=(-?\d+)", text(request)).group(1)
