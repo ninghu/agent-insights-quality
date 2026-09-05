@@ -7,6 +7,7 @@ param location string = 'swedencentral'
 param terraModelVersion string = '2026-07-09'
 @allowed(['2026-03-17'])
 param testAgentModelVersion string = '2026-03-17'
+param assessmentModelVersion string = '2026-07-09'
 param automationOwner string = 'ninghu'
 param automationPrincipalId string
 @allowed(['g30'])
@@ -17,6 +18,9 @@ param testAgentCapacity int = 4500
 @minValue(1)
 @maxValue(1000)
 param insightGenerationCapacity int = 100
+@minValue(1)
+@maxValue(1000)
+param assessmentCapacity int = 100
 @allowed(['aiqsweart'])
 param storageAccountPrefix string = 'aiqsweart'
 @allowed(['qualification-storage'])
@@ -37,11 +41,13 @@ module lab 'modules/lab.bicep' = {
     location: location
     terraModelVersion: terraModelVersion
     testAgentModelVersion: testAgentModelVersion
+    assessmentModelVersion: assessmentModelVersion
     automationOwner: automationOwner
     automationPrincipalId: automationPrincipalId
     telemetryGeneration: telemetryGeneration
     testAgentCapacity: testAgentCapacity
     insightGenerationCapacity: insightGenerationCapacity
+    assessmentCapacity: assessmentCapacity
     storageAccountPrefix: storageAccountPrefix
     storageResourceRole: storageResourceRole
     qualityArtifactContainerName: qualityArtifactContainerName

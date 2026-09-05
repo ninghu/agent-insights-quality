@@ -1,11 +1,13 @@
 param location string
 param terraModelVersion string
 param testAgentModelVersion string
+param assessmentModelVersion string
 param automationOwner string
 param automationPrincipalId string
 param telemetryGeneration string
 param testAgentCapacity int
 param insightGenerationCapacity int
+param assessmentCapacity int
 param storageAccountPrefix string
 param storageResourceRole string
 param qualityArtifactContainerName string
@@ -190,6 +192,30 @@ resource stagingInsightGenerationModel 'Microsoft.CognitiveServices/accounts/dep
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' existing = {
   name: registryName
+}
+
+module dailyAssessmentModel 'assessment-model.bicep' = {
+  name: 'assessment-daily'
+  params: {
+    accountName: dailyAccount.name
+    modelVersion: assessmentModelVersion
+    capacity: assessmentCapacity
+  }
+  dependsOn: [
+    dailyInsightGenerationModel
+  ]
+}
+
+module stagingAssessmentModel 'assessment-model.bicep' = {
+  name: 'assessment-staging'
+  params: {
+    accountName: stagingAccount.name
+    modelVersion: assessmentModelVersion
+    capacity: assessmentCapacity
+  }
+  dependsOn: [
+    stagingInsightGenerationModel
+  ]
 }
 
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
