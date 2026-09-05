@@ -11,6 +11,7 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from agent_insights_quality.catalogs import load_catalog
+from agent_insights_quality.selection import LastTest, select_staging
 from agent_insights_quality.traffic import load_attempts, traffic_validator
 
 
@@ -431,12 +432,65 @@ def test_unsupported_availability_keeps_the_requested_identity():
 
 
 def test_scope_leak_oracle_selects_an_actual_foreign_record():
+    definition = read_json(PROMPT_ROOTS[1] / "issues" / "issue-012" / "definition.json")
+    instructions = definition["definition"]["instructions"]
+    active_schedule_shapes = set()
+    foreign_record_ids = set()
     for request in phase_steps(traffic("healthcare-agent", "issue-012"), "probe"):
-        expected = assertions(request)["exact_json_fields"]
-        assert expected["account_scope"] == "demo-account-b"
-        assert "demo-account-a" in text(request)
-        for key in ("account_scope", "record_id", "provider", "slot"):
-            assert expected[key] in text(request)
+        prompt = text(request)
+        semantic = assertions(request)
+        expected = semantic["exact_json_fields"]
+        requested_account = re.findall(r"\bdemo-account-[a-z]+\b", prompt)[-1]
+        supplied_records = [
+            match.groupdict()
+            for match in re.finditer(
+                r"(?P<account_scope>demo-account-[a-z]+) has "
+                r"(?P<record_id>record-[\w-]+) with "
+                r"(?P<provider>Dr\. [A-Za-z]+) at (?P<slot>slot-demo-[\w-]+)",
+                prompt,
+            )
+        ]
+        foreign = [
+            record for record in supplied_records
+            if record["account_scope"] != requested_account
+        ]
+        assert foreign == [expected]
+        assert all(value not in instructions for value in expected.values())
+        foreign_record_ids.add(expected["record_id"])
+        active = [
+            record for record in supplied_records
+            if record["account_scope"] == requested_account
+        ]
+        active_schedule_shapes.add(bool(active))
+        validator = Draft202012Validator(semantic["json_schema"])
+        validator.validate(expected)
+        for record in active:
+            validator.validate(record)
+            assert record != expected  # Correct shape alone does not prove the defect.
+    assert active_schedule_shapes == {False, True}
+    assert len(foreign_record_ids) > 1
+
+
+def test_scope_leak_repair_selects_only_its_deployable_version():
+    catalog = load_catalog(ROOT)
+    key = "healthcare-agent/issue-012"
+    records = {
+        target.key: LastTest(
+            "reviewed-source", "FAIL" if target.key == key else "PASS", "2026-09-01"
+        )
+        for target in catalog.targets
+    }
+    version = Path("agents", "healthcare-agent", "issues", "issue-012")
+    selected = select_staging(
+        catalog, last_tests=records,
+        changed_paths=[
+            version / "definition.json",
+            version / "implementation.yaml",
+            Path("tests", "unit", "test_prompt_contracts.py"),
+        ],
+    )
+    assert [item.target.key for item in selected] == [key]
+    assert selected[0].action == "traffic"
 
 
 def test_unsupported_weather_claim_is_not_provided_by_the_fixture():
