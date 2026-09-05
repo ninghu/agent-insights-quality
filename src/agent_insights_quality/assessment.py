@@ -308,6 +308,17 @@ def _fits(payload: dict, limit: int) -> bool:
     return payload_size(payload) <= limit
 
 
+_DAILY_COMPACTION_BYTES = 2_000_000
+
+
+def _daily_transport(payload: dict, limit: int) -> dict:
+    # Raising the admission budget must not disable lossless compaction: bytes
+    # admitted locally can still exceed the provider's token context window.
+    if _fits(payload, limit) and payload_size(payload) <= _DAILY_COMPACTION_BYTES:
+        return payload
+    return intern_payload(payload)
+
+
 async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
     decoded = expand_payload(payload)
     indices = [attempt["index"] for attempt in decoded["attempts"]]
@@ -775,7 +786,7 @@ async def assess_daily(
     if not visible_in_time or len(visible.ready) < 6:
         exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
         reasons.add("pre_insights_evidence_unavailable")
-    transport = payload if _fits(payload, max_payload_bytes) else intern_payload(payload)
+    transport = _daily_transport(payload, max_payload_bytes)
     if transport is not payload:
         detail["transport_input"] = transport
     if not _fits(transport, max_payload_bytes):
@@ -803,10 +814,7 @@ async def assess_daily(
         review_payload = {**payload, "review": {
             "candidate_reasons": candidates, "initial": output,
         }}
-        review_transport = (
-            review_payload if _fits(review_payload, max_payload_bytes)
-            else intern_payload(review_payload)
-        )
+        review_transport = _daily_transport(review_payload, max_payload_bytes)
         detail["review_input"] = review_payload
         if review_transport is not review_payload:
             detail["review_transport_input"] = review_transport

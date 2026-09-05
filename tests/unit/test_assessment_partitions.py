@@ -365,6 +365,25 @@ def test_daily_normalized_focused_review_is_single_and_uses_original_stable_refs
     ]
 
 
+def test_larger_budget_does_not_disable_lossless_compaction(monkeypatch):
+    from agent_insights_quality import assessment
+    data = independent()
+    plain_sol = fake.Sol()
+    plain = fake.daily(data, plain_sol, after=())
+    threshold = min(payload_size(call) for call in plain_sol.calls) - 1
+    generous_budget = max(payload_size(call) for call in plain_sol.calls) * 2
+    monkeypatch.setattr(assessment, "_DAILY_COMPACTION_BYTES", threshold)
+    compact_sol = fake.Sol()
+    compact = fake.daily(data, compact_sol, after=(), max_payload_bytes=generous_budget)
+    assert len(compact_sol.calls) == len(plain_sol.calls) == 2
+    for encoded, original in zip(compact_sol.calls, plain_sol.calls, strict=True):
+        assert payload_size(original) < generous_budget
+        assert payload_size(encoded) < payload_size(original)
+        assert expand_payload(encoded) == original
+    assert compact.unit_result == plain.unit_result
+    assert compact.private_detail["input"] == plain.private_detail["input"]
+
+
 def test_daily_lossless_transport_preserves_holistic_noise_and_duplicate_root_counts():
     def mixed(payload):
         output = fake.output(payload)
