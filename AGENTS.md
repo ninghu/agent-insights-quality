@@ -37,10 +37,11 @@ staging/Daily fallbacks or stale procedural docs/skills as new authority.
 - Staging selects changed, missing or incomplete targets. First use or explicit full staging
   covers all 41 targets with ten attempts each. No deployed paired-v0 traffic; matched baseline
   comparisons belong in local Hosted tests. Retain unchanged results with their actual source/date.
-- Baselines need six adequately evidenced healthy attempts and no proven healthy-contract
-  violation. Deterministic issues need six proven observations and no proven deterministic-contract
-  violation; probability-tolerant issues use their reviewed threshold, currently six of ten.
+- Baselines need eight adequately evidenced healthy attempts and no proven healthy-contract
+  violation. Deterministic issues need eight proven observations and no proven deterministic-contract
+  violation; probability-tolerant issues use their reviewed threshold, currently eight of ten.
   Assess all ten, distinguish PASS/FAIL/INCOMPLETE, and never resample misses to force a pass.
+  Record the staging policy used; retain historical six-of-ten results without relabeling them.
 - Staging creates no Insights runs, Daily score, team email or quality-publication rows.
   There is no staging PASS admission gate, digest chain, promotion receipt or staging-to-Daily
   approval ceremony. Ordinary source review remains required.

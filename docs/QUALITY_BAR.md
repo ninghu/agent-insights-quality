@@ -5,19 +5,26 @@
 Staging normally selects changed, missing or incomplete targets. First use or an explicit full run
 covers five baselines and 36 issues with ten attempts per target. There is no deployed paired-v0.
 
-Baselines require six adequately evidenced healthy attempts with no proven healthy-contract
-violation. Deterministic issues require six proven defect observations with no proven contradiction
-of the deterministic contract. Probability-tolerant issues use their reviewed observation threshold.
-Evaluate all ten attempts, not just the first six successes.
+Baselines require eight adequately evidenced healthy attempts with no proven healthy-contract
+violation. Deterministic issues require eight proven defect observations with no proven contradiction
+of the deterministic contract. Probability-tolerant issues also require eight observations out of ten.
+Evaluate all ten attempts, not just the first eight successes.
 
 Missing evidence is not the same as a behavior failure. Preserve PASS, FAIL and INCOMPLETE
 separately, and never resample a behavioral miss until it passes.
+
+For example, seven observations plus three sufficiently evidenced nonobservations fail the
+observation threshold. Six observations plus four insufficient attempts are INCOMPLETE, not a
+proven behavioral failure. Eight healthy observations cannot hide a proven baseline violation.
+Record the policy with each assessment. Historical six-of-ten judgments remain historical;
+apply the new policy to retained valid evidence without overwriting the original result.
 
 ## Daily readiness and assessment
 
 Daily plans 20 issues and five baselines. Six distinct attributable probe attempts out of ten
 establish telemetry readiness, not defect correctness. It does not require every child span or
 repeat staging's deep behavioral checks before Insights.
+The eight-observation staging policy does not raise this six-attempt Daily readiness requirement.
 
 Core diagnosis, reasonable category and independently supporting current evidence determine
 correctness. Severity and suggested fixes are diagnostic only. A candidate gap receives bounded

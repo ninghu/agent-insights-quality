@@ -30,7 +30,9 @@ Every baseline/issue owns complete deployable source; no runtime issue selectors
 - Local tests exercise actual Hosted business/framework code with controlled external boundaries
   and in-memory tracing. Prompt runtime behavior is evaluated in staging.
 - Staging tests changed or missing targets. The initial full inventory is five baselines plus
-  36 issues, with ten attempts each and no deployed paired-v0.
+  36 issues, with ten attempts each and no deployed paired-v0. Qualification requires eight
+  adequately evidenced observations; a proven baseline or deterministic-contract violation
+  still disqualifies the version. Staging policy changes do not rewrite historical results.
 - Daily runs all five Agents concurrently. Within each Agent, baseline and four rotated issue
   versions run sequentially, with six attributable trace-present attempts required out of ten.
 - Sol assesses raw evidence directly. Correctness, Noise and Duplicate classification are separate

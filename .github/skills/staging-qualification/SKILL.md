@@ -20,6 +20,8 @@ Expectation/verifier-only changes reassess usable saved evidence, without fresh 
 
 Staging uses ten reviewed attempts per target, not deployed paired-v0 traffic.
 Sol receives endpoint outputs and raw invocation-scoped spans, with gaps and citations.
+Eight adequately evidenced healthy/defect observations are required; a proven baseline or
+deterministic-contract violation still disqualifies. Daily trace readiness remains six of ten.
 Keep PASS, FAIL and INCOMPLETE distinct. Do not infer a new validation mode, resample a
 behavioral miss or turn a tracing gap into an observed Agent failure.
 
