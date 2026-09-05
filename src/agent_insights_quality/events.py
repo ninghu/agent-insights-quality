@@ -2,6 +2,8 @@
 
 No raw exception strings, free text, provider identifiers, or payloads are event
 fields. The caller supplies reviewed catalog UnitIds, not runtime provider names.
+Codes are code-owned constants following QualityError's identifier contract,
+never identifiers synthesized from provider content or exception messages.
 The optional outbox callback persists only the validated projection locally.
 """
 
@@ -32,14 +34,6 @@ EVENT_KINDS = frozenset(
 STAGES = frozenset(
     {"run", "deployment", "traffic", "evidence", "insights", "assessment", "report", "delivery", "outbox"}
 )
-SAFE_CODES = frozenset(
-    {
-        "ok", "operation_failed", "checkpoint_failed", "logging_failed", "remote_timeout",
-        "rate_limited", "retry_exhausted", "deadline_expired", "incomplete_evidence",
-        "ambiguous_outcome", "settings_invalid", "record_conflict", "ownership_busy",
-        "cancelled",
-    }
-)
 COUNTERS = frozenset(
     {"attempt_count", "completed_count", "pending_count", "retry_count", "failed_count", "unit_count"}
 )
@@ -63,7 +57,7 @@ def _bounded_count(value: object, maximum: int = 1_000_000_000) -> bool:
 def project_event(
     event: Mapping[str, Any], *, allowed_units: Iterable[UnitId] = ()
 ) -> dict[str, Any]:
-    """Validate both field names and closed-vocabulary values for an ADX outbox."""
+    """Validate allowlisted fields/values and the shared code-owned error format."""
     required = {"utc", "elapsed_ms", "kind", "stage", "code", "counters"}
     optional = {"agent", "logical_version", "attempt", "turn"}
     if not isinstance(event, Mapping) or not required <= event.keys():
@@ -73,10 +67,10 @@ def project_event(
     if (
         not isinstance(event["kind"], str) or event["kind"] not in EVENT_KINDS
         or not isinstance(event["stage"], str) or event["stage"] not in STAGES
-        or not isinstance(event["code"], str) or event["code"] not in SAFE_CODES
         or not _bounded_count(event["elapsed_ms"], 1_000_000_000_000)
     ):
         raise ValueError("Invalid event values")
+    QualityError(event["code"])
     timestamp = event["utc"]
     if not isinstance(timestamp, str) or not timestamp.endswith("Z"):
         raise ValueError("Invalid event time")

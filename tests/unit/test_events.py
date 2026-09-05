@@ -7,6 +7,7 @@ import json
 import pytest
 
 from agent_insights_quality import events, state
+from agent_insights_quality.errors import QualityError
 from agent_insights_quality.events import RunLogger, project_event
 from agent_insights_quality.results import UnitId
 from agent_insights_quality.state import CheckpointError, RuntimeStore
@@ -161,6 +162,32 @@ def test_projection_revalidates_values_and_has_no_payloads(tmp_path):
     ):
         with pytest.raises((TypeError, ValueError)):
             project_event(changed, allowed_units=(UNIT,))
+
+
+def test_new_code_owned_quality_errors_are_preserved_in_all_sinks(tmp_path):
+    outbox, console = [], io.StringIO()
+    log = logger(tmp_path, outbox=outbox.append, console=console)
+    error = QualityError("collector_scope_ambiguous")
+    assert log.emit("failure", stage="evidence", code=error.code, unit=UNIT)
+    assert log.health_warnings == ()
+    assert read_events(tmp_path)[0]["code"] == error.code
+    assert error.code in (tmp_path / "runner.log").read_text()
+    assert error.code in console.getvalue()
+    assert outbox[0]["code"] == error.code
+    assert project_event(outbox[0], allowed_units=(UNIT,)) == outbox[0]
+
+
+@pytest.mark.parametrize(
+    "code", ["", "Uppercase", "with-dash", "with space", "a" * 81,
+             "https://synthetic.invalid", "a\npayload", None, 42],
+)
+def test_error_codes_use_the_same_quality_error_contract(tmp_path, code):
+    with pytest.raises(ValueError):
+        QualityError(code)
+    log = logger(tmp_path)
+    assert not log.emit("failure", code=code)
+    assert log.health_warnings == ("logging_event_rejected",)
+    assert not (tmp_path / "events.jsonl").exists()
 
 
 def test_logging_failure_is_visible_and_does_not_mask_checkpoint_failure(tmp_path, monkeypatch):
