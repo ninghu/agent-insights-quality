@@ -29,8 +29,9 @@ procedural docs/skills as new authority. Do not merge/enable automation while in
 
 ## Execution design
 
-- Python owns bounded parallelism, retries, checkpoints, telemetry, assessment and delivery.
-  Copilot automation only launches one local command on weekdays; it is not the orchestrator.
+- Python owns bounded parallelism, retries, checkpoints, telemetry, assessment and email preparation.
+  Copilot automation launches the runner and performs only the final app-native email send from its
+  fixed recipient/HTML request. It does not orchestrate or assess qualification.
 - Reuse the staging and Daily Sweden Central Accounts/Projects and their Agent objects, with
   separate g30 telemetry. Change versions/build artifacts only when deployment inputs change.
 - Staging selects changed, missing or incomplete targets. First use or explicit full staging
@@ -80,6 +81,9 @@ procedural docs/skills as new authority. Do not merge/enable automation while in
   no public report/trend, ADX writes, generated PR or official team email.
 - Provider acceptance alone is not inbox-delivery proof. The USER enables weekday automation
   after acceptance and normal integration to main; never enable it as part of the private trial.
+- Claim the prepared email request before the app sends it, then persist the send outcome.
+  An interrupted/ambiguous send is reconciled, not retried blindly. Do not choose recipients or
+  rewrite report content in the automation prompt.
 
 ## Local development
 
