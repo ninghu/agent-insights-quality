@@ -18,6 +18,7 @@ from .events import RunLogger
 from .privacy import restore_public_result
 from .publication import AzureCliAdxClient, PublicationOutbox, build_public_report
 from .results import PlannedUnit, QualityResult
+from .settings import AssessmentSettings
 from .state import RuntimeStore, StateError
 from .work_items import fetch_quality_context, render_private_context
 
@@ -361,7 +362,7 @@ class RunIntegration:
 
     def prepare_delivery(
         self, result: QualityResult, environment: Environment, source_revision: str, *,
-        rerun: int, recipient: Callable[[], str],
+        rerun: int, recipient: Callable[[], str], assessment_settings: AssessmentSettings | None = None,
     ):
         from .report_context import load_report_context
 
@@ -375,12 +376,26 @@ class RunIntegration:
             warnings = set(self.warnings)
             if self.logger and self.logger.health_warnings:
                 warnings.add("logging_failed")
+            private_context = self.context
+            configured = assessment_settings.to_dict() if assessment_settings is not None else None
+            if self.test_run and configured is not None:
+                assessor_context = (
+                    "Configured assessment (intent, not observed serving metadata)\n"
+                    f"Deployment: {configured['deployment_name']}\n"
+                    f"Model: {configured['model']}\n"
+                    f"Configured model version: {configured['model_version']}\n"
+                    f"Credential: {configured['credential']}"
+                )
+                private_context = "\n\n".join(
+                    part for part in (private_context, assessor_context) if part
+                )
             frozen = {
                 "report": result.to_dict(), "test_run": self.test_run, "rerun": rerun,
                 "report_date": self.report_date.isoformat(), "region_display": environment.region_display,
-                "source_revision": source_revision, "private_context": self.context,
+                "source_revision": source_revision, "private_context": private_context,
                 "warnings": sorted(warnings), "recipient": recipient(),
                 "report_context": context.to_private_dict(),
+                "configured_assessor": configured,
             }
             self.records.save_completed("delivery-inputs", frozen)
         elif frozen["report_context"] != context.to_private_dict():

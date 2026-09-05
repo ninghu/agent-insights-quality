@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
+from collections.abc import Mapping
 from datetime import date
 import json
 from pathlib import Path
@@ -103,6 +104,15 @@ class AssessmentSettings:
         except ValueError as error:
             raise QualityError("assessment_settings_invalid") from error
 
+    def to_dict(self) -> dict[str, str]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> AssessmentSettings:
+        if not isinstance(value, Mapping) or set(value) != {item.name for item in fields(cls)}:
+            raise QualityError("assessment_settings_invalid")
+        return cls(**value)
+
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result = {}
@@ -134,10 +144,9 @@ def load_settings(path: Path | None = None) -> RuntimeSettings:
     return RuntimeSettings(**_load(path, {item.name for item in fields(RuntimeSettings)}))
 
 
-def load_assessment_settings(path: Path | None = None) -> AssessmentSettings:
+def load_assessment_settings(path: Path | None = None, *, require_complete: bool = False) -> AssessmentSettings:
     """Read private assessment.json only when explicitly configured."""
     if path is None:
         return AssessmentSettings()
-    return AssessmentSettings(
-        **_load(path, {item.name for item in fields(AssessmentSettings)})
-    )
+    value = _load(path, {item.name for item in fields(AssessmentSettings)})
+    return AssessmentSettings.from_dict(value) if require_complete else AssessmentSettings(**value)

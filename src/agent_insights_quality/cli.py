@@ -186,13 +186,37 @@ def _staging_status(runtime, records, active, result, warnings=()):
     }, 0 if complete else 2
 
 
+def _assessment_for_run(runtime, records):
+    from .settings import AssessmentSettings, load_assessment_settings
+    from .state import StateError
+
+    frozen = records.read_completed("assessment-settings", missing_ok=True)
+    if frozen is not None:
+        return AssessmentSettings.from_dict(frozen)
+    if records.read_completed("run", missing_ok=True) is not None:
+        raise StateError("assessment_settings_missing")
+    path = None
+    if runtime.environment == "daily":
+        override = _private_path(runtime, runtime.root / "config" / "daily-assessment.json")
+        if override.is_file():
+            path = override
+    if path is None:
+        shared = _private_path(runtime, runtime.root / "config" / "assessment.json")
+        path = shared if shared.is_file() else None
+    settings = load_assessment_settings(
+        path, require_complete=path is not None and path.name == "daily-assessment.json",
+    )
+    records.save_completed("assessment-settings", settings.to_dict())
+    return settings
+
+
 async def _run(
     args, catalog, runtime, *, ports, integrations, today: date, staging_policy_migration=None,
 ) -> tuple[dict, int]:
     from .contracts import Environment
     from .runner import Runner, planned_units, source_revision
     from .selection import select_daily
-    from .settings import load_assessment_settings, load_settings
+    from .settings import load_settings
 
     is_daily = args.command == "run-daily"
     if staging_policy_migration is not None:
@@ -223,12 +247,11 @@ async def _run(
             metrics.reuse("run", "staging")
         return _staging_status(runtime, records, active, records.read("staging-result"))
     frozen = records.read_completed("delivery-inputs", missing_ok=True) if is_daily else None
+    assessment = _assessment_for_run(runtime, records)
     recipient = _recipient(runtime) if is_daily and frozen is None else None
     if frozen is None:
         settings_path = catalog.root / "config" / "runtime.json"
         settings = load_settings(settings_path if settings_path.is_file() else None)
-        assessment_path = _private_path(runtime, runtime.root / "config" / "assessment.json")
-        assessment = load_assessment_settings(assessment_path if assessment_path.is_file() else None)
     reuse_run_id = None
     if test_run and records.read_completed("run", missing_ok=True) is None:
         last = runtime.outbox("trials").read(today.isoformat(), missing_ok=True)
@@ -255,7 +278,7 @@ async def _run(
                     integration.warn("logging_failed")
                 email = integration.prepare_delivery(
                     result, environment, frozen["source_revision"], rerun=args.rerun,
-                    recipient=lambda: frozen["recipient"],
+                    recipient=lambda: frozen["recipient"], assessment_settings=assessment,
                 )
             return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
         async with ports(catalog, runtime, run_id, assessment) as (cloud, sol, registry):
@@ -264,15 +287,11 @@ async def _run(
                 test_run=test_run, rerun=args.rerun if is_daily else 0,
                 revision=revision, reuse_run_id=reuse_run_id, event_outbox=integration.queue_event,
                 staging_policy_migration=staging_policy_migration,
-                metrics=metrics,
+                metrics=metrics, assessment_settings=assessment,
             )
             try:
                 integration.attach_logger(runner.logger)
                 runner.initialize(targets, today, kind=runtime.environment)
-                records.save_completed("assessment-settings", {
-                    "deployment_name": assessment.deployment_name, "model": assessment.model,
-                    "model_version": assessment.model_version, "credential": assessment.credential,
-                })
                 if is_daily:
                     result = await runner.run_daily(targets)
                     with scope(metrics, "stage", "delivery_report"):
@@ -282,6 +301,7 @@ async def _run(
                             integration.warn("logging_failed")
                         email = integration.prepare_delivery(
                             result, cloud.environment, revision, rerun=args.rerun, recipient=lambda: recipient,
+                            assessment_settings=assessment,
                         )
                     if test_run:
                         runtime.outbox("trials").save_progress(today.isoformat(), {"run_id": run_id})

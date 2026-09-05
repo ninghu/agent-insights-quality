@@ -24,7 +24,7 @@ from .results import (
 from .selection import (
     LastTest, Selection, SourceChanges, deployment_inputs, git_source_changes, select_staging,
 )
-from .settings import RuntimeSettings
+from .settings import AssessmentSettings, RuntimeSettings
 from .state import RecordStore, RuntimeStore, StateError
 from .staging_policy import STAGING_POLICY, StagingPolicyMigration
 from .telemetry import Snapshot, _flat, collect_snapshot
@@ -293,6 +293,7 @@ class Runner:
         event_outbox: Callable[[dict[str, Any]], None] | None = None,
         staging_policy_migration: StagingPolicyMigration | None = None,
         metrics: RunMetrics | None = None,
+        assessment_settings: AssessmentSettings | None = None,
     ) -> None:
         if runtime.environment != cloud.environment.profile:
             raise QualityError("runner_environment_mismatch")
@@ -311,6 +312,16 @@ class Runner:
         self.staging_policy_migration = staging_policy_migration
         self.catalog, self.runtime, self.run_id = catalog, runtime, run_id
         self.run = runtime.run(run_id)
+        frozen_assessor = self.run.read_completed("assessment-settings", missing_ok=True)
+        if assessment_settings is not None and not isinstance(assessment_settings, AssessmentSettings):
+            raise QualityError("assessment_settings_invalid")
+        self.assessment_settings = assessment_settings or (
+            AssessmentSettings.from_dict(frozen_assessor) if frozen_assessor is not None else AssessmentSettings()
+        )
+        if frozen_assessor is not None and AssessmentSettings.from_dict(frozen_assessor) != self.assessment_settings:
+            raise QualityError("run_assessor_mismatch")
+        if getattr(sol, "deployment", self.assessment_settings.deployment_name) != self.assessment_settings.deployment_name:
+            raise QualityError("assessor_deployment_mismatch")
         self.metrics = metrics
         self.cloud = ObservedCloud(cloud, metrics) if metrics is not None else cloud
         self.sol = ObservedSol(sol, metrics) if metrics is not None else sol
@@ -378,6 +389,8 @@ class Runner:
         }
         existing = self.run.read_completed("run", missing_ok=True)
         if existing is not None:
+            if self.run.read_completed("assessment-settings", missing_ok=True) is None:
+                raise StateError("assessment_settings_missing")
             if any(existing.get(key) != value for key, value in expected.items()):
                 raise QualityError("run_identity_mismatch")
             if not self.test_run and kind == "daily" and existing["source_revision"] != self.revision:
@@ -392,6 +405,7 @@ class Runner:
             ):
                 raise QualityError("runner_reuse_invalid")
             self.lanes = self.runtime.run(previous.get("lane_run_id", self.reuse_run_id))
+        self._save(self.run, "completed", "assessment-settings", self.assessment_settings.to_dict())
         self._save(self.run, "completed", "environment", asdict(self.cloud.environment))
         if existing is None:
             self._save(self.run, "completed", "run", {
@@ -445,6 +459,7 @@ class Runner:
         if old is None and self.reuse_run_id:
             old = self.runtime.run(self.reuse_run_id).read(key, missing_ok=True)
         changed, evaluate, recollect, policy_only = False, False, False, False
+        assessor_changed = False
         if old:
             if not {"source_revision", "traffic_source_revision", "traffic_run_id", "work_key"} <= old.keys():
                 raise StateError("target_checkpoint_invalid")
@@ -476,6 +491,9 @@ class Runner:
                 and not recollect
             )
             policy_only |= approved_migration
+            if self.runtime.environment == "daily" and old.get("assessment"):
+                previous_assessor = self._configured_assessor(old["assessment"], old.get("configured_assessor"))
+                assessor_changed = previous_assessor != self.assessment_settings.to_dict()
         if old and not changed:
             if self.runtime.run(old["traffic_run_id"]).read_completed("environment") != asdict(self.cloud.environment):
                 raise StateError("retained_environment_mismatch")
@@ -495,6 +513,10 @@ class Runner:
                 binding.pop("policy_version", None)
                 binding.pop("minimum_required", None)
                 binding["refresh_evidence"] = recollect
+            if assessor_changed:
+                binding.pop("result", None)
+                binding.pop("assessment", None)
+                binding.pop("configured_assessor", None)
             if evaluate:
                 binding["source_revision"] = self.revision
         else:
@@ -522,6 +544,13 @@ class Runner:
             })
         return _Work(self.runtime.run(binding["traffic_run_id"]), binding)
 
+    def _configured_assessor(self, reference: dict, declared: dict | None = None) -> dict[str, str]:
+        configured = self.runtime.run(reference["run_id"]).read_completed("assessment-settings")
+        identity = AssessmentSettings.from_dict(configured).to_dict()
+        if declared is not None and AssessmentSettings.from_dict(declared).to_dict() != identity:
+            raise StateError("assessment_identity_conflict")
+        return identity
+
     def _prior_result(self, work: _Work) -> dict | None:
         result = work.binding.get("result")
         if result is not None:
@@ -531,6 +560,11 @@ class Runner:
             artifact = self.runtime.run(reference["run_id"]).read_artifact(reference["artifact"])
             if any(artifact.get(key) != value for key, value in result.items()):
                 raise StateError("assessment_checkpoint_conflict")
+            configured = self._configured_assessor(reference, work.binding.get("configured_assessor"))
+            if artifact.get("configured_assessor") is not None and artifact["configured_assessor"] != configured:
+                raise StateError("assessment_identity_conflict")
+            if self.runtime.environment == "daily" and configured != self.assessment_settings.to_dict():
+                raise StateError("assessment_identity_conflict")
         return result
 
     def _update(self, target: Target, work: _Work, **fields: Any) -> None:
@@ -1156,6 +1190,9 @@ class Runner:
         self._save(self.run, "progress", f"targets/{target.key}/failure", value)
 
     def _apply_assessment(self, target: Target, work: _Work, reference: dict, result: dict) -> None:
+        configured = self._configured_assessor(
+            {"run_id": self.run_id}, result.get("configured_assessor"),
+        )
         if self.runtime.environment == "staging":
             policy = {key: result[key] for key in ("policy_version", "minimum_required") if key in result}
             fields = {
@@ -1174,7 +1211,7 @@ class Runner:
         work.binding.pop("failure_run_id", None)
         self._update(
             target, work, **fields, assessment={"run_id": self.run_id, "artifact": reference["artifact"]},
-            assessed_at=self.now().isoformat(),
+            assessed_at=self.now().isoformat(), configured_assessor=configured,
         )
         self._save(self.run, "progress", f"targets/{target.key}/assessment", {
             **reference, "status": "applied",
@@ -1208,7 +1245,10 @@ class Runner:
         else:
             artifact = f"targets/{target.key}/assessments/{uuid.uuid4().hex}"
             saved = None
-        reference = {"source_revision": self.revision, "work_key": work.key, "artifact": artifact}
+        reference = {
+            "source_revision": self.revision, "work_key": work.key, "artifact": artifact,
+            "configured_assessor": self.assessment_settings.to_dict(),
+        }
         self._save(self.run, "progress", pending_key, {**reference, "status": "pending"})
         if saved is None:
             self._event("started", target, stage="assessment")
@@ -1216,6 +1256,7 @@ class Runner:
                 self._check()
                 result = await operation()
                 saved = result.to_private_dict()
+                saved["configured_assessor"] = self.assessment_settings.to_dict()
             self._save(self.run, "artifact", artifact, saved)
         elif self.metrics:
             self.metrics.reuse("stage", "assessment")
