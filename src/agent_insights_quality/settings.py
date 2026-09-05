@@ -36,6 +36,7 @@ class RuntimeSettings:
     poll_interval_seconds: int = 5
     poll_timeout_seconds: int = 600
     insights_poll_timeout_seconds: int = 1200
+    daily_assessment_max_payload_bytes: int = 4_000_000
     retry_limit: int = 3
     retry_backoff_seconds: int = 2
     retry_max_backoff_seconds: int = 60
@@ -55,6 +56,7 @@ class RuntimeSettings:
             "poll_interval_seconds": (1, 60),
             "poll_timeout_seconds": (1, 3600),
             "insights_poll_timeout_seconds": (1, 3600),
+            "daily_assessment_max_payload_bytes": (1024, 8_000_000),
             "retry_limit": (0, 8),
             "retry_backoff_seconds": (1, 60),
             "retry_max_backoff_seconds": (1, 120),

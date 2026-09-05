@@ -373,6 +373,23 @@ def test_readiness_six_distinct_probe_attempts_not_operations(tmp_path, ready, s
     assert len(h.cloud.invocations) == 40
 
 
+def test_daily_uses_explicit_payload_budget_without_changing_traffic(tmp_path, monkeypatch):
+    from agent_insights_quality import assessment
+    original = assessment.assess_daily
+    budgets = []
+
+    async def record_budget(*args, **kwargs):
+        budgets.append(kwargs["max_payload_bytes"])
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(assessment, "assess_daily", record_budget)
+    h = Harness(tmp_path, daily_assessment_max_payload_bytes=3_000_000)
+    result = h.daily()
+    assert result.status.value == "Full" and result.score == 100
+    assert budgets == [3_000_000, 3_000_000]
+    assert len(h.cloud.invocations) == 40 and len(h.cloud.starts) == 2
+
+
 def test_readiness_does_not_require_setup_trace_or_success_status(tmp_path):
     h = Harness(tmp_path)
     runner = h.runner()

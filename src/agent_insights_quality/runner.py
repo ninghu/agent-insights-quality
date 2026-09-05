@@ -1481,6 +1481,7 @@ class Runner:
                     target, attempts, invocations, snapshot, self.sol,
                     before_cards=tuple(insight["before"]), after_cards=tuple(insight["after"]),
                     engine_started_at=insight["started_at"], visible_snapshot=visible, engine_window=window,
+                    max_payload_bytes=self.settings.daily_assessment_max_payload_bytes,
                 ))
                 outcomes[target.key] = restore_unit(result["unit_result"])
             except QualityError as error:

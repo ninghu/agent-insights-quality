@@ -55,6 +55,12 @@ assessment settings, regardless of changes to those files. A new run with a diff
 reuses matching execution evidence where applicable, but creates new judgments and records the
 configured model identity; it never relabels earlier judgments from another model.
 
+Daily assessment has a bounded `daily_assessment_max_payload_bytes` setting (default 4,000,000;
+maximum 8,000,000). Oversized raw inputs use the existing lossless reference encoding; no evidence
+is truncated to fit. A package that still exceeds the configured budget remains unscorable.
+This byte budget does not establish the deployed model's token/context limit: native rejections
+and missing evidence remain explicit assessment failures, not successful measurements.
+
 ## Interactive long-running work
 
 During an interactive rollout, a nested app session can own the entire staging or private Daily

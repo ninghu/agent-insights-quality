@@ -28,6 +28,7 @@ def test_code_defaults_are_offline_and_bounded(monkeypatch):
     assert settings.retry_limit == 3
     assert settings.poll_timeout_seconds == 600
     assert settings.insights_poll_timeout_seconds == 1200
+    assert settings.daily_assessment_max_payload_bytes == 4_000_000
     assert load_assessment_settings() == AssessmentSettings(
         deployment_name="sol-assessment", model="gpt-5.6-sol",
         model_version="2026-07-09", credential="azure_cli",
@@ -47,6 +48,9 @@ def test_code_defaults_are_offline_and_bounded(monkeypatch):
         {"poll_timeout_seconds": 3601}, {"retry_limit": -1}, {"retry_limit": 9},
         {"insights_poll_timeout_seconds": 3601}, {"insights_poll_timeout_seconds": True},
         {"insights_poll_timeout_seconds": 3}, {"insights_poll_timeout_seconds": 0},
+        {"daily_assessment_max_payload_bytes": 1023},
+        {"daily_assessment_max_payload_bytes": 8_000_001},
+        {"daily_assessment_max_payload_bytes": True},
         {"retry_limit": 2.0}, {"retry_backoff_seconds": 10, "retry_max_backoff_seconds": 2},
         {"poll_timeout_seconds": 3}, {"log_max_bytes": 100}, {"log_backup_count": 0},
     ],
