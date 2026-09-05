@@ -43,6 +43,21 @@ Local `runner.log` and `events.jsonl` preserve starts, heartbeats, retries and o
 restart. They work without ADX. Raw evidence is kept separately. Status reads do not take the
 writer lock or perform live work.
 
+## Interactive long-running work
+
+During an interactive rollout, a nested app session can own the entire staging or private Daily
+runner command while its parent monitors progress and coordinates fixes. Python still owns all
+internal orchestration; do not create per-Agent orchestration sessions.
+
+Monitor `QualityOperationsV1` by the exact `FrameworkRunId`, using local checkpoints as the
+authoritative outcome and recovery state. An idle app session or an old heartbeat is not proof
+that its runner completed. After an app restart, confirm whether the local process survived
+before resuming the same command under normal runtime ownership; never bypass a lock or start
+a second writer. Nested sessions do not guarantee process survival across app restarts.
+
+Independent repair work can proceed in separate worktrees without modifying the running candidate.
+Integrate repairs after the active run ends, then let incremental selection choose affected units.
+
 ## Environment boundaries
 
 Staging uses `aiq-staging-swedencentral`; Daily uses `aiq-daily-swedencentral`. Both reuse Agent
