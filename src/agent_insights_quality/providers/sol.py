@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from copy import deepcopy
 from typing import Any
 
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
@@ -29,6 +30,35 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> JsonObject:
 
 def _reject_constant(value: str) -> None:
     raise ValueError("Non-finite JSON number")
+
+
+def _wire_schema(schema: Mapping[str, Any]) -> JsonObject:
+    """Omit provider-unsupported uniqueness checks only at JSON Schema nodes."""
+    projected = deepcopy(dict(schema))
+
+    def visit(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        node.pop("uniqueItems", None)
+        for keyword in ("properties", "patternProperties", "$defs", "definitions",
+                        "dependentSchemas", "dependencies"):
+            children = node.get(keyword)
+            if isinstance(children, dict):
+                for child in children.values():
+                    visit(child)
+        for keyword in ("items", "prefixItems", "allOf", "anyOf", "oneOf",
+                        "additionalItems", "additionalProperties", "unevaluatedItems",
+                        "unevaluatedProperties", "contains", "propertyNames",
+                        "not", "if", "then", "else", "contentSchema"):
+            child = node.get(keyword)
+            if isinstance(child, list):
+                for item in child:
+                    visit(item)
+            else:
+                visit(child)
+
+    visit(projected)
+    return projected
 
 
 class SolResponseError(QualityError):
@@ -91,7 +121,7 @@ class AzureSol:
                     "type": "json_schema",
                     "name": "assessment",
                     "strict": True,
-                    "schema": schema,
+                    "schema": _wire_schema(schema),
                 }
             },
         }

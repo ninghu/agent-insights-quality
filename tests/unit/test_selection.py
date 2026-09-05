@@ -87,7 +87,7 @@ def test_missing_full_incomplete_and_unchanged_failure(catalog):
     ("src/agent_insights_quality/providers/hosted.py", {"hosted"}, "traffic"),
     ("src/agent_insights_quality/providers/acr.py", {"support-ticket-agent"}, "traffic"),
     ("src/agent_insights_quality/providers/transport.py", set(), "traffic"),
-    ("src/agent_insights_quality/providers/sol.py", set(), "traffic"),
+    ("src/agent_insights_quality/providers/sol.py", {"all"}, "reassess"),
     ("src/agent_insights_quality/cli.py", set(), "traffic"),
     ("src/agent_insights_quality/assessment.py", {"all"}, "reassess"),
     ("src/agent_insights_quality/assessment_partition.py", {"all"}, "reassess"),
@@ -166,6 +166,7 @@ def test_deployment_inputs_exclude_traffic_and_verifiers(catalog):
         evaluator = ROOT / "src" / "agent_insights_quality"
         for path in (
             evaluator / "assessment_partition.py",
+            evaluator / "providers" / "sol.py",
             evaluator / "prompts" / "staging.md",
             evaluator / "prompts" / "daily.md",
         ):
@@ -211,6 +212,7 @@ def test_git_bound_deployment_revision_changes_only_for_actual_inputs(catalog, t
         ("agents/support-ticket-agent/issues/issue-029/implementation.yaml", set()),
         ("src/agent_insights_quality/telemetry.py", set()),
         ("src/agent_insights_quality/assessment_partition.py", set()),
+        ("src/agent_insights_quality/providers/sol.py", set()),
         ("src/agent_insights_quality/prompts/staging.md", set()),
         ("src/agent_insights_quality/prompts/daily.md", set()),
     ):
