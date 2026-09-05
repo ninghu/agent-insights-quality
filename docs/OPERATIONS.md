@@ -58,6 +58,27 @@ a second writer. Nested sessions do not guarantee process survival across app re
 Independent repair work can proceed in separate worktrees without modifying the running candidate.
 Integrate repairs after the active run ends, then let incremental selection choose affected units.
 
+## Private performance observations
+
+Live commands return `performance_path` when the private performance artifact was saved.
+It identifies one process segment under the run's `artifacts/performance/` directory.
+Resuming creates a separate segment instead of rewriting earlier measurements; bounded batches
+and progress records retain observations during a long run. An unfinished segment is not proof
+of completed execution, and an uncheckpointed tail may be unavailable after abrupt termination.
+
+Use stage and lane timings to locate the critical path, queue timings for existing concurrency
+limits, adapter/HTTP timings for awaited calls, and hydration/poll/backoff timings for waits.
+These intervals nest and overlap: their sums are not the run's wall time or pure service latency.
+The segment begins after source and plan selection; earlier startup remains in command-status logs.
+Reused or skipped work has a null duration, not an instantaneous fresh execution. Active peaks
+describe the existing concurrency, not a changed limit.
+
+Sol token totals use actual returned usage only, with known-response counts and null values when
+usage is unavailable. Payload bytes are not a token estimate. Observations contain no raw prompts,
+responses, credentials or provider identifiers and are not sent to ADX, including in TEST mode.
+Measurement-persistence failures surface as warnings without rerunning qualification; primary
+side-effect checkpoint failures remain fatal. Performance data never affects quality scores.
+
 ## Environment boundaries
 
 Staging uses `aiq-staging-swedencentral`; Daily uses `aiq-daily-swedencentral`. Both reuse Agent
