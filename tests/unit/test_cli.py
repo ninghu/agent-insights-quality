@@ -608,9 +608,102 @@ def test_next_source_staging_selects_all_missing_after_global_failure_without_re
     assert result["run_id"] != prior_active["run_id"] and result["selected"] == 2
     selected = staging.run(result["run_id"]).read_completed("selection")["targets"]
     assert {item["key"] for item in selected} == {target.key for target in app.catalog.targets[1:]}
-    assert all("missing" in item["reasons"] for item in selected)
+    assert {item["key"]: item["reasons"] for item in selected} == {
+        target.key: ["incomplete"] if prior_run.read(
+            f"targets/{target.key}/source", missing_ok=True,
+        ) else ["missing"]
+        for target in app.catalog.targets[1:]
+    }
     assert len(app.cloud.invocations) == 60 and len(app.sol.calls) == 3
     assert staging.staging_index.read(app.catalog.targets[0].key) == baseline
     assert staging.outbox("staging").read("full") == prior_active
     assert prior_run.read_completed("selection") == original_selection
+    assert prior_run.read("staging-result", missing_ok=True) is None
+
+
+@pytest.mark.parametrize("active_mode", ["full", "incremental"])
+@pytest.mark.parametrize("change", ["acr", "evaluator", "traffic"])
+@pytest.mark.parametrize("reference_exists", [False, True])
+def test_next_source_reconciles_unindexed_active_hosted_turns(
+    app, monkeypatch, capsys, active_mode, change, reference_exists,
+):
+    from agent_insights_quality.contracts import Invocation
+    app.catalog = fake.replace(app.catalog, targets=(
+        fake.replace(app.catalog.targets[1], agent_type="hosted_code"),
+    ))
+    target = app.catalog.targets[0]
+    app.cloud.environment = fake.replace(app.cloud.environment, profile="staging")
+    staging = RuntimeStore("staging", root=app.store.root)
+    source = ["a" * 40]
+    monkeypatch.setattr(runner, "source_revision", lambda _: source[0])
+    traffic_path = target.version_root.relative_to(app.catalog.root) / "traffic.json"
+    repair_path = {
+        "acr": "src/agent_insights_quality/providers/acr.py",
+        "evaluator": "src/agent_insights_quality/providers/sol.py",
+        "traffic": traffic_path,
+    }[change]
+    monkeypatch.setattr(runner, "git_source_changes", lambda root, previous, *args: runner.SourceChanges(
+        (traffic_path,) if previous == "a" * 40 else (repair_path,),
+    ))
+
+    def rejected(deployment, step, request_id, session, persist):
+        return Invocation(
+            request_id, "rejected-" + request_id, session,
+            app.clock.now().isoformat(), app.clock.now().isoformat(),
+            "failed", {"error": {"code": "synthetic_old_bad_request"}}, 400,
+        )
+    app.cloud.invoke_hook = rejected
+    assert app.cli("run-staging", "--full") == 2
+    capsys.readouterr()
+    old_index = staging.staging_index.read(target.key)
+    assert old_index["traffic_source_revision"] == "a" * 40
+    assert len(app.cloud.invocations) == 20
+
+    source[0] = "b" * 40
+    partial_requests = []
+    def interrupted(deployment, step, request_id, session, persist):
+        partial_requests.append(request_id)
+        if len(partial_requests) == 6:
+            # Cloud.invoke already persisted its submitting checkpoint.
+            raise OSError(32, "synthetic global cleanup interruption")
+    app.cloud.invoke_hook = interrupted
+    command = ("run-staging", "--full") if active_mode == "full" else ("run-staging",)
+    assert app.cli(*command) == 2
+    capsys.readouterr()
+    prior_active = staging.outbox("staging").read(active_mode)
+    prior_run = staging.run(prior_active["run_id"])
+    prior_binding = prior_run.read(f"targets/{target.key}/source")
+    assert prior_binding["traffic_source_revision"] == "b" * 40
+    assert prior_run.read("staging-result", missing_ok=True) is None
+    assert staging.staging_index.read(target.key) == old_index
+    assert len(partial_requests) == 6
+    if not reference_exists:
+        # Reproduce the already-written current-format run without the new reference.
+        staging.outbox("staging")._path("progress", f"targets/{target.key}").unlink(missing_ok=True)
+        prior_binding.pop("binding_run_id", None)
+        with staging.ownership():
+            prior_run.save_progress(f"targets/{target.key}/source", prior_binding)
+
+    source[0] = "c" * 40
+    app.cloud.invoke_hook = None
+    assert app.cli("run-staging") == 0
+    current, _ = last_json(capsys)
+    binding = staging.run(current["run_id"]).read(f"targets/{target.key}/source")
+    if change == "traffic":
+        assert binding["traffic_source_revision"] == source[0]
+        assert binding["work_key"] != prior_binding["work_key"]
+        assert len(app.cloud.invocations) == 46
+    else:
+        assert binding["work_key"] == prior_binding["work_key"]
+        assert binding["traffic_run_id"] == prior_active["run_id"]
+        assert binding["traffic_source_revision"] == "b" * 40
+        assert len(app.cloud.invocations) == 40
+        turn = prior_run.read(prior_binding["work_key"] + "/traffic/attempt-03/probe")
+        assert turn["request_id"] == partial_requests[-1] and turn["status"] == "unknown"
+        for index in range(1, 3):
+            for phase in ("setup", "probe"):
+                receipt = prior_run.read(prior_binding["work_key"] + f"/traffic/attempt-{index:02d}/{phase}")
+                assert receipt["status"] == "completed" and receipt["request_id"] in partial_requests
+        assert prior_run.read_completed("environment") == staging.run(current["run_id"]).read_completed("environment")
+    assert all(sum(call[2] == request for call in app.cloud.invocations) == 1 for request in partial_requests)
     assert prior_run.read("staging-result", missing_ok=True) is None

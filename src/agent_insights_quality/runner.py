@@ -102,21 +102,96 @@ def restore_unit(value: Mapping[str, Any]) -> UnitResult:
         raise StateError("unit_checkpoint_invalid") from error
 
 
+def _staging_history(
+    catalog: Catalog, store: RuntimeStore, targets: tuple[Target, ...] | None = None,
+) -> dict[str, dict]:
+    """Read current target bindings, not just the last completed test index."""
+    targets = catalog.targets if targets is None else targets
+    control = store.outbox("staging")
+    active = []
+    for mode in ("full", "incremental"):
+        value = control.read(mode, missing_ok=True)
+        if value is not None:
+            if not isinstance(value.get("run_id"), str):
+                raise StateError("staging_resume_invalid")
+            active.append(value["run_id"])
+    metadata, history, times = {}, {}, {}
+
+    def consider(target: Target, run_id: str, *, required: bool, work_key: str | None = None) -> None:
+        records = store.run(run_id)
+        binding = records.read(f"targets/{target.key}/source", missing_ok=not required)
+        if binding is None:
+            return
+        if run_id not in metadata:
+            metadata[run_id] = (
+                records.read_completed("run"), records.read_completed("environment"),
+            )
+        run, environment = metadata[run_id]
+        if run.get("kind") != "staging" or environment.get("profile") != "staging" or target.key not in run.get("targets", ()):
+            raise StateError("staging_binding_scope_invalid")
+        if not {
+            "source_revision", "traffic_source_revision", "traffic_run_id", "work_key", "tested_at",
+        } <= binding.keys() or not isinstance(binding["work_key"], str) or not binding["work_key"].startswith(f"targets/{target.key}/work-"):
+            raise StateError("target_checkpoint_invalid")
+        if work_key is not None and binding["work_key"] != work_key:
+            raise StateError("staging_target_reference_mismatch")
+        traffic_environment = store.run(binding["traffic_run_id"]).read_completed("environment")
+        if traffic_environment != environment:
+            raise StateError("staging_binding_environment_mismatch")
+        stamp = _datetime(run["started_at"])
+        previous = history.get(target.key)
+        if previous:
+            if stamp < times[target.key]:
+                return
+            if stamp == times[target.key] and binding["work_key"] != previous["work_key"]:
+                raise StateError("staging_binding_order_ambiguous")
+        history[target.key] = {
+            **binding, "binding_run_id": run_id,
+            "status": binding["status"] if binding.get("result") else "INCOMPLETE",
+        }
+        times[target.key] = stamp
+
+    for target in targets:
+        indexed = store.staging_index.read(target.key, missing_ok=True)
+        if indexed is not None:
+            owner = indexed.get("binding_run_id") or indexed.get("failure_run_id") or (
+                indexed.get("assessment", {}).get("run_id")
+            ) or indexed.get("traffic_run_id")
+            if not isinstance(owner, str):
+                raise StateError("staging_history_invalid")
+            consider(target, owner, required=True)
+        for run_id in active:
+            consider(target, run_id, required=False)
+        latest = control.read(f"targets/{target.key}", missing_ok=True)
+        if latest is not None:
+            if set(latest) != {"run_id", "work_key"} or not all(
+                isinstance(latest[field], str) for field in ("run_id", "work_key")
+            ):
+                raise StateError("staging_target_reference_invalid")
+            consider(target, latest["run_id"], required=True, work_key=latest["work_key"])
+    return history
+
+
+def reconcile_staging_work(catalog: Catalog, store: RuntimeStore) -> None:
+    """Retain discovered unfinished work before replacing an active run pointer."""
+    for key, record in _staging_history(catalog, store).items():
+        store.outbox("staging").save_progress(f"targets/{key}", {
+            "run_id": record["binding_run_id"], "work_key": record["work_key"],
+        })
+
+
 def choose_staging(
     catalog: Catalog, store: RuntimeStore, *, full: bool = False,
     changes_since: Callable[[str], SourceChanges] | None = None,
 ) -> tuple[Selection, ...]:
-    previous, history = {}, {}
-    for target in catalog.targets:
-        record = store.staging_index.read(target.key, missing_ok=True)
-        if record is not None:
-            history[target.key] = record
-            try:
-                previous[target.key] = LastTest(
-                    record["source_revision"], record["status"], record["tested_at"],
-                )
-            except (KeyError, TypeError, ValueError) as error:
-                raise StateError("staging_history_invalid") from error
+    history = _staging_history(catalog, store)
+    try:
+        previous = {
+            key: LastTest(record["source_revision"], record["status"], record["tested_at"])
+            for key, record in history.items()
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise StateError("staging_history_invalid") from error
     compare = changes_since or (lambda revision: git_source_changes(catalog.root, revision))
     changes = {} if full else {
         revision: compare(revision) for revision in {item.source_revision for item in previous.values()}
@@ -223,6 +298,7 @@ class Runner:
         self.changes_since = changes_since or (
             lambda previous: git_source_changes(catalog.root, previous, self.revision)
         )
+        self._source_comparisons: dict[str, SourceChanges] = {}
         self.logger = RunLogger(
             self.run.directory, allowed_units=[target.unit_id for target in catalog.targets],
             max_bytes=self.settings.log_max_bytes, backup_count=self.settings.log_backup_count,
@@ -309,6 +385,11 @@ class Runner:
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
 
+    def _changes_since(self, revision: str) -> SourceChanges:
+        if revision not in self._source_comparisons:
+            self._source_comparisons[revision] = self.changes_since(revision)
+        return self._source_comparisons[revision]
+
     def _binding(self, target: Target, selection: Selection | None = None) -> _Work:
         key = f"targets/{target.key}/source"
         old = self.run.read(key, missing_ok=True)
@@ -318,8 +399,15 @@ class Runner:
             for collection in ("progress", "completed", "artifacts")
         ):
             raise StateError("target_checkpoint_missing")
-        if old is None and selection is not None and "full" not in selection.reasons:
-            old = self.runtime.staging_index.read(target.key, missing_ok=True)
+        if self.runtime.environment == "staging":
+            latest = _staging_history(self.catalog, self.runtime, (target,)).get(target.key)
+            if latest and latest["binding_run_id"] != self.run_id:
+                current = self.run.read_completed("run")
+                newer = self.runtime.run(latest["binding_run_id"]).read_completed("run")
+                if own or _datetime(current["started_at"]) < _datetime(newer["started_at"]):
+                    raise StateError("staging_target_superseded")
+            if old is None and selection is not None and "full" not in selection.reasons:
+                old = latest
         if old is None and self.reuse_run_id:
             old = self.runtime.run(self.reuse_run_id).read(key, missing_ok=True)
         changed, evaluate, recollect = False, False, False
@@ -329,7 +417,7 @@ class Runner:
             if not isinstance(old["work_key"], str) or not old["work_key"].startswith(f"targets/{target.key}/work-"):
                 raise StateError("target_checkpoint_invalid")
             if old["source_revision"] != self.revision:
-                changes = self.changes_since(old["source_revision"])
+                changes = self._changes_since(old["source_revision"])
                 recollect = any(
                     (self.catalog.root / path).resolve()
                     == self.catalog.root / "src" / "agent_insights_quality" / "telemetry.py"
@@ -347,6 +435,8 @@ class Runner:
                 changed |= bool({"full", "deployment_changed", "traffic_changed"} & set(selection.reasons))
                 evaluate |= selection.action == "reassess"
         if old and not changed:
+            if self.runtime.run(old["traffic_run_id"]).read_completed("environment") != asdict(self.cloud.environment):
+                raise StateError("retained_environment_mismatch")
             binding = dict(old)
             if evaluate:
                 binding.pop("result", None)
@@ -370,7 +460,13 @@ class Runner:
             }
             if selection and selection.action == "reassess":
                 raise QualityError("retained_evidence_missing")
+        if self.runtime.environment == "staging":
+            binding["binding_run_id"] = self.run_id
         self._save(self.run, "progress", key, binding)
+        if self.runtime.environment == "staging":
+            self._save(self.runtime.outbox("staging"), "progress", f"targets/{target.key}", {
+                "run_id": self.run_id, "work_key": binding["work_key"],
+            })
         return _Work(self.runtime.run(binding["traffic_run_id"]), binding)
 
     def _prior_result(self, work: _Work) -> dict | None:
@@ -385,8 +481,19 @@ class Runner:
         return result
 
     def _update(self, target: Target, work: _Work, **fields: Any) -> None:
+        self._assert_staging_owner(target, work)
         work.binding.update(fields)
         self._save(self.run, "progress", f"targets/{target.key}/source", work.binding)
+
+    def _assert_staging_owner(self, target: Target, work: _Work) -> None:
+        if self.runtime.environment == "staging" and self.runtime.outbox("staging").read(
+            f"targets/{target.key}",
+        ) != {"run_id": self.run_id, "work_key": work.key}:
+            raise StateError("staging_target_superseded")
+
+    def _index_staging(self, target: Target, work: _Work) -> None:
+        self._assert_staging_owner(target, work)
+        self._save(self.runtime.staging_index, "progress", target.key, work.binding)
 
     def _deadline(self, records: RecordStore, key: str, seconds: int) -> datetime:
         value = records.read(key, missing_ok=True)
@@ -1024,7 +1131,7 @@ class Runner:
                     if recovered or prior and prior["status"] in {"PASS", "FAIL"}:
                         self._load_traffic(target, work, attempts)
                         self._snapshot(work, work.binding["evidence_key"])
-                        self._save(self.runtime.staging_index, "progress", target.key, work.binding)
+                        self._index_staging(target, work)
                         return {"unit": target.key, **work.binding}
                     if selection.action == "reassess":
                         stage = "evidence"
@@ -1055,7 +1162,7 @@ class Runner:
                     self._update(
                         target, work, status="INCOMPLETE", reason=error.code, failure_run_id=self.run_id,
                     )
-                self._save(self.runtime.staging_index, "progress", target.key, work.binding)
+                self._index_staging(target, work)
                 return {"unit": target.key, **work.binding}
         records = await self._gather(one(item) for item in selections)
         summary = {

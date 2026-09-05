@@ -1187,3 +1187,197 @@ def test_incomplete_assessment_clears_prior_transport_failure_before_next_select
         ("src/agent_insights_quality/providers/sol.py",),
     ))
     assert choices[0].action == "traffic"
+
+
+def test_staging_latest_reference_is_durable_before_any_provider_side_effect(tmp_path):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    original = h.cloud.ensure_deployment
+    async def ensure(target, *args):
+        pointer = h.store.outbox("staging").read(f"targets/{target.key}")
+        assert pointer["run_id"] == "stage"
+        binding = h.store.run(pointer["run_id"]).read(f"targets/{target.key}/source")
+        assert pointer["work_key"] == binding["work_key"]
+        assert binding["binding_run_id"] == "stage"
+        assert h.store.staging_index.read(target.key, missing_ok=True) is None
+        return await original(target, *args)
+    h.cloud.ensure_deployment = ensure
+    assert h.staging()["results"][0]["status"] == "PASS"
+
+
+def test_staging_latest_reference_write_failure_stops_before_deployment(tmp_path, monkeypatch):
+    from agent_insights_quality.state import RecordStore
+    h = Harness(tmp_path, profile="staging", issues=0)
+    save = RecordStore.save_progress
+    def fail(records, key, value):
+        if records.directory.name == "staging" and key.startswith("targets/"):
+            raise CheckpointError()
+        save(records, key, value)
+    monkeypatch.setattr(RecordStore, "save_progress", fail)
+    with pytest.raises(CheckpointError):
+        h.staging()
+    assert not h.cloud.deployment_calls and not h.cloud.invocations
+
+
+def test_stale_runner_cannot_overwrite_new_target_source_or_index(tmp_path):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    target = h.catalog.targets[0]
+    with h.store.ownership():
+        older = h.runner("older")
+        older.initialize((target,), DAY, kind="staging")
+        old_work = older._binding(target, Selection(target, "traffic", ("missing",)))
+        h.clock.value += timedelta(seconds=1)
+        newer = h.runner("newer", revision="source-two")
+        newer.initialize((target,), DAY, kind="staging")
+        new_work = newer._binding(target, Selection(target, "traffic", ("incomplete",)))
+        assert new_work.key == old_work.key
+        saved = h.store.run("newer").read(f"targets/{target.key}/source")
+        for operation in (
+            lambda: older._update(target, old_work, reason="synthetic_stale_failure"),
+            lambda: older._index_staging(target, old_work),
+            lambda: older._binding(target, Selection(target, "traffic", ("incomplete",))),
+        ):
+            with pytest.raises(StateError, match="staging_target_superseded"):
+                operation()
+        assert h.store.run("newer").read(f"targets/{target.key}/source") == saved
+        assert h.store.staging_index.read(target.key, missing_ok=True) is None
+        older.logger.close()
+        newer.logger.close()
+    assert not h.cloud.invocations
+
+
+def test_stale_active_run_and_result_index_cannot_displace_latest_work(tmp_path):
+    from agent_insights_quality.runner import reconcile_staging_work
+    h = Harness(tmp_path, profile="staging", issues=0)
+    target = h.catalog.targets[0]
+    h.staging("older")
+    older_index = h.store.staging_index.read(target.key)
+    h.clock.value += timedelta(seconds=1)
+    h.staging("newer", revision="source-two", selections=(Selection(target, "traffic", ("full",)),))
+    newer_index = h.store.staging_index.read(target.key)
+    with h.store.ownership():
+        h.store.staging_index.save_progress(target.key, older_index)
+        h.store.outbox("staging").save_progress("full", {
+            "run_id": "older", "source_revision": "source-one", "report_date": DAY.isoformat(),
+            "full": True, "completed": False,
+        })
+        reconcile_staging_work(h.catalog, h.store)
+        assert h.store.outbox("staging").read(f"targets/{target.key}") == {
+            "run_id": "newer", "work_key": newer_index["work_key"],
+        }
+    revisions = []
+    choices = choose_staging(
+        h.catalog, h.store,
+        changes_since=lambda revision: (revisions.append(revision) or SourceChanges(())),
+    )
+    assert revisions == ["source-two"] and not choices
+
+
+@pytest.mark.parametrize("damage", ["missing-binding", "wrong-work", "cross-profile"])
+def test_latest_target_reference_damage_fails_closed_without_index_fallback(tmp_path, damage):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    h.staging()
+    target = h.catalog.targets[0]
+    if damage == "missing-binding":
+        h.store.run("stage")._path("progress", f"targets/{target.key}/source").unlink()
+    elif damage == "wrong-work":
+        with h.store.ownership():
+            h.store.outbox("staging").save_progress(f"targets/{target.key}", {
+                "run_id": "stage", "work_key": f"targets/{target.key}/work-other",
+            })
+    else:
+        environment = h.store.run("stage")._path("completed", "environment")
+        content = json.loads(environment.read_text())
+        content["profile"] = "daily"
+        environment.write_text(json.dumps(content))
+    count = len(h.cloud.invocations)
+    with pytest.raises(StateError):
+        choose_staging(h.catalog, h.store, changes_since=lambda _: SourceChanges(()))
+    assert len(h.cloud.invocations) == count
+
+
+def test_retained_staging_traffic_cannot_be_reused_in_a_changed_environment(tmp_path):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    h.staging()
+    h.cloud.environment = replace(h.cloud.environment, project_endpoint="https://changed-synthetic.invalid")
+    count = len(h.cloud.invocations), sum(h.cloud.deployment_calls.values())
+    with pytest.raises(StateError, match="retained_environment_mismatch"):
+        h.staging("changed-environment", revision="source-two", selections=(
+            Selection(h.catalog.targets[0], "reassess", ("evaluation_changed",)),
+        ))
+    assert (len(h.cloud.invocations), sum(h.cloud.deployment_calls.values())) == count
+
+
+def test_unindexed_partial_work_remains_discoverable_without_any_active_run_pointer(tmp_path):
+    h = Harness(tmp_path, profile="staging", issues=0, hosted=True)
+    target = h.catalog.targets[0]
+    seen = []
+    def interrupt(deployment, step, request_id, session, persist):
+        seen.append(request_id)
+        if len(seen) == 6:
+            raise OSError(32, "synthetic global failure")
+    h.cloud.invoke_hook = interrupt
+    with pytest.raises(OSError):
+        h.staging("partial")
+    assert h.store.staging_index.read(target.key, missing_ok=True) is None
+    assert h.store.outbox("staging").read("full", missing_ok=True) is None
+    assert h.store.outbox("staging").read("incremental", missing_ok=True) is None
+    choices = choose_staging(h.catalog, h.store, changes_since=lambda _: SourceChanges(
+        ("src/agent_insights_quality/providers/acr.py",),
+    ))
+    assert choices[0].reasons == ("incomplete",)
+    h.cloud.invoke_hook = None
+    result = h.staging("resumed", revision="source-two", selections=choices,
+                       changes=("src/agent_insights_quality/providers/acr.py",))
+    assert result["results"][0]["status"] == "PASS"
+    assert result["results"][0]["traffic_run_id"] == "partial"
+    assert result["results"][0]["traffic_source_revision"] == "source-one"
+    assert len(h.cloud.invocations) == 20
+    assert sum(call[2] == seen[-1] for call in h.cloud.invocations) == 1
+
+
+def test_frozen_runner_compares_shared_source_once_and_keeps_distinct_bases(tmp_path):
+    h = Harness(tmp_path, profile="staging", issues=2)
+    h.staging("original")
+    changes = SourceChanges(("src/agent_insights_quality/assessment.py",))
+    with h.store.ownership():
+        h.clock.value += timedelta(seconds=1)
+        intermediate = h.runner("intermediate", revision="source-two", changes=changes.paths)
+        intermediate.initialize((h.catalog.targets[0],), DAY, kind="staging")
+        intermediate._binding(h.catalog.targets[0], Selection(
+            h.catalog.targets[0], "reassess", ("evaluation_changed",),
+        ))
+        intermediate.logger.close()
+        h.clock.value += timedelta(seconds=1)
+        current = h.runner("current", revision="source-three")
+        current.initialize(h.catalog.targets, DAY, kind="staging")
+        calls = []
+        def compare(base):
+            calls.append(base)
+            return changes
+        current.changes_since = compare
+        for target in h.catalog.targets:
+            current._binding(target, Selection(target, "reassess", ("evaluation_changed",)))
+        assert calls == ["source-two", "source-one"]
+        assert current._changes_since("source-one") is changes
+        assert current._changes_since("source-two") is changes
+        assert calls == ["source-two", "source-one"]
+        current.logger.close()
+
+
+def test_source_comparison_failure_is_not_cached(tmp_path):
+    h = Harness(tmp_path, profile="staging", issues=0)
+    current = h.runner()
+    calls = []
+    expected = SourceChanges(("src/agent_insights_quality/assessment.py",))
+    def compare(base):
+        calls.append(base)
+        if len(calls) == 1:
+            raise OSError(5, "synthetic source comparison unavailable")
+        return expected
+    current.changes_since = compare
+    with pytest.raises(OSError):
+        current._changes_since("previous")
+    assert current._changes_since("previous") is expected
+    assert current._changes_since("previous") is expected
+    assert calls == ["previous", "previous"]
+    current.logger.close()

@@ -127,12 +127,13 @@ def _artifact_path(records, key: str) -> str:
 
 
 def _staging_plan(args, catalog, runtime, revision: str, today: date):
-    from .runner import choose_staging
+    from .runner import choose_staging, reconcile_staging_work
     from .selection import Selection
     from .state import StateError
 
     if args.new_run and not args.full:
         raise QualityError("staging_new_run_requires_full")
+    reconcile_staging_work(catalog, runtime)
     key = "full" if args.full else "incremental"
     active = runtime.outbox("staging").read(key, missing_ok=True)
     if active is not None:
