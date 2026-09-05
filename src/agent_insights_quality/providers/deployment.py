@@ -12,7 +12,7 @@ from agent_insights_quality.providers.artifacts import (
     prepare_artifact,
 )
 from agent_insights_quality.providers.callbacks import safe_persist
-from agent_insights_quality.providers.transport import JsonClient, check_status, segment
+from agent_insights_quality.providers.transport import HttpResponse, JsonClient, check_status, segment
 
 
 def _version(value: Mapping[str, Any], *, created: bool = False) -> str:
@@ -36,6 +36,13 @@ def _state(value: Mapping[str, Any], *, prompt: bool) -> str:
     if status == "active" or (prompt and not status):
         return "active"
     return "pending"
+
+
+def _private_response(response: HttpResponse) -> JsonObject:
+    try:
+        return response.object()
+    except QualityError:
+        return {"raw_body": response.body.decode("utf-8", errors="replace")}
 
 
 class DeploymentClient:
@@ -151,6 +158,7 @@ class DeploymentClient:
             {"provisioning_state": "submitting", "metadata": metadata},
         )
         persist(pending)
+        response = None
         try:
             if artifact.archive is not None:
                 body, content_type, checksum = multipart(
@@ -186,6 +194,8 @@ class DeploymentClient:
                         else "unknown",
                         "error_code": error.code,
                         "http_status": error.status,
+                        **({"provider_response": _private_response(response)}
+                           if response is not None else {}),
                     },
                 )
             )
@@ -200,6 +210,7 @@ class DeploymentClient:
                         **pending.details,
                         "provisioning_state": "unknown",
                         "http_status": response.status,
+                        "provider_response": _private_response(response),
                     },
                 )
             )

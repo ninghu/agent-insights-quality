@@ -365,6 +365,7 @@ def test_unknown_create_is_checkpointed_and_not_resubmitted(environment, target)
     assert not error.value.retryable
     assert "unsafe" not in str(error.value)
     assert saved[-1].details["provisioning_state"] == "unknown"
+    assert "provider_response" not in saved[-1].details
     with pytest.raises(QualityError, match="deployment_create_unresolved"):
         run(provider.ensure_deployment(target, "r", saved[-1], saved.append))
     assert [wire.method for wire in transport.requests].count("POST") == 1
@@ -1045,6 +1046,58 @@ def test_invalid_create_json_retains_unknown_checkpoint(environment, target):
         )
     assert saved[-1].details["provisioning_state"] == "unknown"
     assert saved[-1].provider_version == ""
+    assert saved[-1].details["provider_response"] == {"raw_body": "malformed"}
+
+
+@pytest.mark.parametrize("status,accepted,state", [
+    (400, False, "rejected"), (429, False, "rejected"), (503, None, "unknown"),
+])
+def test_deployment_http_failure_preserves_private_json_without_changing_outcome(
+    environment, target, capsys, status, accepted, state,
+):
+    private_response = {
+        "error": {
+            "code": "SyntheticProviderCode", "message": "Synthetic private deployment detail",
+            "details": [{"target": "container_configuration", "nested": [1, 2]}],
+        },
+    }
+    transport = FakeTransport(response(status=404), response(private_response, status))
+    saved = []
+    with pytest.raises(QualityError, match="provider_http_error") as error:
+        run(runtime(environment, transport).ensure_deployment(target, "r", None, saved.append))
+    assert error.value.request_accepted is accepted and error.value.status == status
+    assert str(error.value) == "provider_http_error"
+    assert saved[-1].details["provisioning_state"] == state
+    assert saved[-1].details["provider_response"] == private_response
+    assert saved[-1].details["http_status"] == status
+    assert len(transport.requests) == 2
+    capture = capsys.readouterr()
+    assert not capture.out and not capture.err
+
+
+def test_deployment_http_error_retains_non_json_body_without_masking_rejection(environment, target):
+    transport = FakeTransport(
+        response(status=404), HttpResponse(400, body=b"Synthetic private gateway error"),
+    )
+    saved = []
+    with pytest.raises(QualityError, match="provider_http_error") as error:
+        run(runtime(environment, transport).ensure_deployment(target, "r", None, saved.append))
+    assert error.value.request_accepted is False and error.value.status == 400
+    assert saved[-1].details["provisioning_state"] == "rejected"
+    assert saved[-1].details["provider_response"] == {"raw_body": "Synthetic private gateway error"}
+
+
+def test_deployment_no_response_does_not_reuse_a_prior_read_payload(environment, target):
+    transport = FakeTransport(
+        response({"synthetic_previous_read": "not a POST response"}, 404),
+        TimeoutError("Synthetic private timeout"),
+    )
+    saved = []
+    with pytest.raises(QualityError, match="provider_no_response") as error:
+        run(runtime(environment, transport).ensure_deployment(target, "r", None, saved.append))
+    assert error.value.request_accepted is None and error.value.status is None
+    assert "provider_response" not in saved[-1].details
+    assert saved[-1].details["http_status"] is None
 
 
 def test_create_without_version_retains_native_polling_reference(environment, target):
