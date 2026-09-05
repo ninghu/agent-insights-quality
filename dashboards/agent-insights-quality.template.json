@@ -17,16 +17,20 @@
   "id": "d8396ea4-e60c-45e9-b705-68d88d0b25d8",
   "pages": [
     {
+      "id": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "name": "Current framework"
+    },
+    {
       "id": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "name": "Trend"
+      "name": "Legacy trend"
     },
     {
       "id": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "name": "Daily Results"
+      "name": "Legacy daily results"
     },
     {
       "id": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "name": "Agent and Issue Explanation"
+      "name": "Legacy explanations"
     }
   ],
   "parameters": [
@@ -60,7 +64,7 @@
       "defaultValue": {
         "kind": "all"
       },
-      "displayName": "Report date",
+      "displayName": "Legacy report date",
       "id": "250e0a32-9ae6-40c1-8d31-e663c13f01b7",
       "kind": "string",
       "selectionType": "single-all",
@@ -83,7 +87,7 @@
       "defaultValue": {
         "kind": "all"
       },
-      "displayName": "Test Agent",
+      "displayName": "Legacy test Agent",
       "id": "12351920-7e2e-4af3-980d-b8fbd5ff349d",
       "kind": "string",
       "selectionType": "single-all",
@@ -109,7 +113,7 @@
       "defaultValue": {
         "kind": "all"
       },
-      "displayName": "Tested issue",
+      "displayName": "Legacy tested issue",
       "id": "e2914627-9583-450d-a27d-127f14a3f9c9",
       "kind": "string",
       "selectionType": "single-all",
@@ -132,7 +136,7 @@
       "defaultValue": {
         "kind": "all"
       },
-      "displayName": "Outcome",
+      "displayName": "Legacy outcome",
       "id": "8b55301f-f335-45f1-8e48-6008191d10b0",
       "kind": "string",
       "selectionType": "single-all",
@@ -155,7 +159,7 @@
       "defaultValue": {
         "kind": "all"
       },
-      "displayName": "Ownership",
+      "displayName": "Legacy ownership",
       "id": "db4e06e4-5ca8-4845-8e28-f95f741833fb",
       "kind": "string",
       "selectionType": "single-all",
@@ -167,6 +171,78 @@
   ],
   "schema_version": "20",
   "tiles": [
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "5ba655b4-04a6-4a4d-9d3a-5240ffdf6881",
+      "layout": {"height": 8, "width": 24, "x": 0, "y": 0},
+      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "query": "AIQRunsV1()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, FrameworkRunId, Region, QualityScore, CoverageStatus, ScoredIssues, PlannedIssues, ScoredBaselines, PlannedBaselines, ExcludedUnits, CorrectIssues, ExpectedIssues, NoiseCards, DuplicateCards, ScoringPolicy, ScoreFormula, NoiseWeight, DuplicateWeight, ScoreRounding, CoveragePolicy, SourceCommit\n| order by ReportDate desc",
+      "title": "Current scores and Full/Partial coverage - Noise 1, Duplicate 0.25; no threshold",
+      "usedParamVariables": ["_startTime", "_endTime"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "66f57b36-e671-4588-baf4-c88f9fe8e9c6",
+      "layout": {"height": 8, "width": 24, "x": 0, "y": 8},
+      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "query": "AIQRunsV1()\n| where ReportDate between (_startTime .. _endTime)\n| extend Series = strcat(Region, ' / ', ScoringPolicy, ' / ', CoverageStatus, ' / issues ', ScoredIssues, '/', PlannedIssues, ' / baselines ', ScoredBaselines, '/', PlannedBaselines)\n| project ReportDate, QualityScore, Series\n| order by ReportDate asc",
+      "title": "Stored scores - separate policy and coverage series; exclusions differ across Partial runs",
+      "usedParamVariables": ["_startTime", "_endTime"],
+      "visualOptions": {
+        "hideLegend": false,
+        "hideTileTitle": false,
+        "xColumn": {"type": "specified", "value": "ReportDate"},
+        "yColumns": {"type": "specified", "value": ["QualityScore"]},
+        "seriesColumns": {"type": "specified", "value": ["Series"]}
+      },
+      "visualType": "line"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "e3c0d5b7-92b9-4cc2-9500-f8054965b338",
+      "layout": {"height": 10, "width": 24, "x": 0, "y": 16},
+      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "query": "AIQUnitsV1()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, FrameworkRunId, Region, CoverageStatus, ScoringPolicy, Agent, LogicalVersion, Kind, Scorable, CorrectIssues, ExpectedIssues, NoiseCards, DuplicateCards, ExclusionReasons, Summary\n| order by ReportDate desc, Agent asc, LogicalVersion asc",
+      "title": "Current units - wholly excluded units retain their identities and reasons",
+      "usedParamVariables": ["_startTime", "_endTime"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "9860f0cd-c6d1-453e-bceb-623af41b62ce",
+      "layout": {"height": 10, "width": 24, "x": 0, "y": 26},
+      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "query": "AIQFindingsV1()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, FrameworkRunId, CoverageStatus, ScoringPolicy, Agent, LogicalVersion, Kind, Scorable, ExclusionReasons, CardAlias, RootCauseAlias, Core, Contribution, Classification, Scored, Summary\n| order by ReportDate desc, Agent asc, LogicalVersion asc",
+      "title": "Current findings - including unexpected real and unscored findings",
+      "usedParamVariables": ["_startTime", "_endTime"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "f03b7c4e-4ea3-43c8-a6ad-e7eb8aa70117",
+      "layout": {"height": 10, "width": 24, "x": 0, "y": 36},
+      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "query": "AIQOperationsV1()\n| where Utc between (_startTime .. _endTime)\n| project Utc, FrameworkRunId, Profile, EventId, Kind, Stage, Code, Counters, Agent, LogicalVersion, Attempt, Turn\n| order by Utc desc",
+      "title": "Safe operations - separate from scores; staging allowed, test runs excluded",
+      "usedParamVariables": ["_startTime", "_endTime"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "2fc0d2e7-b820-499d-9cb4-c9514bbbc4c5",
+      "layout": {"height": 6, "width": 24, "x": 0, "y": 46},
+      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "query": "AIQPublicationConflictsV1()\n| project Kind, FrameworkRunId, Identity\n| order by FrameworkRunId asc",
+      "title": "Identity conflicts - omitted from score and event views; all dates",
+      "usedParamVariables": [],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
+      "visualType": "table"
+    },
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "7bcd5bad-a4d1-40f8-8753-aaabf7cec17b",
@@ -637,5 +713,5 @@
       "visualType": "table"
     }
   ],
-  "title": "Agent Insights Quality Trends"
+  "title": "Agent Insights Quality - Current and Historical"
 }

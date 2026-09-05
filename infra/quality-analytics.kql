@@ -213,3 +213,157 @@
         WhatHappened = tostring(HighlightMetric.what_happened),
         NeededBehavior = tostring(HighlightMetric.needed_behavior)
 }
+
+// Current framework data is deliberately separate from the historical v3 rows
+// and views above. Stored QualityResult scores are never recomputed here.
+.create-merge table QualityReportsV1 (
+    ReportDate:datetime,
+    FrameworkRunId:string,
+    SourceCommit:string,
+    Region:string,
+    ContentHash:string,
+    PayloadVersion:string,
+    Payload:dynamic
+)
+
+.alter-merge table QualityReportsV1 policy retention softdelete = 730d recoverability = enabled
+
+.alter table QualityReportsV1 policy caching hot = 90d
+
+.alter table QualityReportsV1 policy ingestiontime true
+
+.create-merge table QualityOperationsV1 (
+    FrameworkRunId:string,
+    Profile:string,
+    EventId:string,
+    ContentHash:string,
+    EventVersion:string,
+    Event:dynamic
+)
+
+.alter-merge table QualityOperationsV1 policy retention softdelete = 730d recoverability = enabled
+
+.alter table QualityOperationsV1 policy caching hot = 90d
+
+.alter table QualityOperationsV1 policy ingestiontime true
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Immutable current reports. Exact replay is deduplicated; conflicting run content is not scored.'
+) AIQReportsV1() {
+    QualityReportsV1
+    | where PayloadVersion == '1'
+    | extend PublishedAt = ingestion_time()
+    | summarize ContentHashes = make_set(ContentHash, 2), arg_max(PublishedAt, *) by FrameworkRunId
+    | where array_length(ContentHashes) == 1
+    | project ReportDate, FrameworkRunId, PublishedAt, SourceCommit, Region, ContentHash, PayloadVersion, Payload
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Stored score, Noise 1 / Duplicate 0.25 policy and Full/Partial whole-unit coverage. No rescoring or healthy bonus.'
+) AIQRunsV1() {
+    AIQReportsV1()
+    | project
+        ReportDate, FrameworkRunId, PublishedAt, SourceCommit, Region,
+        QualityScore = todouble(Payload.score),
+        CoverageStatus = tostring(Payload.status),
+        TeamReportEligible = tobool(Payload.team_report_eligible),
+        ScoringPolicy = tostring(Payload.scoring_policy.version),
+        ScoreFormula = tostring(Payload.scoring_policy.formula),
+        NoiseWeight = todouble(Payload.scoring_policy.noise_weight),
+        DuplicateWeight = todouble(Payload.scoring_policy.duplicate_weight),
+        ScoreRounding = tostring(Payload.scoring_policy.rounding),
+        CoveragePolicy = tostring(Payload.coverage_policy.version),
+        CorrectIssues = tolong(Payload.counts.correct_issues),
+        ExpectedIssues = tolong(Payload.counts.expected_issues),
+        NoiseCards = tolong(Payload.counts.noise_cards),
+        DuplicateCards = tolong(Payload.counts.duplicate_cards),
+        PlannedIssues = tolong(Payload.coverage.planned_issues),
+        ScoredIssues = tolong(Payload.coverage.scored_issues),
+        PlannedBaselines = tolong(Payload.coverage.planned_baselines),
+        ScoredBaselines = tolong(Payload.coverage.scored_baselines),
+        ExcludedUnits = tolong(Payload.coverage.excluded_units)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Actual UnitId/kind/scorable/counts/findings shape, including wholly excluded units and their reasons.'
+) AIQUnitsV1() {
+    AIQReportsV1()
+    | mv-expand Unit = Payload.units to typeof(dynamic)
+    | project
+        ReportDate, FrameworkRunId, Region,
+        CoverageStatus = tostring(Payload.status),
+        ScoringPolicy = tostring(Payload.scoring_policy.version),
+        Agent = tostring(Unit.unit_id.agent),
+        LogicalVersion = tostring(Unit.unit_id.logical_version),
+        Kind = tostring(Unit.kind),
+        ExpectedIssueAlias = tostring(Unit.expected_issue_alias),
+        Scorable = tobool(Unit.scorable),
+        CorrectIssues = tolong(Unit.counts.correct_issues),
+        ExpectedIssues = tolong(Unit.counts.expected_issues),
+        NoiseCards = tolong(Unit.counts.noise_cards),
+        DuplicateCards = tolong(Unit.counts.duplicate_cards),
+        ExclusionReasons = Unit.exclusion_reasons,
+        Findings = Unit.findings,
+        Summary = tostring(Unit.summary)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Public aliases and closed verdict vocabulary, not raw cards/model prose. Unscored findings remain visible.'
+) AIQFindingsV1() {
+    AIQUnitsV1()
+    | mv-expand Finding = Findings to typeof(dynamic)
+    | project
+        ReportDate, FrameworkRunId, Region, CoverageStatus, ScoringPolicy,
+        Agent, LogicalVersion, Kind, Scorable, ExclusionReasons,
+        CardAlias = tostring(Finding.card_alias),
+        RootCauseAlias = tostring(Finding.root_cause_alias),
+        Core = tostring(Finding.core),
+        Contribution = tostring(Finding.contribution),
+        Classification = tostring(Finding.classification),
+        Scored = tobool(Finding.scored),
+        SeverityDiagnostic = tostring(Finding.severity),
+        ProposedFixDiagnostic = tostring(Finding.proposed_fix),
+        Summary = tostring(Finding.summary)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Independent allowlisted operations, including staging; EventId deduplicates exact retries.'
+) AIQOperationsV1() {
+    QualityOperationsV1
+    | where EventVersion == '1'
+    | extend IngestedAt = ingestion_time()
+    | summarize ContentHashes = make_set(ContentHash, 2), arg_max(IngestedAt, *) by FrameworkRunId, EventId
+    | where array_length(ContentHashes) == 1
+    | project
+        FrameworkRunId, Profile, EventId, IngestedAt,
+        Utc = todatetime(Event.utc),
+        ElapsedMs = tolong(Event.elapsed_ms),
+        Kind = tostring(Event.kind),
+        Stage = tostring(Event.stage),
+        Code = tostring(Event.code),
+        Counters = Event.counters,
+        Agent = tostring(Event.agent),
+        LogicalVersion = tostring(Event.logical_version),
+        Attempt = tolong(Event.attempt),
+        Turn = tolong(Event.turn)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Explicit report/event identity conflicts, excluded from current score/operation views rather than silently overwritten.'
+) AIQPublicationConflictsV1() {
+    union
+        (QualityReportsV1
+         | where PayloadVersion == '1'
+         | project Kind = 'report', FrameworkRunId, Identity = FrameworkRunId, ContentHash),
+        (QualityOperationsV1
+         | where EventVersion == '1'
+         | project Kind = 'event', FrameworkRunId, Identity = EventId, ContentHash)
+    | summarize ContentHashes = make_set(ContentHash, 2) by Kind, FrameworkRunId, Identity
+    | where array_length(ContentHashes) > 1
+}
