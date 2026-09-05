@@ -15,20 +15,3 @@ expected_behavior:
 injected_defect:
   single_root: null
   activation: disabled
-determinism:
-  traffic_file: traffic.json
-  minimum_requests: 5
-artifacts:
-  include:
-  - implementation.yaml
-  - package.py
-  - requirements.txt
-  - source
-  - traffic.json
-  - Dockerfile
-  - container.yaml
-public_safety:
-  synthetic_only: true
-  real_people: false
-  credentials: false
-  service_locations: false

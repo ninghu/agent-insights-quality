@@ -12,16 +12,3 @@ expected_behavior:
 injected_defect:
   single_root: null
   activation: disabled
-determinism:
-  traffic_file: traffic.json
-  minimum_requests: 5
-artifacts:
-  include:
-  - definition.json
-  - implementation.yaml
-  - traffic.json
-public_safety:
-  synthetic_only: true
-  real_people: false
-  credentials: false
-  service_locations: false

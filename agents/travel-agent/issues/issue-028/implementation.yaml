@@ -16,17 +16,3 @@ expected_behavior:
 injected_defect:
   single_root: The plan node retains checkpointed itinerary state instead of replacing it on a switch.
   activation: all_matching_endpoint_requests
-packaging:
-  command: python ../../v0/package.py --issue implementation.yaml --output issue-028.zip
-  runtime_config: issue.yaml
-  include_exactly_one_issue: true
-  exclude:
-  - ../../issues
-determinism:
-  traffic_file: traffic.json
-  minimum_requests: 5
-public_safety:
-  synthetic_only: true
-  real_people: false
-  credentials: false
-  service_locations: false
