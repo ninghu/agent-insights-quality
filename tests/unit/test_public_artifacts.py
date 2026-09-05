@@ -64,6 +64,17 @@ def test_public_files_share_one_validated_envelope_and_rendering(repository):
     assert (dated / "report.md").read_text() == public_markdown(repository, value)
     assert (repository / "reports" / "latest.json").read_bytes() == (dated / "report.json").read_bytes()
     assert write_public_report(repository, value, test_run=False) == paths
+    markdown = (dated / "report.md").read_text()
+    assert "Report date: " + value["report_date"] in markdown
+    assert "Region: " + value["region"] in markdown
+    assert "Source commit: " + value["source_commit"] in markdown
+    targets = select_daily(load_catalog(repository), date.fromisoformat(value["report_date"]))
+    for target in targets:
+        if not target.is_baseline:
+            assert target.expectation["title"] in markdown
+            assert target.expectation["root_cause"] in markdown
+            assert target.expectation["expected_fix"] in markdown
+    assert "card-0001: expected_detection (scored)" in markdown
 
 
 def test_dated_report_is_not_overwritten_by_a_different_measurement(repository):

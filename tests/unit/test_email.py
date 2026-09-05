@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from agent_insights_quality.email import (
@@ -9,6 +11,7 @@ from agent_insights_quality.email import (
     record_email_outcome,
 )
 from agent_insights_quality.results import PlannedUnit, UnitId, UnitResult, aggregate_results
+from agent_insights_quality.report_context import ReportContextError, load_report_context
 from agent_insights_quality.state import RuntimeStore, StateConflict, StateError
 
 
@@ -168,3 +171,60 @@ def test_terminal_outcome_replay_is_idempotent_but_conflicts_are_not_overwritten
                 box, request.delivery_id, claim_id="app-1",
                 outcome="accepted", provider_result={"status": "accepted"}, reconciliation=True,
             )
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_email_uses_reviewed_context_and_exact_metadata_including_private_failure(tmp_path, failed):
+    quality, plan = result(failed=failed)
+    context = load_report_context(Path(__file__).resolve().parents[2], allowed_units=plan)
+    runtime = RuntimeStore("daily", root=tmp_path)
+    with runtime.ownership():
+        box = runtime.outbox("email")
+        request = prepare_email(
+            box, "context-delivery", quality, allowed_units=plan, report_date="2026-09-04",
+            test_run=True, rerun=1, test_recipient="test@example.test",
+            report_context=context, region_display="Sweden Central", source_revision="a" * 40,
+            private_context="synthetic private work-item context",
+            warnings=("work_item_unavailable",),
+        )
+        assert claim_email(box, request.delivery_id, claim_id="native-app") == request
+    assert "Unsupported factual answer" in request.html
+    assert "no supporting value" in request.html
+    assert "Require grounded evidence" in request.html
+    assert "agents/weather-agent/issues/issue-001/traffic.json" in request.html
+    assert "Report date: 2026-09-04" in request.html and "2026-09-04" in request.subject
+    assert "Region: Sweden Central" in request.html
+    assert "Source commit: " + "a" * 40 in request.html
+    assert "synthetic private work-item context" in request.html
+    assert "Optional work-item context is unavailable." in request.html
+    assert read_email(runtime.outbox("email"), request.delivery_id).request == request
+    assert len(list(tmp_path.rglob("*.json"))) == 1
+
+
+@pytest.mark.parametrize("metadata", [
+    {"region_display": "Sweden Central"},
+    {"source_revision": "a" * 40},
+    {"region_display": "", "source_revision": "a" * 40},
+    {"region_display": "Sweden Central", "source_revision": "main"},
+])
+def test_incomplete_or_invalid_metadata_does_not_prepare_a_request(tmp_path, metadata):
+    runtime = RuntimeStore("daily", root=tmp_path)
+    with runtime.ownership(), pytest.raises((EmailError, ReportContextError)):
+        prepare(runtime.outbox("email"), **metadata)
+    assert not list(tmp_path.rglob("*.json"))
+
+
+def test_metadata_changes_cannot_rewrite_prepared_or_claimed_email(tmp_path):
+    runtime = RuntimeStore("daily", root=tmp_path)
+    metadata = {"region_display": "SwedenCentral", "source_revision": "a" * 40}
+    with runtime.ownership():
+        box = runtime.outbox("email")
+        original = prepare(box, **metadata)
+        assert prepare(box, **metadata) == original
+        for change in ({"source_revision": "b" * 40}, {"region_display": "Sweden Central"}):
+            with pytest.raises(StateConflict):
+                prepare(box, **{**metadata, **change})
+        claim_email(box, original.delivery_id, claim_id="native-app")
+        with pytest.raises(StateConflict):
+            prepare(box, **{**metadata, "source_revision": "b" * 40})
+    assert read_email(box, original.delivery_id).request == original

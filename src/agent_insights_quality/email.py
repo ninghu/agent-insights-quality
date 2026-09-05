@@ -18,6 +18,7 @@ import threading
 from typing import Any, Literal
 
 from .errors import QualityError
+from .report_context import ReportMetadata, ReviewedReportContext
 from .reporting import render_html
 from .results import PlannedUnit, QualityResult
 from .state import RecordStore, StateConflict
@@ -144,6 +145,8 @@ def prepare_email(
     test_recipient: str | None = None, failure_recipient: str | None = None,
     team_recipient: str = TEAM_RECIPIENT, private_context: str | None = None,
     warnings: tuple[str, ...] = (),
+    report_context: ReviewedReportContext | None = None,
+    region_display: str | None = None, source_revision: str | None = None,
 ) -> EmailRequest:
     """Prepare one private record (including the HTML preview), without sending.
 
@@ -161,7 +164,16 @@ def prepare_email(
     prefix = "TEST " if test_run else ""
     title = "Agent Insights quality" if result.team_report_eligible else "Agent Insights failure"
     subject = f"[{prefix}{result.status.value}] {title} - {report_date}"
-    html = render_html(result, allowed_units=allowed_units, warnings=warnings)
+    if (region_display is None) != (source_revision is None):
+        raise EmailError("email_metadata_incomplete")
+    metadata = (
+        ReportMetadata(report_date, region_display, source_revision)
+        if region_display is not None else None
+    )
+    html = render_html(
+        result, allowed_units=allowed_units, warnings=warnings,
+        report_context=report_context, metadata=metadata,
+    )
     if private_context is not None:
         if not isinstance(private_context, str):
             raise EmailError("email_private_context_invalid")

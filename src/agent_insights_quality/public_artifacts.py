@@ -16,6 +16,7 @@ from typing import Any
 from agent_insights_quality.catalogs import load_catalog
 from agent_insights_quality.errors import QualityError
 from agent_insights_quality.privacy import restore_public_result
+from agent_insights_quality.report_context import ReportMetadata, load_report_context
 from agent_insights_quality.reporting import render_markdown
 from agent_insights_quality.results import PlannedUnit
 from agent_insights_quality.results import QualityResult
@@ -46,11 +47,10 @@ def approved_document(
 
 def public_markdown(root: Path, document: Mapping[str, Any]) -> str:
     value, result, plan = approved_document(root, document)
-    return (
-        f"Report date: {value['report_date']}\n\n"
-        f"Region: {value['region']}\n\n"
-        f"Source commit: `{value['source_commit']}`\n\n"
-        + render_markdown(result, allowed_units=plan)
+    return render_markdown(
+        result, allowed_units=plan,
+        report_context=load_report_context(root, allowed_units=plan),
+        metadata=ReportMetadata(value["report_date"], value["region"], value["source_commit"]),
     )
 
 
