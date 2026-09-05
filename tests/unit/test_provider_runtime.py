@@ -180,15 +180,57 @@ def test_exact_version_read_requires_real_returned_version(environment, target):
         ))
 
 
-def test_hosted_budget_is_forwarded_from_the_reviewed_request(environment, target):
-    hosted = replace(target, agent_type="hosted_custom_container")
+@pytest.mark.parametrize("agent_type", ["hosted_code", "hosted_custom_container"])
+@pytest.mark.parametrize("budget", [200, 400])
+def test_hosted_budget_is_rejected_before_dispatch_or_checkpoint(
+    environment, target, agent_type, budget,
+):
+    hosted = replace(target, agent_type=agent_type)
+    transport = FakeTransport()
+    saved = []
+    body = {"input": "Synthetic request", "max_output_tokens": budget}
+    step = Step("probe", "probe", body, {})
+    with pytest.raises(QualityError, match="hosted_request_field_unsupported") as failure:
+        run(runtime(environment, transport).invoke(
+            deployed(hosted), step, request_id="request-one", session_id="session-one",
+            previous_response_id=None, persist=saved.append,
+        ))
+    assert failure.value.request_accepted is False
+    assert not failure.value.retryable
+    assert not transport.requests and not saved
+    assert step.body == body == {"input": "Synthetic request", "max_output_tokens": budget}
+
+
+@pytest.mark.parametrize("budget", [200, 400])
+def test_prompt_budget_is_preserved_on_the_supported_endpoint(environment, target, budget):
     transport = FakeTransport(response({"id": "response-one", "status": "completed"}))
-    step = Step("probe", "probe", {"input": "Synthetic request", "max_output_tokens": 400}, {})
+    step = Step("probe", "probe", {"input": "Synthetic request", "max_output_tokens": budget}, {})
     run(runtime(environment, transport).invoke(
-        deployed(hosted), step, request_id="request-one", session_id="session-one",
+        deployed(target), step, request_id="request-one", session_id=None,
         previous_response_id=None, persist=lambda value: None,
     ))
-    assert json.loads(transport.requests[0].body)["max_output_tokens"] == 400
+    assert json.loads(transport.requests[0].body)["max_output_tokens"] == budget
+    assert "/openai/v1/responses" in transport.requests[0].url
+
+
+@pytest.mark.parametrize("agent_type", ["hosted_code", "hosted_custom_container"])
+def test_hosted_supported_body_is_forwarded_without_silent_filtering(environment, target, agent_type):
+    hosted = replace(target, agent_type=agent_type)
+    transport = FakeTransport(response({"id": "response-one", "status": "completed"}))
+    body = {
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Synthetic request"}]}],
+        "metadata": {"synthetic_case": "one"},
+    }
+    original = copy.deepcopy(body)
+    run(runtime(environment, transport).invoke(
+        deployed(hosted), Step("probe", "probe", body, {}),
+        request_id="request-one", session_id="session-one",
+        previous_response_id=None, persist=lambda value: None,
+    ))
+    assert body == original
+    assert json.loads(transport.requests[0].body) == {
+        **original, "agent_session_id": "session-one", "store": False,
+    }
 
 
 def test_missing_ready_version_is_recreated_only_after_listing(environment, target):

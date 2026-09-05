@@ -77,6 +77,25 @@ def test_all_reviewed_attempts_resolve_without_losing_turns():
     assert turns == 834
 
 
+def test_hosted_wire_bodies_omit_unsupported_budget_and_prompt_budgets_remain():
+    catalog = load_catalog(ROOT)
+    hosted_targets = hosted_attempts = hosted_turns = prompt_turns = 0
+    for target in catalog.targets:
+        attempts = load_attempts(target)
+        if not target.is_prompt:
+            hosted_targets += 1
+            hosted_attempts += len(attempts)
+        for attempt in attempts:
+            for step in attempt.steps:
+                if target.is_prompt:
+                    assert step.body["max_output_tokens"] in {200, 400}
+                    prompt_turns += 1
+                else:
+                    assert set(step.body) == {"input"}
+                    hosted_turns += 1
+    assert (hosted_targets, hosted_attempts, hosted_turns, prompt_turns) == (27, 270, 540, 294)
+
+
 @pytest.mark.parametrize("violation", [
     "legacy", "digest", "control", "unknown_ref", "duplicate_request",
     "unused_request", "nine_attempts", "repeated_index", "unordered",

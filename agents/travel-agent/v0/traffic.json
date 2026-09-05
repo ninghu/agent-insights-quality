@@ -32,8 +32,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -65,8 +64,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {
@@ -104,8 +102,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -137,8 +134,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {
@@ -176,8 +172,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -209,8 +204,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {
@@ -257,8 +251,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -290,8 +283,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {
@@ -328,8 +320,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -361,8 +352,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {
@@ -400,8 +390,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -433,8 +422,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {
@@ -472,8 +460,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -505,8 +492,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {
@@ -544,8 +530,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -577,8 +562,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {
@@ -625,8 +609,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -658,8 +641,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {
@@ -696,8 +678,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 200
+          ]
         }
       },
       "expected": {
@@ -729,8 +710,7 @@
                 }
               ]
             }
-          ],
-          "max_output_tokens": 400
+          ]
         }
       },
       "expected": {

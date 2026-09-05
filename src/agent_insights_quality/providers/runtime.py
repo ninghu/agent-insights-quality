@@ -168,7 +168,7 @@ class AzureRuntime:
         else:
             if not session_id or previous_response_id is not None:
                 raise QualityError("hosted_session_required", request_accepted=False)
-            unsupported = set(step.body) - {"input", "metadata", "max_output_tokens"}
+            unsupported = set(step.body) - {"input", "metadata"}
             if unsupported:
                 raise QualityError(
                     "hosted_request_field_unsupported", request_accepted=False
