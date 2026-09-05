@@ -172,6 +172,25 @@ def test_registry_exact_version_does_not_list_or_use_latest(environment, target)
     assert "/versions/42?" in transport.requests[0].url
 
 
+def test_exact_version_read_requires_real_returned_version(environment, target):
+    transport = FakeTransport(response({"status": "active"}))
+    with pytest.raises(QualityError, match="deployment_version_missing"):
+        run(runtime(environment, transport).ensure_deployment(
+            target, "revision-one", deployed(target), lambda value: None,
+        ))
+
+
+def test_hosted_budget_is_forwarded_from_the_reviewed_request(environment, target):
+    hosted = replace(target, agent_type="hosted_custom_container")
+    transport = FakeTransport(response({"id": "response-one", "status": "completed"}))
+    step = Step("probe", "probe", {"input": "Synthetic request", "max_output_tokens": 400}, {})
+    run(runtime(environment, transport).invoke(
+        deployed(hosted), step, request_id="request-one", session_id="session-one",
+        previous_response_id=None, persist=lambda value: None,
+    ))
+    assert json.loads(transport.requests[0].body)["max_output_tokens"] == 400
+
+
 def test_missing_ready_version_is_recreated_only_after_listing(environment, target):
     transport = FakeTransport(
         response(status=404),

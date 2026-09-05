@@ -241,7 +241,9 @@ class DeploymentClient:
         created: bool = False,
     ) -> Deployment:
         observed_version = _version(value, created=created)
-        if observed_version and observed_version != deployment.provider_version:
+        if not observed_version:
+            raise QualityError("deployment_version_missing", request_accepted=True)
+        if observed_version != deployment.provider_version:
             raise QualityError("deployment_version_mismatch", request_accepted=True)
         remote_metadata = value.get("metadata")
         if isinstance(remote_metadata, dict) and any(
