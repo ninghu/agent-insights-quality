@@ -18,6 +18,7 @@ from agent_insights_quality.errors import QualityError
 FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 ARM_SCOPE = "https://management.azure.com/.default"
 TRANSIENT = {408, 429, 500, 502, 503, 504}
+AZURE_DEVOPS_SCOPE = "499b84ac-1321-427f-aa17-267ca6975798/.default"
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,7 @@ class AzureHttpTransport:
 
     def _send(self, request: HttpRequest) -> HttpResponse:
         validate_url(request.url)
-        if request.scope not in {FOUNDRY_SCOPE, ARM_SCOPE}:
+        if request.scope not in {FOUNDRY_SCOPE, ARM_SCOPE, AZURE_DEVOPS_SCOPE}:
             raise QualityError("provider_scope_invalid", request_accepted=False)
         try:
             from azure.core.exceptions import AzureError

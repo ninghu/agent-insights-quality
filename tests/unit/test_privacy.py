@@ -62,6 +62,11 @@ def test_extra_fields_are_rejected_at_every_public_object_depth(field):
     lambda value: value["units"][0].update(expected_issue_alias="provider-id"),
     lambda value: value["units"][0]["findings"][0].update(root_cause_alias="provider-id"),
     lambda value: value["scoring_policy"].update(duplicate_weight=1),
+    lambda value: value.update(score=7),
+    lambda value: value["counts"].update(correct_issues=0),
+    lambda value: value["units"][0].update(scorable=False),
+    lambda value: value["units"][0]["findings"][0].update(classification="noise"),
+    lambda value: value["units"][0]["findings"][0].update(root_cause_alias=None),
 ])
 def test_wrong_public_values_do_not_pass_an_allowlisted_shape(mutation):
     result, plan = sample()

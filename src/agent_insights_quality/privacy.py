@@ -127,8 +127,8 @@ def validate_public_projection(
 ) -> dict[str, Any]:
     """Reject unknown fields and unapproved values; return an independent copy.
 
-    This validates the publication boundary, not a second scoring implementation.
-    Counts and the delivery decision must originate in ``aggregate_results``.
+    Artifacts are reconstructed through ``aggregate_results``; there is no
+    independent sink-specific scoring implementation.
     """
     import math
     import re
@@ -178,7 +178,49 @@ def validate_public_projection(
             aliases.add(alias)
     if seen != set(by_id):
         raise PrivacyError()
+    try:
+        rebuilt = _rebuild_result(value, plan)
+    except (TypeError, ValueError) as error:
+        raise PrivacyError() from error
+    if rebuilt.to_dict() != value:
+        raise PrivacyError()
     return deepcopy(dict(value))
+
+
+def _rebuild_result(value, plan):
+    from .results import (
+        CardVerdict, Contribution, CoreVerdict, DiagnosticVerdict,
+        ExclusionReason, UnitId, UnitResult, aggregate_results,
+    )
+
+    units = tuple(UnitResult(
+        UnitId(**unit["unit_id"]),
+        cards=tuple(CardVerdict(
+            card_alias=finding["card_alias"],
+            core=CoreVerdict(finding["core"]),
+            root_cause_alias=finding["root_cause_alias"],
+            contribution=Contribution(finding["contribution"]),
+            severity=DiagnosticVerdict(finding["severity"]),
+            proposed_fix=DiagnosticVerdict(finding["proposed_fix"]),
+            summary=finding["summary"],
+        ) for finding in unit["findings"]),
+        exclusion_reasons=tuple(ExclusionReason(reason) for reason in unit["exclusion_reasons"]),
+        summary=unit["summary"],
+    ) for unit in value["units"])
+    return aggregate_results(
+        plan, units,
+        systemic_failure="systemic_failure" in value["failure_reasons"],
+        integrity_failure="integrity_failure" in value["failure_reasons"],
+    )
+
+
+def restore_public_result(
+    value: Mapping[str, Any], *, allowed_units: Iterable[PlannedUnit],
+) -> QualityResult:
+    """Validate an artifact through the same scorer, never a separate sink formula."""
+    plan = tuple(allowed_units)
+    approved = validate_public_projection(value, allowed_units=plan)
+    return _rebuild_result(approved, plan)
 
 
 def public_projection(
