@@ -15,6 +15,7 @@ import yaml
 
 from agent_insights_quality.contracts import Environment, JsonObject, Target
 from agent_insights_quality.errors import QualityError
+from agent_insights_quality.providers.hosted import hosted_definition
 from agent_insights_quality.providers.transport import encode
 
 
@@ -129,23 +130,7 @@ async def prepare_artifact(
         if definition.get("tools") or definition.get("tool_resources"):
             raise QualityError("prompt_tools_forbidden")
         return Artifact(definition)
-    variables = {
-        "AZURE_AI_MODEL_DEPLOYMENT_NAME": "gpt-5.4-mini",
-        **hosted_environment,
-    }
-    variables = {
-        key: environment.project_endpoint
-        if value == "${FOUNDRY_PROJECT_ENDPOINT}"
-        else value
-        for key, value in variables.items()
-    }
-    definition = {
-        "kind": "hosted",
-        "protocol_versions": [{"protocol": "responses", "version": "1.0.0"}],
-        "cpu": "1",
-        "memory": "2Gi",
-        "environment_variables": variables,
-    }
+    definition = hosted_definition(environment, hosted_environment)
     if target.agent_type == "hosted_code":
         host = _yaml(target.baseline_root / "host.yaml")
         entrypoint = host.get("entrypoint")

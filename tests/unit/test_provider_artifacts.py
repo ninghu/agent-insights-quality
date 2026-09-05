@@ -1,11 +1,15 @@
 import asyncio
+import ast
 import hashlib
 import json
+import shlex
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from agent_insights_quality.contracts import Target
+from agent_insights_quality.catalogs import load_catalog
 from agent_insights_quality.errors import QualityError
 from agent_insights_quality.providers import AcrImageBuilder, CommandResult
 from agent_insights_quality.providers.artifacts import (
@@ -221,3 +225,52 @@ def test_custom_container_without_builder_is_explicit_capability_error(target):
         asyncio.run(
             prepare_artifact(target, None, "r", images=None, hosted_environment={})
         )
+
+
+@pytest.mark.parametrize("version", ["v0", *(f"issue-{number:03d}" for number in range(29, 37))])
+def test_real_support_sources_satisfy_selected_acr_build_context(version, tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    target = load_catalog(root).target("support-ticket-agent/" + version)
+    context = source_files(target, container=True)
+    variables = {}
+    copies = {}
+    dockerfile = context["v0/Dockerfile"].decode("utf-8")
+    for line in dockerfile.splitlines():
+        if line.startswith("ARG "):
+            name, default = line[4:].split("=", 1)
+            variables[name] = default
+        elif line.startswith("COPY "):
+            source, destination = shlex.split(line)[1:]
+            for name, value in variables.items():
+                source = source.replace("${" + name + "}", value)
+            assert source in context or any(name.startswith(source + "/") for name in context)
+            copies[destination] = source
+    assert copies == {
+        "/app/requirements.txt": "v0/requirements.txt",
+        "/app/source": "v0/source",
+        "/app/issue.yaml": "v0/implementation.yaml",
+    }
+    assert "-r /app/requirements.txt" in dockerfile
+    assert 'CMD ["python", "-m", "source.app"]' in dockerfile
+    assert context["v0/implementation.yaml"] == (target.version_root / "implementation.yaml").read_bytes()
+    expected_sources = {
+        "v0/source/" + path.relative_to(target.version_root / "source").as_posix(): path.read_bytes()
+        for path in (target.version_root / "source").rglob("*.py")
+    }
+    assert {name: data for name, data in context.items() if name.startswith("v0/source/")} == expected_sources
+    for source in expected_sources.values():
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module:
+                assert "v0/source/" + node.module.replace(".", "/") + ".py" in context
+    assert not any(name.startswith("issues/") for name in context)
+    commands = Commands([], {"runId": "synthetic-native-run"}, {"status": "Running"})
+    builder = AcrImageBuilder(
+        "exampleregistry", workspace=tmp_path, persist=lambda value: None, command=commands,
+    )
+    with pytest.raises(QualityError, match="acr_build_pending"):
+        asyncio.run(builder.ensure_image(target, "synthetic-source", context))
+    assert commands.contexts == [context]
+    command = next(call for call in commands.calls if call[:2] == ["acr", "build"])
+    assert command[command.index("--file") + 1] == "v0/Dockerfile"
+    assert "--build-arg" not in command

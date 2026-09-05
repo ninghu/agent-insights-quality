@@ -78,10 +78,20 @@ def test_missing_full_incomplete_and_unchanged_failure(catalog):
     ("agents/weather-agent/v0/definition.json", {"weather-agent/v0"}, "traffic"),
     ("agents/finance-agent/v0/source/app.py", {"finance-agent/v0"}, "traffic"),
     ("agents/finance-agent/v0/requirements.txt", {"finance-agent"}, "traffic"),
-    ("agents/travel-agent/v0/package.py", {"travel-agent"}, "traffic"),
+    ("agents/travel-agent/v0/package.py", set(), "traffic"),
     ("agents/support-ticket-agent/v0/Dockerfile", {"support-ticket-agent"}, "traffic"),
+    ("agents/support-ticket-agent/v0/container.yaml", set(), "traffic"),
+    ("agents/finance-agent/issues/issue-013/implementation.yaml", {"finance-agent/issue-013"}, "reassess"),
+    ("agents/support-ticket-agent/issues/issue-029/implementation.yaml", {"support-ticket-agent/issue-029"}, "traffic"),
+    ("src/agent_insights_quality/providers/artifacts.py", {"all"}, "traffic"),
+    ("src/agent_insights_quality/providers/hosted.py", {"hosted"}, "traffic"),
+    ("src/agent_insights_quality/providers/acr.py", {"support-ticket-agent"}, "traffic"),
+    ("src/agent_insights_quality/providers/transport.py", set(), "traffic"),
+    ("src/agent_insights_quality/providers/sol.py", set(), "traffic"),
+    ("src/agent_insights_quality/cli.py", set(), "traffic"),
     ("src/agent_insights_quality/assessment.py", {"all"}, "reassess"),
-    ("src/agent_insights_quality/evidence.py", {"all"}, "reassess"),
+    ("src/agent_insights_quality/telemetry.py", {"all"}, "reassess"),
+    ("src/agent_insights_quality/evidence.py", set(), "traffic"),
     ("catalogs/ISSUE_CATALOG.yaml", {"all"}, "reassess"),
     ("README.md", set(), "traffic"),
     ("src/agent_insights_quality/results.py", set(), "traffic"),
@@ -91,6 +101,8 @@ def test_dependencies_select_only_affected_work(catalog, relative, expected, act
     selected = select_staging(catalog, last_tests=records(catalog), changed_paths=[relative])
     if expected == {"all"}:
         expected = {target.key for target in catalog.targets}
+    elif expected == {"hosted"}:
+        expected = {target.key for target in catalog.targets if not target.is_prompt}
     elif expected and "/" not in next(iter(expected)):
         expected = {target.key for target in catalog.for_agent(next(iter(expected)))}
     assert {item.target.key for item in selected} == expected
@@ -139,6 +151,62 @@ def test_deployment_inputs_exclude_traffic_and_verifiers(catalog):
     issue = catalog.target("finance-agent/issue-013")
     assert issue.baseline_root / "source" not in deployment_inputs(issue)
     assert issue.baseline_root / "requirements.txt" in deployment_inputs(issue)
+    for target in catalog.targets:
+        paths = deployment_inputs(target)
+        assert all(path.exists() for path in paths)
+        assert ROOT / "src" / "agent_insights_quality" / "cli.py" not in paths
+        assert target.baseline_root / "package.py" not in paths
+        assert target.baseline_root / "container.yaml" not in paths
+
+
+def test_git_bound_deployment_revision_changes_only_for_actual_inputs(catalog, tmp_path):
+    from agent_insights_quality.runner import deployment_revision
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    git("init", "--quiet")
+    git("config", "user.name", "Synthetic Test")
+    git("config", "user.email", "synthetic@example.invalid")
+    git("config", "commit.gpgsign", "false")
+    local = replace(catalog, root=tmp_path)
+    targets = tuple(
+        replace(
+            catalog.target(key),
+            version_root=tmp_path / catalog.target(key).version_root.relative_to(catalog.root),
+            baseline_root=tmp_path / catalog.target(key).baseline_root.relative_to(catalog.root),
+        )
+        for key in (
+            "weather-agent/v0", "finance-agent/issue-013", "support-ticket-agent/issue-029",
+        )
+    )
+    for path in {path for target in targets for path in deployment_inputs(target)}:
+        file = path / "app.py" if path.name == "source" else path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("synthetic initial input\n")
+    git("add", "--all")
+    git("commit", "--quiet", "-m", "Synthetic initial inputs")
+    expected = {target.key: deployment_revision(local, target) for target in targets}
+    for path, affected in (
+        ("src/agent_insights_quality/cli.py", set()),
+        ("src/agent_insights_quality/providers/hosted.py", {"hosted_code", "hosted_custom_container"}),
+        ("src/agent_insights_quality/providers/artifacts.py", {"prompt", "hosted_code", "hosted_custom_container"}),
+        ("src/agent_insights_quality/providers/acr.py", {"hosted_custom_container"}),
+        ("agents/finance-agent/v0/package.py", set()),
+        ("src/agent_insights_quality/telemetry.py", set()),
+    ):
+        file = tmp_path / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("synthetic changed input\n")
+        git("add", "--all")
+        git("commit", "--quiet", "-m", "Synthetic change")
+        revision = git("rev-parse", "HEAD")
+        for target in targets:
+            if target.agent_type in affected:
+                expected[target.key] = revision
+            assert deployment_revision(local, target) == expected[target.key]
 
 
 def test_git_comparison_detects_expectation_only_and_request_changes(tmp_path):

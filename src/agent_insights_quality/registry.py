@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 from agent_insights_quality.contracts import Deployment, Environment
 from agent_insights_quality.errors import QualityError
-from agent_insights_quality.state import RecordStore
+from agent_insights_quality.state import RecordStore, _unique_object
 
 
 class BlobPort(Protocol):
@@ -35,32 +35,50 @@ class AzureRegistryBlob:
                 container_name="deployment-registries",
                 blob_name=f"swedencentral-g30/runner-v1/{self.environment.profile}.json",
                 credential=self._credential,
+                retry_total=0,
             )
         return self._client
 
     async def read(self) -> tuple[bytes, str] | None:
-        from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+        from azure.core.exceptions import (
+            AzureError, HttpResponseError, ResourceNotFoundError,
+        )
 
         try:
             download = await self._get_client().download_blob()
-            return await download.readall(), download.properties.etag
-        except ResourceNotFoundError:
-            return None
+            data = await download.readall()
+            return data, _etag(download.properties.etag)
+        except ResourceNotFoundError as error:
+            code = getattr(error.error_code, "value", error.error_code)
+            if code == "BlobNotFound":
+                return None
+            raise QualityError("registry_resource_missing", status=error.status_code) from None
         except HttpResponseError as error:
-            raise QualityError("registry_read_failed", status=error.status_code) from error
+            raise QualityError("registry_read_failed", status=error.status_code) from None
+        except (AzureError, OSError):
+            raise QualityError("registry_read_failed") from None
 
     async def write(self, data: bytes, etag: str | None) -> str:
         from azure.core import MatchConditions
-        from azure.core.exceptions import HttpResponseError
+        from azure.core.exceptions import AzureError, HttpResponseError
 
+        if etag is not None:
+            _etag(etag)
         options: dict[str, Any] = {"overwrite": etag is not None}
         if etag is not None:
             options.update(etag=etag, match_condition=MatchConditions.IfNotModified)
         try:
             result = await self._get_client().upload_blob(data, **options)
-            return str(result["etag"])
+            return _etag(result.get("etag"))
         except HttpResponseError as error:
-            raise QualityError("registry_write_failed", status=error.status_code) from error
+            status = error.status_code
+            rejected = status is not None and 400 <= status < 500 and status != 408
+            raise QualityError(
+                "registry_write_failed", status=status,
+                request_accepted=False if rejected else None,
+            ) from None
+        except (AzureError, OSError):
+            raise QualityError("registry_write_failed", request_accepted=None) from None
 
     async def close(self) -> None:
         if self._client is not None:
@@ -69,9 +87,16 @@ class AzureRegistryBlob:
             await self._credential.close()
 
 
+def _etag(value: Any) -> str:
+    if not isinstance(value, str) or not value or value == "*":
+        raise QualityError("registry_etag_invalid")
+    return value
+
+
 def _decode(data: bytes) -> dict[str, Deployment]:
     try:
-        document = json.loads(data)
+        document = json.loads(data, object_pairs_hook=_unique_object)
+        json.dumps(document, allow_nan=False)
         if set(document) != {"schema_version", "targets"} or document["schema_version"] != "1.0":
             raise ValueError("Wrong registry format")
         if not isinstance(document["targets"], dict):
@@ -94,8 +119,15 @@ def _decode(data: bytes) -> dict[str, Deployment]:
                 raise ValueError("Invalid registry entry")
             result[key] = record
         return result
-    except (TypeError, ValueError, KeyError, UnicodeError) as error:
-        raise QualityError("registry_format_invalid") from error
+    except (TypeError, ValueError, KeyError, UnicodeError):
+        raise QualityError("registry_format_invalid") from None
+
+
+def _document(records: Mapping[str, Deployment]) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "targets": {key: asdict(item) for key, item in records.items()},
+    }
 
 
 class DeploymentRegistry:
@@ -107,30 +139,70 @@ class DeploymentRegistry:
         self.records: dict[str, Deployment] = {}
         self.etag: str | None = None
         self._lock = asyncio.Lock()
+        self._pending: dict[str, Deployment] | None = None
+        self._loaded = False
 
     async def load(self) -> None:
-        value = await self.blob.read()
-        records = _decode(value[0]) if value is not None else {}
+        async with self._lock:
+            records, etag = await self._read()
+            self._accept(records, etag)
+
+    async def _read(self) -> tuple[dict[str, Deployment], str | None]:
+        try:
+            value = await self.blob.read()
+        except OSError:
+            raise QualityError("registry_read_failed") from None
+        if value is None:
+            return {}, None
+        records = _decode(value[0])
+        return records, _etag(value[1])
+
+    def _accept(self, records: dict[str, Deployment], etag: str | None) -> None:
+        self.cache.save_progress("deployment-registry", _document(records))
         self.records = records
-        self.etag = value[1] if value is not None else None
-        self.cache.save_progress("deployment-registry", {
-            "schema_version": "1.0",
-            "targets": {key: asdict(item) for key, item in records.items()},
-        })
+        self.etag = etag
+        self._pending = None
+        self._loaded = True
+
+    async def _reconcile(self, *, conflict: bool = False) -> None:
+        records, etag = await self._read()
+        if records != self._pending or etag is None:
+            raise QualityError(
+                "registry_write_conflict" if conflict else "registry_write_unresolved",
+                request_accepted=False if conflict else None,
+            )
+        self._accept(records, etag)
 
     def get(self, key: str) -> Deployment | None:
         return self.records.get(key)
 
     async def save(self, deployment: Deployment) -> None:
         async with self._lock:
+            if not self._loaded:
+                raise QualityError("registry_not_loaded", request_accepted=False)
+            if self._pending is not None:
+                await self._reconcile()
             updated = {**self.records, deployment.target_key: deployment}
-            document = {
-                "schema_version": "1.0",
-                "targets": {key: asdict(item) for key, item in updated.items()},
-            }
-            payload = json.dumps(document, sort_keys=True, allow_nan=False).encode("utf-8")
-            _decode(payload)
-            etag = await self.blob.write(payload, self.etag)
-            self.records = updated
-            self.etag = etag
-            self.cache.save_progress("deployment-registry", document)
+            try:
+                payload = json.dumps(_document(updated), sort_keys=True, allow_nan=False).encode("utf-8")
+            except (TypeError, ValueError):
+                raise QualityError("registry_format_invalid", request_accepted=False) from None
+            updated = _decode(payload)
+            if self.records == updated:
+                return
+            self._pending = updated
+            try:
+                etag = _etag(await self.blob.write(payload, self.etag))
+            except (QualityError, OSError) as error:
+                conflict = isinstance(error, QualityError) and error.status in {409, 412}
+                if isinstance(error, QualityError) and error.request_accepted is False and not conflict:
+                    self._pending = None
+                    raise
+                # Conditional writes can have committed even when their reply was lost.
+                # Read the exact result before retrying or letting another lane write.
+                try:
+                    await self._reconcile(conflict=conflict)
+                except QualityError as reconciliation:
+                    raise reconciliation from None
+                return
+            self._accept(updated, etag)

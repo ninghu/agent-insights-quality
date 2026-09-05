@@ -77,18 +77,20 @@ def select_daily(
 
 def deployment_inputs(target: Target) -> tuple[Path, ...]:
     """Directory roots include added/deleted files; these are paths, not source hashes."""
+    providers = target.baseline_root.parents[2] / "src" / "agent_insights_quality" / "providers"
+    generators = (providers / "artifacts.py",)
     if target.is_prompt:
-        return (target.version_root / "definition.json",)
-    shared = ["package.py", "requirements.txt"]
-    shared += (
-        ["Dockerfile", "container.yaml"]
-        if target.agent_type == "hosted_custom_container" else ["host.yaml"]
+        return (*generators, target.version_root / "definition.json")
+    hosted = (
+        *generators, providers / "hosted.py",
+        target.version_root / "source", target.baseline_root / "requirements.txt",
     )
-    return (
-        target.version_root / "source",
-        target.version_root / "implementation.yaml",
-        *(target.baseline_root / name for name in shared),
-    )
+    if target.agent_type == "hosted_custom_container":
+        return (
+            *hosted, providers / "acr.py", target.baseline_root / "Dockerfile",
+            target.version_root / "implementation.yaml",
+        )
+    return (*hosted, target.baseline_root / "host.yaml")
 
 
 def traffic_inputs(target: Target) -> tuple[Path, ...]:
@@ -108,7 +110,7 @@ def evaluation_inputs(target: Target) -> tuple[Path, ...]:
         root / "schemas" / "traffic.schema.json",
         *((root / "schemas" / "prompt-traffic.schema.json",) if target.is_prompt else ()),
         root / "src" / "agent_insights_quality" / "assessment.py",
-        root / "src" / "agent_insights_quality" / "evidence.py",
+        root / "src" / "agent_insights_quality" / "telemetry.py",
     )
 
 

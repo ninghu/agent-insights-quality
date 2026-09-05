@@ -125,6 +125,7 @@ def _docs(catalog) -> str:
 async def production_ports(catalog, runtime, run_id, assessment_settings):
     from .bootstrap import azure_json, discover_environment
     from .providers import AcrImageBuilder, AzureRuntime, AzureSol
+    from .providers.hosted import hosted_environment
     from .registry import AzureRegistryBlob, DeploymentRegistry
 
     environment = await discover_environment(runtime.environment)
@@ -145,13 +146,9 @@ async def production_ports(catalog, runtime, run_id, assessment_settings):
         environment.registry_name, workspace=records.directory / "build",
         persist=persist, records=image_records,
     )
-    hosted_environment = {
-        "FOUNDRY_PROJECT_ENDPOINT": environment.project_endpoint,
-        "APPLICATIONINSIGHTS_CONNECTION_STRING": connection,
-        "ENABLE_SENSITIVE_DATA": "true",
-    }
-    records.save_completed("hosted-environment", hosted_environment)
-    cloud = AzureRuntime(environment, images=images, hosted_environment=hosted_environment)
+    hosted_variables = hosted_environment(environment, connection)
+    records.save_completed("hosted-environment", hosted_variables)
+    cloud = AzureRuntime(environment, images=images, hosted_environment=hosted_variables)
     sol = AzureSol(environment, deployment=assessment_settings.deployment_name)
     blob = AzureRegistryBlob(environment)
     registry = DeploymentRegistry(blob, runtime.outbox("registry"))
