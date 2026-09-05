@@ -15,10 +15,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "agent-framework-core==1.14.0",
-  "opentelemetry-sdk>=1.35,<2",
   "pytest>=8.3,<9",
   "ruff>=0.12,<1",
+]
+hosted-test = [
+  "agent-framework-core==1.14.0",
+  "opentelemetry-sdk>=1.35,<2",
 ]
 azure = [
   "azure-identity>=1.19,<2",
@@ -38,7 +40,7 @@ agent_insights_quality = ["prompts/*.md"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-testpaths = ["tests"]
+testpaths = ["tests/unit"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
