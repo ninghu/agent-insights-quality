@@ -5,10 +5,10 @@ known Agent defects without misleading or duplicate findings.
 
 ## Rewrite status
 
-The Agent sources and offline test foundation have been repaired. The old runner, assessment
-handoffs and lifecycle machinery have been removed; the replacement runtime is under construction.
-Do not use this branch for scheduled qualification until the new runtime and private email trial
-are complete. Historical reports remain unchanged.
+The replacement Python runner, Agent repairs and offline suites are integrated. Legacy
+Copilot orchestration, assessment handoffs and promotion machinery have been removed.
+Deployed staging and the real private TEST email are still required before enabling scheduled
+qualification. Historical reports remain unchanged.
 
 ## Test inventory
 
@@ -57,6 +57,10 @@ python -m ruff check src tests agents pyproject.toml
 Default tests require no Azure/Hosted SDK, credentials, network, Docker or live model calls.
 Explicit `tests/hosted` suites use each Agent's pinned requirements in isolated environments;
 they are not collected by default.
+
+See [Operations](docs/OPERATIONS.md) for staging, Daily and checkpoint recovery,
+[Quality rules](docs/QUALITY_BAR.md) for evidence/scoring, and
+[App automation](docs/AUTOMATION_SETUP.md) for the one-command launch and email handoff.
 
 Application Insights is read-only. Formal qualification invokes deployed endpoints.
 Credentials, raw evidence, provider identifiers, checkpoints, logs and email requests stay under

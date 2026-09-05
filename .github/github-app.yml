@@ -4,10 +4,11 @@ instructions: |
   complete prompt payloads, private work-item content, or real customer data.
   Test traffic must invoke deployed Agent endpoints.
   Application Insights is read-only and direct trace injection is forbidden.
-  Test Agent Validation is a local, report-free process. It must use the reviewed
-  validation mode and fixed attempts, create no monitor, run no Agent Insights
-  assessment. Validation retains provider objects
-  and relies on exact response-bound correlation.
+  Python orchestrates staging and Daily, including concurrency, checkpoints and direct Sol
+  assessment. App automation launches one runner command and sends only the exact prepared
+  email request through its native mail capability. It does not orchestrate or assess tests.
+  Staging is incremental and report-free: no monitor or Agent Insights run.
+  Do not enable automation or publish official results during the private TEST email trial.
   Treat AGENT_CATALOG.yaml and ISSUE_CATALOG.yaml as human-reviewed contracts.
   Follow the repository-wide maintenance and evidence rules in AGENTS.md.
 
@@ -17,7 +18,7 @@ scripts:
   - name: Run tests
     command: python -m pytest
   - name: Run Ruff
-    command: python -m ruff check .
+    command: python -m ruff check src tests agents pyproject.toml
 
 automation:
   auto_issue_session: true

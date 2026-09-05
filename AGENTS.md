@@ -5,9 +5,9 @@ baselines and 36 reviewed single-root issues. The goal is credible evidence, not
 
 ## Rewrite status
 
-The legacy runner is being replaced; this guide describes the approved target, not available
-runtime commands. Use the offline commands below, never legacy staging/Daily fallbacks or stale
-procedural docs/skills as new authority. Do not merge/enable automation while incomplete.
+The replacement runner and offline suites are integrated. Its deployed staging and private
+TEST email acceptance remain separate requirements before scheduled use. Never use legacy
+staging/Daily fallbacks or stale procedural docs/skills as new authority.
 
 ## Safety and source contracts
 
@@ -99,7 +99,7 @@ Set `PYTHONPATH` to this worktree's `src`; confirm module resolution before Pyth
 $env:PYTHONPATH = (Join-Path (Get-Location) 'src')
 python -c "import agent_insights_quality; print(agent_insights_quality.__file__)"
 python -m pytest
-python -m ruff check tests pyproject.toml
+python -m ruff check src tests agents pyproject.toml
 ```
 
 Use targeted checks; compile Bicep only for infrastructure changes. Never restore superseded

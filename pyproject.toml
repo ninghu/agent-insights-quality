@@ -31,7 +31,7 @@ azure = [
 ]
 
 [project.scripts]
-aiq-quality = "agent_insights_quality.cli:main"
+aiq-quality = "agent_insights_quality.cli:entrypoint"
 
 [tool.setuptools.packages.find]
 where = ["src"]

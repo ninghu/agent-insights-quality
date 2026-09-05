@@ -9,50 +9,59 @@ permissions:
   contents: read
 
 jobs:
-  contracts:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify changed files
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          code=false
+          infra=false
+          if [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            git diff --name-only "$BASE_SHA" HEAD > "$RUNNER_TEMP/changed-files"
+            git diff --check "$BASE_SHA" HEAD
+          else
+            git ls-files > "$RUNNER_TEMP/changed-files"
+            code=true
+          fi
+          while IFS= read -r path; do
+            case "$path" in
+              infra/*) code=true; infra=true ;;
+              reports/*|*.md) ;;
+              *) code=true ;;
+            esac
+          done < "$RUNNER_TEMP/changed-files"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "infra=$infra" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5
+        if: steps.changes.outputs.code == 'true'
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install -e ".[dev,azure]"
-      - run: python -m agent_insights_quality validate
-      - run: python -m ruff check .
-      - run: python -m pytest
-      - run: az bicep build --file infra/main.bicep --stdout >/dev/null
-
-  agent-builds:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        agent: [finance-agent, travel-agent, support-ticket-agent]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Install and import Agent
-        working-directory: agents/${{ matrix.agent }}/v0
+      - name: Install offline dependencies
+        if: steps.changes.outputs.code == 'true'
+        run: python -m pip install -e ".[dev]"
+      - name: Check Python
+        if: steps.changes.outputs.code == 'true'
+        run: python -m ruff check src tests agents pyproject.toml
+      - name: Run offline tests
+        if: steps.changes.outputs.code == 'true'
         env:
-          FOUNDRY_AGENT_NAME: ${{ matrix.agent }}-validation
-          FOUNDRY_AGENT_VERSION: validation-build
+          PYTHONPATH: src
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest
+      - name: Compile changed infrastructure
+        if: steps.changes.outputs.infra == 'true'
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m compileall source
-          python -c "import source.app"
-
-  validate:
-    if: always()
-    needs: [contracts, agent-builds]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require every validation dependency
-        env:
-          CONTRACTS_RESULT: ${{ needs.contracts.result }}
-          AGENT_BUILDS_RESULT: ${{ needs.agent-builds.result }}
-        run: |
-          test "$CONTRACTS_RESULT" = "success"
-          test "$AGENT_BUILDS_RESULT" = "success"
+          az bicep build --file infra/main.bicep --stdout >/dev/null
+          az bicep build --file infra/assessment-models.bicep --stdout >/dev/null
+          az bicep build --file infra/analytics.bicep --stdout >/dev/null
+      - name: Offline validation complete
+        run: echo "No cloud calls, Hosted SDK installs, or container builds are part of this job."

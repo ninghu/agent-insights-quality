@@ -14,10 +14,10 @@ configuration, never credentials, private identifiers or raw runtime payloads.
 5. Compile Bicep for infrastructure changes. Live qualification is a separate, explicitly scoped
    operation against the intended environment, not part of ordinary CI.
 
-The runner rewrite is incomplete on this branch. New runtime commands must be documented only
-when they work; do not substitute removed legacy flows or merge a half-working transition.
+The replacement runner still needs its deployed acceptance campaign before scheduled use.
+Do not substitute removed legacy flows or enable an unproven candidate.
 Normal source review remains required, but staging-to-Daily promotion and digest approval
-ceremonies are not part of the new design.
+ceremonies are not part of the design.
 
 ## Tests and artifacts
 
