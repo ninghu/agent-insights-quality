@@ -59,6 +59,14 @@ def _inside(root: Path, path: Path) -> Path:
     """Reject symlink/junction escapes as well as lexical path traversal."""
     try:
         resolved = path.resolve()
+        if (
+            os.name == "nt" and resolved.drive.startswith("\\\\?\\")
+            and not path.drive.startswith("\\\\?\\")
+        ):
+            # Windows realpath can retain this prefix when a missing parent is
+            # created between its probes. Re-resolve once, never strip/trust it:
+            # the same exact-path and containment checks must still succeed.
+            resolved = path.resolve()
     except (OSError, RuntimeError) as error:
         raise StateError("state_path_invalid") from error
     if path.absolute() != resolved or not path.is_relative_to(root):

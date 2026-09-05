@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -288,10 +289,15 @@ with RuntimeStore("daily", root=Path(sys.argv[1])).ownership() as runtime:
         assert runtime.run("synthetic-r1").read_completed("stage") == {"done": True}
 
 
-def test_concurrent_completion_is_serialized(runtime):
+@pytest.mark.parametrize("iteration", range(16))
+def test_concurrent_completion_is_serialized(runtime, iteration):
+    start = threading.Barrier(4)
+    run_id = f"synthetic-r{iteration}"
+
     def save(value):
+        start.wait(timeout=5)
         try:
-            runtime.run("synthetic-r1").save_completed("stage", {"winner": value})
+            runtime.run(run_id).save_completed("stage", {"winner": value})
             return "saved"
         except StateConflict:
             return "conflict"
@@ -300,7 +306,91 @@ def test_concurrent_completion_is_serialized(runtime):
         outcomes = list(pool.map(save, range(4)))
     assert outcomes.count("saved") == 1
     assert outcomes.count("conflict") == 3
-    assert isinstance(runtime.run("synthetic-r1").read("stage")["winner"], int)
+    assert isinstance(runtime.run(run_id).read("stage")["winner"], int)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows realpath missing-ancestor interleaving")
+@pytest.mark.parametrize("redirect", [False, True], ids=["directory", "junction"])
+def test_directory_creation_during_windows_path_validation(runtime, monkeypatch, redirect):
+    import _winapi
+    import ntpath
+
+    directory = runtime.directory / "runs" / "synthetic-r1"
+    outside = runtime.root / "outside"
+    outside.mkdir()
+    missing_parent = threading.Event()
+    parent_created = threading.Event()
+    getfinalpathname = ntpath._getfinalpathname
+    winerrors = []
+
+    def resolve(path):
+        try:
+            return getfinalpathname(path)
+        except OSError as error:
+            if path == str(directory):
+                winerrors.append(error.winerror)
+                if len(winerrors) == 1:
+                    assert error.winerror == 3  # ERROR_PATH_NOT_FOUND
+                    missing_parent.set()
+                    assert parent_created.wait(timeout=5)
+            raise
+
+    def create_parent():
+        try:
+            assert missing_parent.wait(timeout=5)
+            if redirect:
+                _winapi.CreateJunction(str(outside), str(directory.parent))
+            else:
+                state._mkdir(directory.parent)
+        finally:
+            parent_created.set()
+
+    monkeypatch.setattr(ntpath, "_getfinalpathname", resolve)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        created = pool.submit(create_parent)
+        try:
+            if redirect:
+                with pytest.raises(StateError, match="^state_path_invalid$"):
+                    runtime.run("synthetic-r1")
+            else:
+                run = runtime.run("synthetic-r1")
+        finally:
+            missing_parent.set()
+        created.result(timeout=5)
+    assert winerrors[0] == 3
+    assert 2 in winerrors[1:]  # ERROR_FILE_NOT_FOUND, now only the leaf is missing.
+    assert not list(outside.iterdir())
+    if redirect:
+        return
+    assert run.directory == directory
+    assert not directory.exists()
+    run.save_completed("stage", {"done": True})
+    assert run.read_completed("stage") == {"done": True}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended path prefix")
+def test_persistent_windows_prefix_mismatch_is_rejected(runtime, monkeypatch):
+    directory = runtime.directory / "runs" / "synthetic-r1"
+    prefixed = Path("\\\\?\\" + str(directory))
+    calls = []
+
+    def resolve(path):
+        calls.append(path)
+        return prefixed
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with pytest.raises(StateError, match="^state_path_invalid$"):
+        runtime.run("synthetic-r1")
+    assert calls == [directory, directory]
+    assert not directory.exists()
+
+
+def test_resolved_path_escape_is_rejected_even_inside_root(runtime, monkeypatch):
+    directory = runtime.directory / "runs" / "synthetic-r1"
+    monkeypatch.setattr(Path, "resolve", lambda path: runtime.directory / "different")
+    with pytest.raises(StateError, match="^state_path_invalid$"):
+        runtime.run("synthetic-r1")
+    assert not directory.exists()
 
 
 def test_status_reader_does_not_block_atomic_progress_replacement(runtime, monkeypatch):
