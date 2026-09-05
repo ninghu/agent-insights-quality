@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-1 without repeating a no-progress state."
+                  "text": "Wait for ticket-demo-1 while waiting on an unavailable worker."
                 }
               ]
             }
@@ -50,7 +50,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-2 without repeating a no-progress state."
+                  "text": "Wait for ticket-demo-2 while waiting on an unavailable worker."
                 }
               ]
             }
@@ -82,7 +82,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-1 without repeating a no-progress state."
+                  "text": "Wait for ticket-demo-1 while waiting on an unavailable worker."
                 }
               ]
             }
@@ -114,7 +114,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-2 without repeating a no-progress state."
+                  "text": "Wait for ticket-demo-2 while waiting on an unavailable worker."
                 }
               ]
             }
@@ -146,7 +146,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-1 without repeating a no-progress state."
+                  "text": "Wait for ticket-demo-1 while waiting on an unavailable worker."
                 }
               ]
             }
@@ -239,7 +239,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. Read ticket-demo-1 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 01. Wait for ticket-demo-1 while waiting on an unavailable worker."
                           }
                         ]
                       }
@@ -327,7 +327,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Read ticket-demo-2 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 02. Wait for ticket-demo-2 while waiting on an unavailable worker."
                           }
                         ]
                       }
@@ -415,7 +415,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. Read ticket-demo-1 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 03. Wait for ticket-demo-1 while waiting on an unavailable worker."
                           }
                         ]
                       }
@@ -503,7 +503,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Read ticket-demo-2 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 04. Wait for ticket-demo-2 while waiting on an unavailable worker."
                           }
                         ]
                       }
@@ -591,7 +591,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Read ticket-demo-1 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 05. Wait for ticket-demo-1 while waiting on an unavailable worker."
                           }
                         ]
                       }
@@ -679,7 +679,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Read ticket-demo-1 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 06. Wait for ticket-demo-1 while waiting on an unavailable worker."
                           }
                         ]
                       }
@@ -767,7 +767,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Read ticket-demo-2 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 07. Wait for ticket-demo-2 while waiting on an unavailable worker."
                           }
                         ]
                       }
@@ -855,7 +855,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Read ticket-demo-1 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 08. Wait for ticket-demo-1 while waiting on an unavailable worker."
                           }
                         ]
                       }
@@ -943,7 +943,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Read ticket-demo-2 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 09. Wait for ticket-demo-2 while waiting on an unavailable worker."
                           }
                         ]
                       }
@@ -1031,7 +1031,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Read ticket-demo-1 without repeating a no-progress state."
+                            "text": "Fixed synthetic case 10. Wait for ticket-demo-1 while waiting on an unavailable worker."
                           }
                         ]
                       }

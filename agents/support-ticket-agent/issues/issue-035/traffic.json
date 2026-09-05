@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Update ticket-demo-1 after confirmation."
+                  "text": "Confirm update for ticket-demo-1 at revision 3."
                 }
               ]
             }
@@ -50,7 +50,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Update ticket-demo-2 after confirmation."
+                  "text": "Confirm update for ticket-demo-2 at revision 1."
                 }
               ]
             }
@@ -82,7 +82,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Update ticket-demo-1 after confirmation."
+                  "text": "Confirm update for ticket-demo-1 at revision 3."
                 }
               ]
             }
@@ -114,7 +114,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Update ticket-demo-2 after confirmation."
+                  "text": "Confirm update for ticket-demo-2 at revision 1."
                 }
               ]
             }
@@ -146,7 +146,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Update ticket-demo-1 after confirmation."
+                  "text": "Confirm update for ticket-demo-1 at revision 3."
                 }
               ]
             }
@@ -239,7 +239,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. Update ticket-demo-1 after confirmation."
+                            "text": "Fixed synthetic case 01. Confirm update for ticket-demo-1 at revision 3."
                           }
                         ]
                       }
@@ -327,7 +327,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Update ticket-demo-2 after confirmation."
+                            "text": "Fixed synthetic case 02. Confirm update for ticket-demo-2 at revision 1."
                           }
                         ]
                       }
@@ -415,7 +415,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. Update ticket-demo-1 after confirmation."
+                            "text": "Fixed synthetic case 03. Confirm update for ticket-demo-1 at revision 3."
                           }
                         ]
                       }
@@ -503,7 +503,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Update ticket-demo-2 after confirmation."
+                            "text": "Fixed synthetic case 04. Confirm update for ticket-demo-2 at revision 1."
                           }
                         ]
                       }
@@ -591,7 +591,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Update ticket-demo-1 after confirmation."
+                            "text": "Fixed synthetic case 05. Confirm update for ticket-demo-1 at revision 3."
                           }
                         ]
                       }
@@ -679,7 +679,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Update ticket-demo-1 after confirmation."
+                            "text": "Fixed synthetic case 06. Confirm update for ticket-demo-1 at revision 3."
                           }
                         ]
                       }
@@ -767,7 +767,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Update ticket-demo-2 after confirmation."
+                            "text": "Fixed synthetic case 07. Confirm update for ticket-demo-2 at revision 1."
                           }
                         ]
                       }
@@ -855,7 +855,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Update ticket-demo-1 after confirmation."
+                            "text": "Fixed synthetic case 08. Confirm update for ticket-demo-1 at revision 3."
                           }
                         ]
                       }
@@ -943,7 +943,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Update ticket-demo-2 after confirmation."
+                            "text": "Fixed synthetic case 09. Confirm update for ticket-demo-2 at revision 1."
                           }
                         ]
                       }
@@ -1031,7 +1031,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Update ticket-demo-1 after confirmation."
+                            "text": "Fixed synthetic case 10. Confirm update for ticket-demo-1 at revision 3."
                           }
                         ]
                       }

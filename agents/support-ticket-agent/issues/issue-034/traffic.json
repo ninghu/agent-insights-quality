@@ -18,7 +18,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-1 and summarize it."
+                  "text": "Read ticket-demo-1 after one deterministic synthetic model failure."
                 }
               ]
             }
@@ -56,7 +56,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-2 and summarize it."
+                  "text": "Read ticket-demo-2 after one deterministic synthetic model failure."
                 }
               ]
             }
@@ -94,7 +94,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-1 and summarize it."
+                  "text": "Read ticket-demo-1 after one deterministic synthetic model failure."
                 }
               ]
             }
@@ -132,7 +132,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-2 and summarize it."
+                  "text": "Read ticket-demo-2 after one deterministic synthetic model failure."
                 }
               ]
             }
@@ -170,7 +170,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Read ticket-demo-1 and summarize it."
+                  "text": "Read ticket-demo-1 after one deterministic synthetic model failure."
                 }
               ]
             }
@@ -269,7 +269,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 01. Read ticket-demo-1 and summarize it."
+                            "text": "Fixed synthetic case 01. Read ticket-demo-1 after one deterministic synthetic model failure."
                           }
                         ]
                       }
@@ -360,7 +360,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 02. Read ticket-demo-2 and summarize it."
+                            "text": "Fixed synthetic case 02. Read ticket-demo-2 after one deterministic synthetic model failure."
                           }
                         ]
                       }
@@ -451,7 +451,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 03. Read ticket-demo-1 and summarize it."
+                            "text": "Fixed synthetic case 03. Read ticket-demo-1 after one deterministic synthetic model failure."
                           }
                         ]
                       }
@@ -542,7 +542,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 04. Read ticket-demo-2 and summarize it."
+                            "text": "Fixed synthetic case 04. Read ticket-demo-2 after one deterministic synthetic model failure."
                           }
                         ]
                       }
@@ -633,7 +633,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 05. Read ticket-demo-1 and summarize it."
+                            "text": "Fixed synthetic case 05. Read ticket-demo-1 after one deterministic synthetic model failure."
                           }
                         ]
                       }
@@ -724,7 +724,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 06. Read ticket-demo-1 and summarize it."
+                            "text": "Fixed synthetic case 06. Read ticket-demo-1 after one deterministic synthetic model failure."
                           }
                         ]
                       }
@@ -815,7 +815,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 07. Read ticket-demo-2 and summarize it."
+                            "text": "Fixed synthetic case 07. Read ticket-demo-2 after one deterministic synthetic model failure."
                           }
                         ]
                       }
@@ -906,7 +906,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 08. Read ticket-demo-1 and summarize it."
+                            "text": "Fixed synthetic case 08. Read ticket-demo-1 after one deterministic synthetic model failure."
                           }
                         ]
                       }
@@ -997,7 +997,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 09. Read ticket-demo-2 and summarize it."
+                            "text": "Fixed synthetic case 09. Read ticket-demo-2 after one deterministic synthetic model failure."
                           }
                         ]
                       }
@@ -1088,7 +1088,7 @@
                         "content": [
                           {
                             "type": "input_text",
-                            "text": "Fixed synthetic case 10. Read ticket-demo-1 and summarize it."
+                            "text": "Fixed synthetic case 10. Read ticket-demo-1 after one deterministic synthetic model failure."
                           }
                         ]
                       }
