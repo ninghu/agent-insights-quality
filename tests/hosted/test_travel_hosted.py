@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from azure.ai.agentserver.responses.store._memory import InMemoryResponseProvider
+from langchain_azure_ai.agents.hosting import ResponsesHostServer
 from langchain_core.messages import HumanMessage
 from openai import AsyncOpenAI
 from opentelemetry import trace
@@ -53,6 +54,7 @@ def runtime(request, monkeypatch, telemetry):
     version = getattr(request, "param", "v0")
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
+    monkeypatch.delenv("FOUNDRY_AGENT_SESSION_ID", raising=False)
     for signal in ("TRACES", "METRICS", "LOGS"):
         monkeypatch.setenv(f"OTEL_{signal}_EXPORTER", "none")
         monkeypatch.delenv(f"OTEL_EXPORTER_OTLP_{signal}_ENDPOINT", raising=False)
@@ -719,5 +721,379 @@ def test_actual_host_structured_booking_and_failure_status(runtime, fail_model):
                     in refusal.json()["output"][0]["content"][0]["text"]
                 )
                 assert len(runtime.ledger.records) == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("runtime", ["v0", "issue-028"], indirect=True)
+@pytest.mark.parametrize("session_source", ["payload", "platform_environment"])
+def test_native_session_restores_checkpoint_with_unstored_responses(
+    runtime, monkeypatch, session_source
+):
+    """Match staging's native session affinity, not the local conversation shortcut."""
+    traffic = json.loads(
+        (version_path("issue-028") / "traffic.json").read_text(encoding="utf-8")
+    )
+    requests = {item["id"]: item for item in traffic["requests"]}
+    stale = runtime.app.__name__.endswith("issue_028.app")
+
+    async def run():
+        # Each platform session normally has its own container. Exercise payload
+        # affinity in a shared host as well, to catch accidental cross-session reuse.
+        for attempt in traffic["attempts"]:
+            session = f"synthetic-native-{attempt['index']}"
+            if session_source == "platform_environment":
+                monkeypatch.setenv("FOUNDRY_AGENT_SESSION_ID", session)
+            host = runtime.app.TravelResponsesHostServer(
+                runtime.graph,
+                identity=runtime.app.RUNTIME_IDENTITY,
+                store=InMemoryResponseProvider(),
+            )
+            seed = requests[attempt["setup_steps"][0]]["request"]["body"]
+            probe = requests[attempt["probe_steps"][0]]["request"]["body"]
+            old_trip = runtime.app.requested_trips(
+                seed["input"][0]["content"][0]["text"]
+            )[0]
+            new_trip = runtime.app.requested_trips(
+                probe["input"][0]["content"][0]["text"]
+            )[0]
+            assert old_trip not in probe["input"][0]["content"][0]["text"]
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=host._app),
+                base_url="http://synthetic.test",
+            ) as client:
+                response_ids = []
+                for body, expected_trip in (
+                    (seed, old_trip),
+                    (probe, old_trip if stale else new_trip),
+                    ({"input": "Search again."}, old_trip if stale else new_trip),
+                ):
+                    runtime.exporter.clear()
+                    wire = {**body, "store": False}
+                    if session_source == "payload":
+                        wire["agent_session_id"] = session
+                    assert "conversation" not in wire
+                    assert "previous_response_id" not in wire
+                    response = await client.post("/responses", json=wire)
+                    assert response.status_code == 200, response.text
+                    result = response.json()
+                    assert result["status"] == "completed"
+                    response_ids.append(result["id"])
+                    text = result["output"][0]["content"][0]["text"]
+                    assert expected_trip in text
+                    calls = [
+                        span
+                        for span in tools(runtime)
+                        if span.attributes["gen_ai.tool.name"]
+                        in {"search_flights", "search_hotels"}
+                    ]
+                    assert calls
+                    assert all(
+                        json.loads(span.attributes["gen_ai.tool.call.arguments"])[
+                            "trip"
+                        ]
+                        == expected_trip
+                        for span in calls
+                    )
+                assert len(set(response_ids)) == 3
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("runtime", ["v0", "issue-028"], indirect=True)
+def test_native_session_and_user_partitions_do_not_share_itineraries(
+    runtime, monkeypatch
+):
+    # Payload session affinity takes precedence over the container's fallback.
+    monkeypatch.setenv("FOUNDRY_AGENT_SESSION_ID", "synthetic-container-default")
+
+    async def run():
+        host = runtime.app.TravelResponsesHostServer(
+            runtime.graph,
+            identity=runtime.app.RUNTIME_IDENTITY,
+            store=InMemoryResponseProvider(),
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=host._app),
+            base_url="http://synthetic.test",
+        ) as client:
+
+            async def invoke(session, user, text, expected):
+                response = await client.post(
+                    "/responses",
+                    json={"input": text, "agent_session_id": session, "store": False},
+                    headers={
+                        "x-agent-user-id": user,
+                        "x-agent-foundry-call-id": f"synthetic-call-{len(runtime.calls)}",
+                    },
+                )
+                assert response.status_code == 200
+                result = response.json()
+                assert result["status"] == "completed"
+                assert expected in result["output"][0]["content"][0]["text"]
+
+            await invoke(
+                "session-a", "user-a", "Find a hotel for trip-gamma.", "trip-gamma"
+            )
+            await invoke(
+                "session-b", "user-a", "Find a hotel for trip-beta.", "trip-beta"
+            )
+            await invoke(
+                "session-a", "user-b", "Find a hotel for trip-alpha.", "trip-alpha"
+            )
+            await invoke("session-a", "user-a", "Search again.", "trip-gamma")
+            await invoke("session-b", "user-a", "Search again.", "trip-beta")
+            await invoke("session-a", "user-b", "Search again.", "trip-alpha")
+            await invoke(
+                "session-c",
+                "user-a",
+                "Switch to trip-beta and find a flight.",
+                "trip-beta",
+            )
+            switched = (
+                "trip-gamma"
+                if runtime.app.__name__.endswith("issue_028.app")
+                else "trip-beta"
+            )
+            await invoke(
+                "session-a",
+                "user-a",
+                "Switch to trip-beta and find a flight.",
+                switched,
+            )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("continuation", ["conversation", "previous_response"])
+def test_explicit_responses_continuation_keeps_sdk_thread_semantics(
+    runtime, continuation
+):
+    async def run():
+        host = runtime.app.TravelResponsesHostServer(
+            runtime.graph,
+            identity=runtime.app.RUNTIME_IDENTITY,
+            store=InMemoryResponseProvider(),
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=host._app),
+            base_url="http://synthetic.test",
+        ) as client:
+            first_body = {
+                "input": "Find a hotel for trip-gamma.",
+                "store": True,
+            }
+            if continuation == "conversation":
+                first_body["conversation"] = {"id": "synthetic-conversation"}
+                first_body["agent_session_id"] = "synthetic-affinity"
+            first = await client.post("/responses", json=first_body)
+            assert first.status_code == 200
+            assert first.json()["status"] == "completed"
+            second_body = {
+                "input": "Search again.",
+                "store": True,
+            }
+            if continuation == "conversation":
+                second_body["conversation"] = first_body["conversation"]
+                second_body["agent_session_id"] = "synthetic-affinity"
+            else:
+                second_body["previous_response_id"] = first.json()["id"]
+            second = await client.post("/responses", json=second_body)
+            assert second.status_code == 200
+            assert second.json()["status"] == "completed"
+            assert "trip-gamma" in second.json()["output"][0]["content"][0]["text"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("runtime", VERSIONS, indirect=True)
+def test_reviewed_travel_attempts_use_native_session_wire(runtime):
+    version = (
+        runtime.app.__name__.split(".")[0]
+        .removeprefix("travel_local_")
+        .replace("_", "-")
+    )
+    traffic = json.loads(
+        (version_path(version) / "traffic.json").read_text(encoding="utf-8")
+    )
+    requests = {item["id"]: item for item in traffic["requests"]}
+
+    async def run():
+        host = runtime.app.TravelResponsesHostServer(
+            runtime.graph,
+            identity=runtime.app.RUNTIME_IDENTITY,
+            store=InMemoryResponseProvider(),
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=host._app),
+            base_url="http://synthetic.test",
+        ) as client:
+            for attempt in traffic["attempts"]:
+                for step_id in attempt["setup_steps"] + attempt["probe_steps"]:
+                    step = requests[step_id]
+                    runtime.exporter.clear()
+                    response = await client.post(
+                        "/responses",
+                        json={
+                            **step["request"]["body"],
+                            "agent_session_id": f"synthetic-reviewed-{attempt['index']}",
+                            "store": False,
+                        },
+                    )
+                    assert response.status_code == step["expected"]["http_status"]
+                    result = response.json()
+                    assert result["status"] == "completed"
+                    text = result["output"][0]["content"][0]["text"]
+                    semantic = step["expected"].get("semantic_assertions", {})
+                    assert all(
+                        term in text for term in semantic.get("required_terms_all", [])
+                    )
+                    assert all(
+                        term not in text for term in semantic.get("forbidden_terms", [])
+                    )
+                    if "max_characters" in semantic:
+                        assert len(text) <= semantic["max_characters"]
+
+                    spans = runtime.exporter.get_finished_spans()
+                    by_id = {span.context.span_id: span for span in spans}
+                    root = next(span for span in spans if span.name == "travel.invoke")
+                    assert root.attributes["gen_ai.response.id"] == result["id"]
+                    business = [
+                        span
+                        for span in spans
+                        if span.name.startswith(("travel.tool.", "travel.model."))
+                    ]
+                    for span in business:
+                        assert span.context.trace_id == root.context.trace_id
+                        ancestor = span
+                        while ancestor.context.span_id != root.context.span_id:
+                            assert ancestor.parent is not None
+                            ancestor = by_id[ancestor.parent.span_id]
+                    assert_reviewed_tool_facts(runtime, step, business)
+
+    asyncio.run(run())
+
+
+def assert_reviewed_tool_facts(runtime, step, spans):
+    """Check the finite synthetic wire facts, not a deployed qualification verdict."""
+    for assertion in step["expected"].get("trace_assertions", []):
+        kind = assertion["kind"]
+        selected = [
+            span
+            for span in spans
+            if span.attributes.get("gen_ai.tool.name") == assertion.get("tool_name")
+        ]
+        if kind == "tool_call_count":
+            assert len(selected) == assertion["count"]
+        elif kind == "tool_result_class":
+            assert selected
+            expected = assertion["result_class"] == "success"
+            assert all(span.attributes["tool.ok"] is expected for span in selected)
+        elif kind == "operation_sequence":
+            assert [span.attributes["gen_ai.operation.name"] for span in spans] == (
+                assertion["operations"]
+            )
+        elif kind == "payload_multiplicity":
+            if assertion["source"] == "tool_result":
+                assert selected
+                for span in selected:
+                    payload = json.loads(span.attributes["gen_ai.tool.call.result"])
+                    assert payload[assertion["path"]] >= assertion["minimum"]
+            else:
+                assert assertion["source"] == "input_messages"
+                prompt = runtime.calls[-1]["input"]
+                payload = json.loads(prompt.split("Inventory search payload: ", 1)[1])
+                assert len(payload[assertion["path"]]) >= assertion["minimum"]
+        elif kind == "scope_relation":
+            body = step["request"]["body"]
+            trips = runtime.app.requested_trips(body["input"][0]["content"][0]["text"])
+            assert selected
+            for span in selected:
+                arguments = json.loads(span.attributes["gen_ai.tool.call.arguments"])
+                assert (arguments[assertion["argument"]] == trips[-1]) is (
+                    assertion["request_tool_equal"]
+                )
+        elif kind == "span_relation":
+            assert assertion["relation"] == "ordered"
+            first = next(
+                span
+                for span in spans
+                if span.attributes.get("gen_ai.tool.name") == assertion["first_tool"]
+            )
+            second = next(
+                span
+                for span in spans
+                if span.attributes.get("gen_ai.tool.name") == assertion["second_tool"]
+            )
+            assert first.end_time <= second.start_time
+        else:
+            raise AssertionError(f"Uncovered Travel trace assertion: {kind}")
+
+
+@pytest.mark.parametrize("runtime", ["v0", "issue-028"], indirect=True)
+@pytest.mark.parametrize("adapter", ["sdk", "travel"])
+def test_native_stored_turn_can_continue_an_explicit_response_chain(runtime, adapter):
+    async def run():
+        store = InMemoryResponseProvider()
+        host = (
+            ResponsesHostServer(runtime.graph, store=store)
+            if adapter == "sdk"
+            else runtime.app.TravelResponsesHostServer(
+                runtime.graph, identity=runtime.app.RUNTIME_IDENTITY, store=store
+            )
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=host._app),
+            base_url="http://synthetic.test",
+        ) as client:
+            previous = None
+            for text, expected in (
+                ("Find a hotel for trip-gamma.", "trip-gamma"),
+                ("Search again.", "trip-gamma"),
+                (
+                    "Switch to trip-beta and find a hotel.",
+                    "trip-gamma"
+                    if runtime.app.__name__.endswith("issue_028.app")
+                    else "trip-beta",
+                ),
+                (
+                    "Search again.",
+                    "trip-gamma"
+                    if runtime.app.__name__.endswith("issue_028.app")
+                    else "trip-beta",
+                ),
+            ):
+                body = {
+                    "input": text,
+                    "store": True,
+                    "agent_session_id": "synthetic-mixed",
+                }
+                if previous is not None:
+                    body["previous_response_id"] = previous
+                response = await client.post(
+                    "/responses",
+                    json=body,
+                    headers={"x-agent-user-id": "synthetic-user-a"},
+                )
+                assert response.status_code == 200
+                result = response.json()
+                assert result["status"] == "completed"
+                assert expected in result["output"][0]["content"][0]["text"]
+                previous = result["id"]
+            if adapter == "travel":
+                # The local SDK store is not user-partitioned. Our native alias
+                # must still refuse to share the original user's checkpoint.
+                other = await client.post(
+                    "/responses",
+                    json={
+                        "input": "Search again.",
+                        "store": True,
+                        "previous_response_id": previous,
+                    },
+                    headers={"x-agent-user-id": "synthetic-user-b"},
+                )
+                assert other.status_code == 200
+                assert other.json()["status"] == "completed"
+                assert "trip-alpha" in other.json()["output"][0]["content"][0]["text"]
 
     asyncio.run(run())
