@@ -28,9 +28,15 @@ Repeat the same command to resume matching work. Do not manually invent generati
 state, delete Agent objects or resend completed traffic. A code/scenario change selects affected
 work; unchanged completed results retain their original provenance.
 
+Staging resumes the same source and selection mode across midnight, retaining its original run
+date and completed calls. Repeating a completed full run is a no-op. Only an explicitly requested
+fresh full exercise uses `run-staging --full --new-run`; it cannot replace an unfinished full run.
+
 Preserve pending deployment/session/Insights records after an interrupted request. Unknown accepted
 POSTs are not safe to repeat. Native Insights submission keys and their exact request bodies are
-reused when supported. A new email delivery test uses an explicit nonzero rerun identity; an
+reused when supported. A definitively rejected submission gets a fresh key and recomputed lookback;
+uncertain window coverage is excluded from Engine scoring, not counted as a missed issue.
+A new email delivery test uses an explicit nonzero rerun identity; an
 ambiguous previous send is reconciled, never sent again blindly.
 
 Local `runner.log` and `events.jsonl` preserve starts, heartbeats, retries and outcomes across

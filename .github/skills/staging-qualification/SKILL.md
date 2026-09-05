@@ -27,3 +27,7 @@ Repeat the command to resume. Preserve private checkpoints/logs/evidence and unk
 provider outcomes; never delete resources or invent run/generation IDs. Staging creates
 no monitors, Agent Insights runs, Daily score, team report or promotion approval.
 Report unresolved access/provider blockers while leaving unrelated completed work intact.
+
+Same-source recovery retains the original run and date even across midnight. A completed full
+run is not repeated automatically. Use `--full --new-run` only for an explicitly requested fresh
+full exercise after the previous full run completed, never to discard interrupted work.
