@@ -12,6 +12,7 @@ from agent_insights_quality.providers.artifacts import (
     prepare_artifact,
 )
 from agent_insights_quality.providers.callbacks import safe_persist
+from agent_insights_quality.providers.container_environment import container_environment
 from agent_insights_quality.providers.transport import HttpResponse, JsonClient, check_status, segment
 
 
@@ -146,7 +147,11 @@ class DeploymentClient:
             self.environment,
             source_revision,
             images=self.images,
-            hosted_environment=self.hosted_environment,
+            hosted_environment=(
+                container_environment(self.hosted_environment)
+                if target.agent_type == "hosted_custom_container"
+                else self.hosted_environment
+            ),
         )
         route = "/agents" if create_agent else path + "/versions"
         pending = Deployment(

@@ -87,7 +87,8 @@ def deployment_inputs(target: Target) -> tuple[Path, ...]:
     )
     if target.agent_type == "hosted_custom_container":
         return (
-            *hosted, providers / "acr.py", target.baseline_root / "Dockerfile",
+            *hosted, providers / "acr.py", providers / "container_environment.py",
+            target.baseline_root / "Dockerfile",
         )
     return (*hosted, target.baseline_root / "host.yaml")
 
