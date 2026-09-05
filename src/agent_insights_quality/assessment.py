@@ -1,0 +1,686 @@
+"""Raw-evidence assessment through an injected Sol port; never invokes Agents.
+
+Invocation keys are ``(attempt.index, step.step_id)``. Endpoint citation refs are
+``endpoint-01-01`` (attempt and one-based turn); trace refs are Snapshot row refs.
+All ten complete conversation groups, including missing execution, go in one
+request. Oversized groups/requests are explicitly incomplete, never truncated.
+The caller persists the returned private detail before completing its checkpoint.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from importlib.resources import files
+import json
+from typing import Any, Literal
+
+from jsonschema import Draft202012Validator
+
+from .contracts import Attempt, Invocation, SolPort, Target
+from .errors import QualityError
+from .privacy import SUMMARIES
+from .results import (
+    CardVerdict,
+    Contribution,
+    CoreVerdict,
+    DiagnosticVerdict,
+    ExclusionReason,
+    UnitResult,
+)
+from .telemetry import Snapshot
+
+
+class AssessmentError(QualityError):
+    """Invalid evidence/model output, not a behavioral PASS or FAIL."""
+
+    def __init__(self, code: str, *, private_detail: dict[str, Any] | None = None) -> None:
+        super().__init__(code)
+        self.private_detail = private_detail
+
+
+def _object(properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object", "properties": properties,
+        "required": list(properties), "additionalProperties": False,
+    }
+
+
+_CITATION = _object({
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+    "step_id": {"type": "string", "minLength": 1},
+    "refs": {
+        "type": "array", "items": {"type": "string", "minLength": 1},
+        "minItems": 1, "uniqueItems": True,
+    },
+})
+_CITATIONS = {"type": "array", "items": _CITATION}
+_ATTEMPT = {
+    "index": {"type": "integer", "minimum": 1, "maximum": 10},
+    "sufficient": {"type": "boolean"},
+    "observed": {"type": "boolean"},
+    "citations": _CITATIONS,
+    "reason": {"type": "string", "minLength": 1},
+}
+STAGING_SCHEMA = _object({
+    "attempts": {
+        "type": "array", "minItems": 10, "maxItems": 10,
+        "items": _object({**_ATTEMPT, "contract_violation": {"type": "boolean"}}),
+    },
+})
+DAILY_SCHEMA = _object({
+    "attempts": {
+        "type": "array", "minItems": 10, "maxItems": 10,
+        "items": _object(_ATTEMPT),
+    },
+    "cards": {
+        "type": "array",
+        "items": _object({
+            "card_alias": {"type": "string"},
+            "core": {"enum": [value.value for value in CoreVerdict]},
+            "root_group": {"type": ["string", "null"], "minLength": 1},
+            "expected_match": {"type": "boolean"},
+            "citations": _CITATIONS,
+            "severity": {"enum": [value.value for value in DiagnosticVerdict]},
+            "proposed_fix": {"enum": [value.value for value in DiagnosticVerdict]},
+            "reason": {"type": "string", "minLength": 1},
+        }),
+    },
+    "limitations": {
+        "type": "array", "uniqueItems": True,
+        "items": {"enum": ["incomplete_execution", "incomplete_evidence"]},
+    },
+})
+
+
+@dataclass(frozen=True)
+class StageResult:
+    status: Literal["PASS", "FAIL", "INCOMPLETE"]
+    passing_attempts: int
+    judgments: tuple[dict[str, Any], ...]
+    reasons: tuple[str, ...]
+    private_detail: dict[str, Any]
+
+    def to_private_dict(self) -> dict[str, Any]:
+        return deepcopy(asdict(self))
+
+
+@dataclass(frozen=True)
+class DailyAssessment:
+    unit_result: UnitResult
+    reasons: tuple[str, ...]
+    private_detail: dict[str, Any]
+
+    def to_private_dict(self) -> dict[str, Any]:
+        return {
+            "unit_result": {
+                "unit_id": self.unit_result.unit_id.to_dict(),
+                "cards": [
+                    {
+                        "card_alias": card.card_alias, "core": card.core.value,
+                        "root_cause_alias": card.root_cause_alias,
+                        "contribution": card.contribution.value,
+                        "severity": card.severity.value,
+                        "proposed_fix": card.proposed_fix.value,
+                        "summary": card.summary,
+                    }
+                    for card in self.unit_result.cards
+                ],
+                "exclusion_reasons": [
+                    reason.value for reason in self.unit_result.exclusion_reasons
+                ],
+                "summary": self.unit_result.summary,
+            },
+            "reasons": list(self.reasons),
+            "private_detail": deepcopy(self.private_detail),
+        }
+
+
+def _timestamp(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("Timezone required")
+        return parsed
+    except (AttributeError, TypeError, ValueError) as error:
+        raise AssessmentError("assessment_timestamp_invalid") from error
+
+
+def _json_copy(value: Any) -> Any:
+    try:
+        def keys(item: Any) -> None:
+            if isinstance(item, Mapping):
+                if any(not isinstance(key, str) for key in item):
+                    raise ValueError("JSON object keys must be strings")
+                for child in item.values():
+                    keys(child)
+            elif isinstance(item, (list, tuple)):
+                for child in item:
+                    keys(child)
+        keys(value)
+        return json.loads(json.dumps(value, ensure_ascii=True, allow_nan=False))
+    except (TypeError, ValueError, OverflowError, RecursionError) as error:
+        raise AssessmentError("assessment_input_invalid") from error
+
+
+@dataclass(frozen=True)
+class _Evidence:
+    payload: dict[str, Any]
+    allowed: dict[tuple[int, str], frozenset[str]]
+    endpoints: dict[tuple[int, str], str]
+    probes: frozenset[tuple[int, str]]
+    executed: frozenset[int]
+    ready: frozenset[int]
+    complete: frozenset[int]
+
+    def citations(
+        self, citations: list[dict], *, attempt: int | None = None,
+        proof: bool = False,
+    ) -> None:
+        probe_proof = False
+        for citation in citations:
+            index = citation["attempt"]
+            key = (index, citation["step_id"])
+            refs = set(citation["refs"])
+            if (
+                type(index) is not int or key not in self.allowed
+                or attempt is not None and index != attempt
+                or not refs <= self.allowed[key]
+            ):
+                raise AssessmentError("assessment_citation_invalid")
+            endpoint = self.endpoints.get(key)
+            if key in self.probes and endpoint in refs and refs - {endpoint}:
+                probe_proof = True
+        if proof and not probe_proof:
+            raise AssessmentError("assessment_proof_missing")
+
+
+def _evidence(
+    target: Target, attempts: tuple[Attempt, ...],
+    invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot,
+) -> _Evidence:
+    if (
+        not isinstance(attempts, tuple)
+        or [attempt.index for attempt in attempts] != list(range(1, 11))
+        or any(type(attempt.index) is not int for attempt in attempts)
+        or target.validation_mode not in {"baseline", "deterministic", "model_mediated"}
+        or target.is_baseline != (target.validation_mode == "baseline")
+    ):
+        raise AssessmentError("assessment_plan_invalid")
+    # Revalidate restored and directly constructed snapshots at the same boundary.
+    snapshot = Snapshot.from_private_dict(snapshot.to_private_dict())
+    if (
+        _timestamp(snapshot.window_start) >= _timestamp(snapshot.window_end)
+        or any(
+            not isinstance(row.get("raw"), Mapping) or row["ref"].startswith("endpoint-")
+            for row in snapshot.records
+        )
+    ):
+        raise AssessmentError("assessment_snapshot_invalid")
+    scopes = {scope.response_id: scope for scope in snapshot.scopes}
+    allowed, endpoints, groups = {}, {}, []
+    probes, executed, ready, responses, completed = set(), set(), set(), set(), set()
+    keys = set()
+    for attempt in attempts:
+        if not attempt.steps or len({step.step_id for step in attempt.steps}) != len(attempt.steps):
+            raise AssessmentError("assessment_plan_invalid")
+        steps, complete, attributable_probe = [], True, False
+        for position, step in enumerate(attempt.steps, 1):
+            if not step.step_id or step.phase not in {"setup", "probe"}:
+                raise AssessmentError("assessment_plan_invalid")
+            key = (attempt.index, step.step_id)
+            keys.add(key)
+            invocation = invocations.get(key)
+            endpoint_ref = f"endpoint-{attempt.index:02d}-{position:02d}"
+            refs = set()
+            scope = None
+            if step.phase == "probe":
+                probes.add(key)
+            if invocation is not None:
+                if not isinstance(invocation, Invocation):
+                    raise AssessmentError("assessment_invocation_invalid")
+                if invocation.response is not None:
+                    endpoints[key] = endpoint_ref
+                    refs.add(endpoint_ref)
+                    if step.phase == "probe":
+                        executed.add(attempt.index)
+                if invocation.response_id:
+                    if invocation.response_id in responses:
+                        raise AssessmentError("assessment_response_reused")
+                    responses.add(invocation.response_id)
+                    scope = scopes.get(invocation.response_id)
+                    if scope is not None and scope.attributable:
+                        refs.update(scope.evidence_refs)
+                        if step.phase == "probe" and invocation.response is not None:
+                            attributable_probe = True
+            if invocation is None or invocation.response is None:
+                complete = False
+            allowed[key] = frozenset(refs)
+            steps.append({
+                "step_id": step.step_id, "phase": step.phase,
+                "request": dict(step.body), "expected": dict(step.expected),
+                "endpoint_ref": endpoint_ref if key in endpoints else None,
+                "execution": asdict(invocation) if invocation else None,
+                "scope": asdict(scope) if scope else None,
+                "allowed_citation_refs": sorted(refs),
+            })
+        if not any(step.phase == "probe" for step in attempt.steps):
+            raise AssessmentError("assessment_plan_invalid")
+        if complete:
+            completed.add(attempt.index)
+        if attributable_probe:
+            ready.add(attempt.index)
+        groups.append({
+            "index": attempt.index, "parameters": dict(attempt.parameters), "steps": steps,
+        })
+    if set(invocations) - keys:
+        raise AssessmentError("assessment_unplanned_invocation")
+    payload = _json_copy({
+        "target": {
+            "unit_id": target.unit_id.to_dict(), "agent_type": target.agent_type,
+            "validation_mode": target.validation_mode,
+            "expectation": dict(target.expectation),
+        },
+        "attempts": groups, "snapshot": snapshot.to_private_dict(),
+    })
+    return _Evidence(
+        payload, allowed, endpoints, frozenset(probes), frozenset(executed),
+        frozenset(ready), frozenset(completed),
+    )
+
+
+def _fits(payload: dict, limit: int) -> bool:
+    if type(limit) is not int or limit <= 0:
+        raise AssessmentError("assessment_limit_invalid")
+    return len(json.dumps(payload, ensure_ascii=True, allow_nan=False).encode("utf-8")) <= limit
+
+
+async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
+    schema = DAILY_SCHEMA if daily else STAGING_SCHEMA
+    instructions = files("agent_insights_quality").joinpath(
+        "prompts", "daily.md" if daily else "staging.md",
+    ).read_text(encoding="utf-8")
+    output = await sol.complete_json(
+        instructions=instructions, payload=deepcopy(payload), schema=deepcopy(schema),
+    )
+    if not isinstance(output, dict) or not Draft202012Validator(schema).is_valid(output):
+        raise AssessmentError(
+            "assessment_output_invalid", private_detail={"input": payload, "output": output},
+        )
+    if sorted(item["index"] for item in output["attempts"]) != list(range(1, 11)):
+        raise AssessmentError(
+            "assessment_attempt_coverage_invalid",
+            private_detail={"input": payload, "output": output},
+        )
+    return _json_copy(output)
+
+
+def _validate_attempts(evidence: _Evidence, output: dict, *, staging: bool) -> None:
+    for judgment in output["attempts"]:
+        sufficient, observed = judgment["sufficient"], judgment["observed"]
+        violation = judgment.get("contract_violation", False)
+        if (
+            type(judgment["index"]) is not int
+            or (observed or violation) and not sufficient
+            or staging and observed and violation
+        ):
+            raise AssessmentError("assessment_judgment_invalid")
+        evidence.citations(
+            judgment["citations"], attempt=judgment["index"], proof=sufficient,
+        )
+
+
+async def assess_staging(
+    target: Target, attempts: tuple[Attempt, ...],
+    invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot, sol: SolPort,
+    *, max_payload_bytes: int = 2_000_000,
+) -> StageResult:
+    """Judge all ten; six proofs pass, not six responses or labels.
+
+    Insufficient evidence is not a behavior failure. A strict-role proven
+    violation disqualifies even after six successes. For probability-tolerant
+    issues, sufficiently evidenced permitted nonobservations consume attempts.
+    """
+    evidence = _evidence(target, attempts, invocations, snapshot)
+    detail = {"input": evidence.payload, "output": None}
+    if not _fits(evidence.payload, max_payload_bytes):
+        judgments = tuple({
+            "index": attempt.index, "sufficient": False, "observed": False,
+            "contract_violation": False, "citations": [],
+            "reason": "assessment_input_too_large",
+        } for attempt in attempts)
+        return StageResult("INCOMPLETE", 0, judgments, ("assessment_input_too_large",), detail)
+    output = await _complete(sol, evidence.payload, daily=False)
+    detail["output"] = output
+    try:
+        _validate_attempts(evidence, output, staging=True)
+    except AssessmentError as error:
+        error.private_detail = detail
+        raise
+    judgments = tuple(sorted(output["attempts"], key=lambda item: item["index"]))
+    proven = [
+        item for item in judgments
+        if item["sufficient"] and item["index"] in evidence.ready
+    ]
+    if target.validation_mode != "model_mediated" and any(
+        item["contract_violation"] for item in proven
+    ):
+        passing = sum(item["observed"] for item in proven) if snapshot.query_complete else 0
+        return StageResult("FAIL", passing, judgments, ("proven_contract_violation",), detail)
+    eligible = [
+        item for item in proven if item["index"] in evidence.complete
+    ] if snapshot.query_complete else []
+    passing = sum(item["observed"] and not item["contract_violation"] for item in eligible)
+    if passing >= 6:
+        return StageResult("PASS", passing, judgments, (), detail)
+    unknown = 10 - len(eligible)
+    status = "FAIL" if passing + unknown < 6 else "INCOMPLETE"
+    reason = "observation_threshold_not_met" if status == "FAIL" else "insufficient_evidence"
+    return StageResult(status, passing, judgments, (reason,), detail)
+
+
+def _card_id(card: Mapping[str, Any]) -> str:
+    identifier = card.get("id", card.get("card_id"))
+    if (
+        not isinstance(identifier, str) or not identifier
+        or "id" in card and "card_id" in card and card["id"] != card["card_id"]
+    ):
+        raise AssessmentError("assessment_card_identity_invalid")
+    return identifier
+
+
+def _card_map(cards: tuple[Mapping[str, Any], ...]) -> dict[str, dict]:
+    if not isinstance(cards, tuple):
+        raise AssessmentError("assessment_cards_invalid")
+    result = {}
+    for raw in cards:
+        if not isinstance(raw, Mapping):
+            raise AssessmentError("assessment_cards_invalid")
+        card = _json_copy(dict(raw))
+        identifier = _card_id(card)
+        previous = result.get(identifier)
+        if previous is not None and previous != card:
+            revisions = []
+            for item in (previous, card):
+                timestamp = next(
+                    (item[key] for key in ("updated_at", "updatedAt", "lastModifiedAt")
+                     if key in item), None,
+                )
+                if timestamp is None:
+                    raise AssessmentError("assessment_card_revision_ambiguous")
+                revisions.append(_timestamp(timestamp))
+            if revisions[0] == revisions[1]:
+                raise AssessmentError("assessment_card_revision_ambiguous")
+            if revisions[0] > revisions[1]:
+                continue
+        result[identifier] = card
+    return result
+
+
+def canonical_cards(
+    before_cards: tuple[Mapping[str, Any], ...],
+    after_cards: tuple[Mapping[str, Any], ...],
+) -> tuple[dict[str, Any], ...]:
+    """Canonical private contributions, preserving full current and prior cards.
+
+    Copies collapse by stable ID. Conflicting same-snapshot revisions require an
+    explicit updated timestamp; no arbitrary winner and no run-ID/link-count gate.
+    """
+    before, after = _card_map(before_cards), _card_map(after_cards)
+    identifiers = sorted(before.keys() | after.keys())
+    if len(identifiers) > 9999:
+        raise AssessmentError("assessment_card_limit")
+    return tuple({
+        "card_alias": f"card-{index:04d}",
+        "contribution": (
+            "current" if identifier in after and before.get(identifier) != after[identifier]
+            else "historical"
+        ),
+        "previous": before.get(identifier),
+        "current": after.get(identifier),
+    } for index, identifier in enumerate(identifiers, 1))
+
+
+def _validate_daily(evidence: _Evidence, output: dict, cards: tuple[dict, ...],
+                    *, baseline: bool) -> None:
+    _validate_attempts(evidence, output, staging=False)
+    expected = {card["card_alias"] for card in cards}
+    actual = [card["card_alias"] for card in output["cards"]]
+    if len(actual) != len(set(actual)) or set(actual) != expected:
+        raise AssessmentError("assessment_card_coverage_invalid")
+    groups: dict[str, bool] = {}
+    for card in output["cards"]:
+        correct = card["core"] == "correct"
+        if (
+            correct != (card["root_group"] is not None)
+            or card["expected_match"] and (not correct or baseline)
+        ):
+            raise AssessmentError("assessment_judgment_invalid")
+        if correct:
+            group = card["root_group"]
+            if group in groups and groups[group] != card["expected_match"]:
+                raise AssessmentError("assessment_root_conflict")
+            groups[group] = card["expected_match"]
+        evidence.citations(card["citations"], proof=card["core"] != "unknown")
+
+
+def _candidates(output: dict, cards: tuple[dict, ...], *, baseline: bool) -> list[str]:
+    current = {card["card_alias"] for card in cards if card["contribution"] == "current"}
+    selected = [card for card in output["cards"] if card["card_alias"] in current]
+    reasons, roots = set(), set()
+    if output["limitations"]:
+        reasons.add("evidence_linkage_or_completeness")
+    if not baseline and not any(card["expected_match"] for card in selected):
+        reasons.add("missing_expected_detection")
+    if not baseline and not any(item["observed"] for item in output["attempts"]):
+        reasons.add("expected_activation_unconfirmed")
+    for card in selected:
+        if card["core"] == "incorrect":
+            reasons.add("core_incorrect")
+        elif card["core"] == "unknown":
+            reasons.add("core_unknown")
+        elif card["core"] == "correct":
+            root = "expected" if card["expected_match"] else card["root_group"]
+            if root in roots:
+                reasons.add("duplicate_root")
+            roots.add(root)
+    return sorted(reasons)
+
+
+def _merge_review(initial: dict, reviewed: dict, cards: tuple[dict, ...]) -> tuple[dict, bool]:
+    """A disputed core/activation remains unknown; a review is not a new vote."""
+    merged = deepcopy(reviewed)
+    disagreement = False
+    initial_attempts = {item["index"]: item for item in initial["attempts"]}
+    for item in merged["attempts"]:
+        old = initial_attempts[item["index"]]
+        if (old["sufficient"], old["observed"]) != (item["sufficient"], item["observed"]):
+            item.update(sufficient=False, observed=False)
+            disagreement = True
+    old_cards = {card["card_alias"]: card for card in initial["cards"]}
+    current = {card["card_alias"] for card in cards if card["contribution"] == "current"}
+    # Root labels themselves are arbitrary; compare partitions, not model prose.
+    def peers(output: dict, card: dict) -> set[str]:
+        return {
+            other["card_alias"] for other in output["cards"]
+            if other["card_alias"] in current and other["root_group"] is not None and (
+                other["root_group"] == card["root_group"]
+                or other["expected_match"] and card["expected_match"]
+            )
+        }
+    for card in merged["cards"]:
+        old = old_cards[card["card_alias"]]
+        if (
+            (old["core"], old["expected_match"]) != (card["core"], card["expected_match"])
+            or peers(initial, old) != peers(reviewed, card)
+        ):
+            card.update(core="unknown", root_group=None, expected_match=False)
+            disagreement = disagreement or card["card_alias"] in current
+        for diagnostic in ("severity", "proposed_fix"):
+            if old[diagnostic] != card[diagnostic]:
+                card[diagnostic] = "unknown"
+    merged["limitations"] = sorted(set(initial["limitations"] + reviewed["limitations"]))
+    return merged, disagreement
+
+
+def _citations_visible(citations: list[dict], evidence: _Evidence, visible: _Evidence) -> bool:
+    current_rows = {row["ref"]: row["raw"] for row in evidence.payload["snapshot"]["records"]}
+    visible_rows = {row["ref"]: row["raw"] for row in visible.payload["snapshot"]["records"]}
+    for citation in citations:
+        key = (citation["attempt"], citation["step_id"])
+        for ref in citation["refs"]:
+            if ref == evidence.endpoints.get(key):
+                if ref != visible.endpoints.get(key):
+                    return False
+            elif not any(
+                current_rows[ref] == visible_rows[earlier]
+                for earlier in visible.allowed[key] if earlier in visible_rows
+            ):
+                return False
+    return True
+
+
+def _activation_visible(output: dict, evidence: _Evidence, visible: _Evidence) -> bool:
+    for item in output["attempts"]:
+        if not item["sufficient"] or not item["observed"]:
+            continue
+        if _citations_visible(item["citations"], evidence, visible):
+            return True
+    return False
+
+
+def _daily_result(
+    target: Target, cards: tuple[dict, ...], output: dict | None,
+    exclusions: set[ExclusionReason], reasons: set[str], detail: dict,
+) -> DailyAssessment:
+    verdicts = []
+    if output is not None:
+        by_alias = {card["card_alias"]: card for card in output["cards"]}
+        root_groups = sorted({
+            card["root_group"] for card in output["cards"]
+            if card["core"] == "correct" and not card["expected_match"]
+        })
+        roots = {group: f"root-{index:04d}" for index, group in enumerate(root_groups, 1)}
+        for canonical in cards:
+            card = by_alias[canonical["card_alias"]]
+            contribution = Contribution(canonical["contribution"])
+            core = CoreVerdict(card["core"])
+            root = None
+            if core is CoreVerdict.CORRECT:
+                root = target.unit_id.logical_version if card["expected_match"] else roots[card["root_group"]]
+            if contribution is Contribution.CURRENT and core is CoreVerdict.UNKNOWN:
+                exclusions.add(ExclusionReason.UNKNOWN_CORE)
+                reasons.add("current_core_unknown")
+            verdicts.append(CardVerdict(
+                canonical["card_alias"], core, root, contribution,
+                DiagnosticVerdict(card["severity"]), DiagnosticVerdict(card["proposed_fix"]),
+                SUMMARIES["historical" if contribution is Contribution.HISTORICAL else core.value],
+            ))
+    else:
+        # Retain known card identities even when no usable model output exists.
+        verdicts = [
+            CardVerdict(
+                card["card_alias"], CoreVerdict.UNKNOWN,
+                contribution=Contribution(card["contribution"]),
+                summary=SUMMARIES["unknown"],
+            ) for card in cards
+        ]
+    unit = UnitResult(
+        target.unit_id, tuple(verdicts),
+        tuple(sorted(exclusions, key=lambda reason: reason.value)),
+        SUMMARIES["incomplete" if exclusions else "assessed"],
+    )
+    return DailyAssessment(unit, tuple(sorted(reasons)), detail)
+
+
+async def assess_daily(
+    target: Target, attempts: tuple[Attempt, ...],
+    invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot, sol: SolPort,
+    *, before_cards: tuple[Mapping[str, Any], ...],
+    after_cards: tuple[Mapping[str, Any], ...], engine_started_at: str,
+    visible_snapshot: Snapshot | None = None, cards_complete: bool = True,
+    max_payload_bytes: int = 2_000_000,
+) -> DailyAssessment:
+    """Return a private assessment and public-vocabulary whole-unit result.
+
+    ``snapshot`` is retained evidence; ``visible_snapshot`` records what was saved
+    before Insights admission. Its default is ``snapshot``, never a later poll
+    masquerading as earlier visibility. Exactly one review uses retained raw data.
+    """
+    if type(cards_complete) is not bool:
+        raise AssessmentError("assessment_cards_invalid")
+    evidence = _evidence(target, attempts, invocations, snapshot)
+    visible_snapshot = snapshot if visible_snapshot is None else visible_snapshot
+    visible = _evidence(target, attempts, invocations, visible_snapshot)
+    cards = canonical_cards(before_cards, after_cards)
+    payload = _json_copy({
+        **evidence.payload, "cards": cards,
+        "card_snapshots": {"before": before_cards, "after": after_cards},
+        "cards_complete": cards_complete, "engine_started_at": engine_started_at,
+        "visible_snapshot": visible_snapshot.to_private_dict(),
+    })
+    detail = {"input": payload, "initial": None, "review": None, "resolved": None}
+    exclusions, reasons = set(), set()
+    if len(evidence.executed) < 6:
+        exclusions.add(ExclusionReason.INCOMPLETE_EXECUTION)
+        reasons.add("insufficient_executed_attempts")
+    if len(evidence.ready) < 6 or not snapshot.query_complete:
+        exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
+        reasons.add("insufficient_attributable_evidence")
+    if not cards_complete:
+        exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
+        reasons.add("card_snapshot_incomplete")
+    visible_in_time = _timestamp(visible_snapshot.observed_at) <= _timestamp(engine_started_at)
+    if not visible_in_time or len(visible.ready) < 6:
+        exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
+        reasons.add("pre_insights_evidence_unavailable")
+    if not _fits(payload, max_payload_bytes):
+        exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
+        reasons.add("assessment_input_too_large")
+        return _daily_result(target, cards, None, exclusions, reasons, detail)
+    output = await _complete(sol, payload, daily=True)
+    detail["initial"] = deepcopy(output)
+    try:
+        _validate_daily(evidence, output, cards, baseline=target.is_baseline)
+    except AssessmentError as error:
+        error.private_detail = detail
+        raise
+    candidates = _candidates(output, cards, baseline=target.is_baseline)
+    if candidates:
+        review_payload = {**payload, "review": {
+            "candidate_reasons": candidates, "initial": output,
+        }}
+        if _fits(review_payload, max_payload_bytes):
+            reviewed = await _complete(sol, review_payload, daily=True)
+            detail["review"] = reviewed
+            try:
+                _validate_daily(evidence, reviewed, cards, baseline=target.is_baseline)
+            except AssessmentError as error:
+                error.private_detail = detail
+                raise
+            output, disagreement = _merge_review(output, reviewed, cards)
+            if disagreement:
+                exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
+                reasons.add("focused_review_disagreement")
+        else:
+            exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
+            reasons.add("focused_review_input_too_large")
+    exclusions.update(ExclusionReason(reason) for reason in output["limitations"])
+    reasons.update(output["limitations"])
+    current = {card["card_alias"] for card in cards if card["contribution"] == "current"}
+    if any(
+        card["card_alias"] in current and card["core"] != "unknown"
+        and not _citations_visible(card["citations"], evidence, visible)
+        for card in output["cards"]
+    ):
+        exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
+        reasons.add("card_proof_not_visible_before_insights")
+    if not target.is_baseline and not (
+        visible_in_time and _activation_visible(output, evidence, visible)
+    ):
+        exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
+        reasons.add("expected_defect_unconfirmed_or_not_visible")
+    detail["resolved"] = output
+    return _daily_result(target, cards, output, exclusions, reasons, detail)

@@ -5,6 +5,14 @@ dashboard_url: https://aka.ms/agent-insights/quality
 send_once: true
 retry_ambiguous: false
 quality_score:
-  formula: correct_over_expected_plus_noise_v1
-  scoring_fields: [title, description, category, linked_traces]
+  formula: "100*C/(E_scored+N_scored+0.25*D_scored)"
+  noise_weight: 1
+  duplicate_weight: 0.25
+  scoring_fields: [core_diagnosis, reasonable_category, independent_current_evidence]
   diagnostic_fields: [severity, proposed_fix]
+  maximum_excluded_units: 2
+  threshold: null
+public_content:
+  free_text: forbidden
+  summaries: code_owned_templates
+  aliases: reviewed_catalog_and_generated_card_root_aliases
