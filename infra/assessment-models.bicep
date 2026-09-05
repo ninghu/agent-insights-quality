@@ -3,7 +3,7 @@ targetScope = 'resourceGroup'
 param assessmentModelVersion string = '2026-07-09'
 @minValue(1)
 @maxValue(1000)
-param assessmentCapacity int = 100
+param assessmentCapacity int = 1000
 
 var accounts = [
   'aiq-staging-swedencentral'

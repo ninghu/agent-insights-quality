@@ -20,7 +20,7 @@ param testAgentCapacity int = 4500
 param insightGenerationCapacity int = 100
 @minValue(1)
 @maxValue(1000)
-param assessmentCapacity int = 100
+param assessmentCapacity int = 1000
 @allowed(['aiqsweart'])
 param storageAccountPrefix string = 'aiqsweart'
 @allowed(['qualification-storage'])

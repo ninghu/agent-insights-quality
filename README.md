@@ -45,6 +45,9 @@ Both environments reuse their Sweden Central Accounts/Projects and Agent objects
 `aiq-staging-swedencentral` and `aiq-daily-swedencentral`.
 Test Agents use GPT-5.4 mini, Insights uses GPT-5.6 Terra, and assessment uses GPT-5.6 Sol.
 `infra/assessment-models.bicep` deploys only the two Sol assessment model deployments.
+Both Bicep entry points default `assessmentCapacity` to 1000 per account, retaining
+DataZoneStandard, model version `2026-07-09`, and NoAutoUpgrade. Agent and Insights
+deployment capacities are independent and unchanged.
 
 ## Offline development
 
