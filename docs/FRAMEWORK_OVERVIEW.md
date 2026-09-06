@@ -53,11 +53,32 @@ from actual endpoint response identities, fetches matching operations, and prese
 with an invocation membership index. Unexpected records, query gaps and cumulative card links are
 not silently discarded.
 
-Travel's `travel.model.review` span is an internal concision review, not the delivered response.
-Its model request includes the external user request and the candidate response; the actual
-review output remains in telemetry with `travel.review.output_delivered=false`. The hosting
-invocation records the real endpoint output. Neither the collector nor assessment should
-replace one surface with the other or discard a genuine internal cost/latency observation.
+Travel uses one bounded model call to produce its final wording, not an unused private review.
+The model chooses state-derived factual phrasings and sentence order, returning the complete
+plain-text answer. Independent local validation requires exactly one permitted phrasing of
+every selected fact, with no missing, duplicated, foreign or contradictory statements.
+Accepted model text is delivered verbatim; invalid or incomplete output fails explicitly,
+without another model call, truncation or a success-shaped deterministic fallback. The
+`gpt-5.4-mini` default and 200-output-token budget remain unchanged; SDK retries are disabled
+and the request timeout is 60 seconds. Neutral setup acknowledgments do not invoke the model.
+
+This finite grammar constrains language, not the correctness of the preceding business
+decision. Rendering reflects the version's actual selected inventory, itinerary and booking
+outcome; it does not repair an injected fabricated result, wrong tool, omitted search,
+overfetch, early booking, dropped itinerary, serialized search or stale state. Raw tool/state
+evidence remains necessary to judge those defects. Extra inventory still reaches the model
+in the overfetch version even though it is unnecessary for the selected answer.
+
+The `travel.model.answer` span separately retains trusted instructions, the caller request
+as JSON data, selected state, permitted factual phrasings, the complete returned model
+content and provider-reported usage. `travel.render.internal=false` identifies its intended
+final-answer role; `travel.render.output_validated` records acceptance, not endpoint delivery.
+Only the hosting invocation's `response.completed` path sets
+`travel.response.output_delivered=true` and records the actual endpoint message. This is a
+host-completion observation, not independent client-receipt proof. Failed raw model output
+is retained rather than relabeled as delivered. Existing historical judgments are unchanged;
+the new path still needs deployed qualification and evidence review.
+
 Healthcare appointment listings distinguish existing records from evidence of open availability
 and retain the supplied in-scope record identifiers.
 

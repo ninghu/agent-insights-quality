@@ -54,6 +54,7 @@ class TravelResponsesHostServer(ResponsesHostServer):
         with self.identity.start_span(self.tracer, "travel.invoke") as span:
             span.set_attribute("gen_ai.operation.name", "invoke_agent")
             span.set_attribute("gen_ai.response.id", context.response_id)
+            span.set_attribute("travel.response.output_delivered", False)
             span.set_attribute(
                 "gen_ai.input.messages",
                 json.dumps(request.as_dict().get("input")),
@@ -64,6 +65,7 @@ class TravelResponsesHostServer(ResponsesHostServer):
                 if event["type"] == "response.failed":
                     span.set_status(StatusCode.ERROR)
                 elif event["type"] == "response.completed":
+                    span.set_attribute("travel.response.output_delivered", True)
                     span.set_attribute(
                         "gen_ai.output.messages",
                         json.dumps(event.as_dict()["response"]["output"]),
