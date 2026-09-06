@@ -137,7 +137,7 @@ def test_catalog_bound_actionable_context_in_both_renderers(catalog_root):
         assert expected["expected_fix"] not in rendered
         assert "traffic.json" not in rendered
         assert "1. card-0001" in rendered and "1. Noise" in rendered
-        assert "Insights miss" in rendered
+        assert "Expected issue: Not detected" in rendered
         assert "Core claim judged incorrect" not in rendered
         assert "one version run (10 attempts)" in rendered
         assert "Report date: 2026-09-04" in rendered
@@ -445,6 +445,7 @@ def test_healthy_units_do_not_create_detailed_follow_up_boilerplate(catalog_root
     assert "Expected defect detected" not in markdown
     assert all(row.endswith(" | - |") for row in markdown.splitlines() if re.match(r"^\| [12] \|", row))
     assert "<details>" not in markdown
+    assert "Expected issue: Detected<br>1. Correct" in markdown
     assert len(re.findall(r"^\| [12] \|", markdown, re.M)) == 2
     assert "### weather-agent / v0" not in markdown
     assert "### weather-agent / issue-001" not in markdown

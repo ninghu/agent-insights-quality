@@ -38,13 +38,17 @@ must not be blamed on the Insight Engine.
 Review the private per-Agent report's five version rows alongside its saved classifications and
 short Notes. Normal detections and healthy baselines need no Notes. An **Unexpected finding** is a
 correct non-target finding with no expected-detection credit, not an automatic Agent-fix request.
-An **Insights miss** means the expected defect was not detected, not a new Agent failure.
+For issue rows, the assessment starts with **Expected issue: Detected / Not detected / Not scored**,
+then identifies each generated finding's scope. **Not detected** means Insights did not diagnose
+the expected defect, even when it generated a valid finding about a different claim. Baselines
+have no expected-issue outcome.
 
 Expand **Assessment details** in an exceptional row to read the full saved rationale. Disputed
 assessments show both the initial and focused-review rationales and remain wholly unscored when
 their resolved core is unknown. These escaped private quotations are not new judgments; the
 report never changes saved classifications, scores or archives. Public reports, email briefs
 and ADX do not include these private rationales.
+Expanded details retain each finding's saved core and classification alongside the quoted reasons.
 
 Detailed reproduction/evidence references stay private. New reports are archived in private
 Storage; approved expiring links grant read access to individual Agent files. They are not public

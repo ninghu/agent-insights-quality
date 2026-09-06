@@ -221,7 +221,7 @@ def test_readiness_exclusion_retains_actual_deployment_without_claiming_no_findi
     markdown = render_private_markdown(result, allowed_units=(planned,), review_context=context)
     assert "27 (issue-003)" in markdown
     assert "Not generated (trace readiness insufficient)" in markdown
-    assert "| Unscored |" in markdown
+    assert "| Expected issue: Not scored |" in markdown
     assert "Not counted as a miss" in markdown
     assert "actual-weather-object" not in markdown
     assert "Expected defect: Missed" not in markdown
@@ -355,6 +355,9 @@ def test_disagreement_explains_both_full_passes_without_rejudgment_or_archive_ch
     assert initial_reason not in re.sub(r"<details>.*?</details>", "", html)
     assert review_reason not in re.sub(r"<details>.*?</details>", "", html)
     assert "Unconfirmed (unscored)" in markdown
+    row = next(line for line in markdown.splitlines() if line.startswith("| 1 |"))
+    assert "Expected issue: Not scored<br>1. Unconfirmed (unscored)" in row
+    assert "Core: unknown; classification: unknown." in html
     assert result.counts.expected_issues == result.counts.noise_cards == 0
     assert not result.units[0].scorable
     assert {reason.value for reason in result.units[0].exclusion_reasons} == {
@@ -486,7 +489,8 @@ def test_private_miss_identifies_insights_and_preserves_observation_count(tmp_pa
     context = RetainedReviewContext(runtime, "synthetic-review", result)
     markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
     missed_row = next(row for row in markdown.splitlines() if "| 13 (issue-001) |" in row)
-    assert "Observed 1/10; Insights did not detect." in missed_row
+    assert "Expected issue: Not detected" in missed_row
+    assert "Observed 1/10." in missed_row
     assert "Expected defect missed" not in missed_row and "<details>" not in missed_row
 
 
@@ -540,3 +544,37 @@ def test_unicode_line_separators_cannot_break_a_private_markdown_row(tmp_path):
     parsed = Markup()
     parsed.feed(markdown_view(markdown))
     assert reason in "".join(parsed.text)
+
+
+def test_expected_miss_precedes_non_target_card_without_changing_its_saved_judgment(tmp_path):
+    runtime = RuntimeStore("daily", root=tmp_path)
+    cards = [judgment(reason="Saved evidence about a separate claim.")]
+    result, plan = seed_passes(runtime, cards, deepcopy(cards))
+    before = deepcopy(result.to_dict())
+    context = RetainedReviewContext(runtime, "synthetic-passes", result)
+    markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
+    row = next(line for line in markdown.splitlines() if line.startswith("| 1 |"))
+    assert "Expected issue: Not detected<br>1. Unexpected finding" in row
+    assert "Observed 1/10." in row
+    assert "Generated finding concerns a different claim." in row
+    assert "Correct (other)" not in markdown and "1. Correct" not in row
+    html = markdown_view(markdown)
+    assert "Core: correct; classification: unexpected_real." in html
+    assert "Core: correct" not in re.sub(r"<details>.*?</details>", "", html)
+    assert "Saved evidence about a separate claim." in html
+    assert context.for_result(result)[plan[0].unit_id]["cards"]["card-0001"]["core"] == "correct"
+    assert result.to_dict() == before
+    assert result.counts.to_dict() == {
+        "correct_issues": 0, "expected_issues": 1, "noise_cards": 0, "duplicate_cards": 0,
+    }
+
+
+def test_baseline_rows_have_no_expected_issue_outcome(tmp_path):
+    runtime = RuntimeStore("daily", root=tmp_path)
+    result, plan = seed_review(runtime)
+    context = RetainedReviewContext(runtime, "synthetic-review", result)
+    markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
+    baseline_rows = [row for row in markdown.splitlines() if "(v0)" in row and row.startswith("| ")]
+    assert len(baseline_rows) == 2
+    assert all("Expected issue:" not in row for row in baseline_rows)
+    assert all("1. Unexpected finding" in row for row in baseline_rows)

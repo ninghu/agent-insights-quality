@@ -85,7 +85,7 @@ def render_private_markdown(
 
 
 _ASSESSMENT_LABEL = (
-    r"(?:Saved assessment|(?:Initial assessment|Focused review|Resolved assessment)"
+    r"(?:Saved result|Saved assessment|(?:Initial assessment|Focused review|Resolved assessment)"
     r" \((?:correct|incorrect|unknown)\))"
 )
 _DETAIL_ENTRY = (
@@ -103,6 +103,10 @@ _DETAIL_LABEL = re.compile(
 def _assessment_details(entries: list[tuple[int, dict]]) -> str:
     body = []
     for index, card in entries:
+        body.append(
+            f"<br><strong>Finding {index}: Saved result</strong><br>"
+            f"Core: {card['core']}; classification: {card['classification']}."
+        )
         disagreement = card.get("disagreement")
         if disagreement:
             reasons = [
@@ -148,6 +152,9 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
     current = [finding for finding in unit["findings"] if finding["contribution"] == "current"]
     titles, verdicts, notes, details = [], [], [], []
     missed = unit["scorable"] and unit["kind"] == "issue" and not unit["counts"]["correct_issues"]
+    if unit["kind"] == "issue":
+        outcome = "Not scored" if not unit["scorable"] else "Not detected" if missed else "Detected"
+        verdicts.append("Expected issue: " + outcome)
     if not unit["scorable"]:
         if any(
             detail.get("cards", {}).get(finding["card_alias"], {}).get("disagreement")
@@ -161,10 +168,10 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
             notes.append("Reason: " + detail["failure_code"] + ".")
     elif missed and private:
         observations = len(detail.get("observations", ()))
-        notes.append(
-            f"Observed {observations}/10; Insights did not detect."
-            if observations else "Insights did not detect the expected defect."
-        )
+        if observations:
+            notes.append(f"Observed {observations}/10.")
+    if missed and any(finding["classification"] == "unexpected_real" for finding in current):
+        notes.append("Generated finding concerns a different claim.")
     roots = {}
     for index, finding in enumerate(current, 1):
         if finding["classification"] in {"expected_detection", "unexpected_real"}:
@@ -182,16 +189,15 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
         if finding["classification"] == "duplicate":
             notes.append(f"{index}: Same root as finding {roots[root]}.")
         if card.get("reason") and finding["classification"] in {"noise", "unknown", "unexpected_real"}:
-            details.append((index, card))
+            details.append((index, {**card, "classification": finding["classification"]}))
     if not current:
         titles.append(
             "Not generated (trace readiness insufficient)"
             if detail.get("failure_code") == "trace_readiness_insufficient" else
             "Unavailable" if not unit["scorable"] else "None"
         )
-        verdicts.append("Unscored" if not unit["scorable"] else "Insights miss" if missed else "-")
-    elif missed and not private:
-        verdicts.append("Insights miss")
+        if unit["kind"] == "baseline":
+            verdicts.append("Unscored" if not unit["scorable"] else "-")
     if private and detail.get("unavailable"):
         notes.append("Assessment details unavailable.")
     rendered_notes = [_markdown_text(note) for note in notes]
@@ -223,7 +229,8 @@ def _render_markdown(
         f"{coverage['excluded_units']} excluded units.",
         "", "Each row is one version run (10 attempts), not one attempt. "
         "Generated insights are new or updated findings from that run; unchanged historical cards are omitted.",
-        "", "Unexpected finding means a correct non-target finding; it earns no expected-detection credit.",
+        "", "Expected issue: Not detected means Insights did not diagnose the expected defect. "
+        "Unexpected finding means a correct non-target finding; it earns no expected-detection credit.",
     ]
     if not value["team_report_eligible"]:
         lines += ["", "Personal notice: no valid overall measurement. Counts describe the scored subset only."]
