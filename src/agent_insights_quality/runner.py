@@ -694,7 +694,7 @@ class Runner:
         budget = (
             self.settings.insights_poll_timeout_seconds
             if stage == "insights" else self.settings.hydration_seconds
-            if stage == "evidence" and self.runtime.environment == "daily"
+            if stage == "evidence"
             else self.settings.poll_timeout_seconds
         )
         remaining = min(
@@ -1136,12 +1136,14 @@ class Runner:
         ) for attempt in attempts)
 
     @staticmethod
-    def _probe_roots_complete(attempts: tuple[Attempt, ...], invocations: Mapping, snapshot: Snapshot) -> bool:
+    def _completed_roots_attributable(
+        attempts: tuple[Attempt, ...], invocations: Mapping, snapshot: Snapshot, *, probe_only: bool,
+    ) -> bool:
         attributable = snapshot.attributable_responses
         return all(
             receipt.response_id in attributable
             for attempt in attempts for step in attempt.steps
-            if step.phase == "probe"
+            if (not probe_only or step.phase == "probe")
             and (receipt := invocations.get((attempt.index, step.step_id))) is not None
             and receipt.response is not None
         )
@@ -1182,8 +1184,7 @@ class Runner:
                     snapshot = await collect_snapshot(
                         self.cloud, deployment, invocations.values(), observed_at=self.now(),
                     )
-                    if self.runtime.environment == "daily":
-                        snapshot = replace(snapshot, observed_at=self.now().isoformat())
+                    snapshot = replace(snapshot, observed_at=self.now().isoformat())
             except QualityError as error:
                 self._fatal(error)
                 if error.retryable and await self._wait(target, "evidence", wait_until, start):
@@ -1201,17 +1202,23 @@ class Runner:
                 })
             if self.runtime.environment == "daily":
                 if ready >= self.settings.readiness_attempts:
-                    if snapshot.query_complete and self._probe_roots_complete(attempts, invocations, snapshot):
+                    if snapshot.query_complete and self._completed_roots_attributable(
+                        attempts, invocations, snapshot, probe_only=True,
+                    ):
                         return snapshot, artifact
                     grace_end = self._deadline(
                         work.records, key + "/grace-deadline", self.settings.daily_evidence_grace_seconds,
                     )
                     wait_until = min(deadline, grace_end)
-            elif extra_poll and snapshot.query_complete:
-                return snapshot, artifact
+            else:
+                complete = snapshot.query_complete and self._completed_roots_attributable(
+                    attempts, invocations, snapshot, probe_only=False,
+                )
+                if extra_poll and complete:
+                    return snapshot, artifact
+                extra_poll = complete
             if not await self._wait(target, "evidence", wait_until, start):
                 return snapshot, artifact
-            extra_poll = ready >= self.settings.readiness_attempts and snapshot.query_complete
 
     def _traffic_window(self, target: Target, work: _Work, invocations: Mapping) -> str | None:
         key = f"agents/{target.unit_id.agent}/last-traffic"

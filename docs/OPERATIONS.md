@@ -39,6 +39,15 @@ Expected activation and additional findings remain separate. Preserve FAIL, INCO
 historical NOT_EVALUATED hygiene rather than interpreting a missing finding as a clean result.
 The app must not add assessments or resample traffic to change a qualification outcome.
 
+Staging does not stop collection at Daily's six-probe readiness threshold. Within the existing
+hydration deadline, it waits for attributable roots for all completed setup/probe responses and
+one further complete observation, giving related spans another opportunity to arrive. This is a
+collection stopping rule, not a ten-perfect-attempt admission gate or proof that every child span
+exists. At the deadline, the saved evidence is assessed as available under the unchanged
+eight-observation policy; gaps remain explicit. Snapshot visibility is recorded after queries finish.
+Evidence-only recovery preserves completed calls, the original deadline and earlier snapshots;
+a later snapshot never proves that those records were visible earlier.
+
 Use the [trace-context audit](#caller-invocation-context) on retained results for propagation
 diagnostics. An explicitly authorized [session preparation trial](STAGING_PREPARATION_TRIAL.md)
 can exercise the bounded Travel lookahead inside normal staging, followed by its read-only audit.
