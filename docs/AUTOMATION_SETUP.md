@@ -11,14 +11,33 @@ The user enables the official schedule.
 Skills remain separate thin entry points for Daily, staging and source maintenance; see
 [the skill index](../README.md#skills). Staging never generates Insights, reports or email.
 
-## Official bootstrap
+## One bootstrap: TEST or official
 
-Use `.github/copilot/daily-bootstrap-prompt.md`. Start a fresh worktree, fetch and fast-forward
-to latest main, set `PYTHONPATH`, then invoke the runner once. Do not modify source, create
-per-Agent sessions, perform model assessments or direct retries from the app prompt.
-This template is official-only. Eligible reports keep the fixed `TEAM_RECIPIENT`; ineligible
-runs keep the private failure-notice fallback. `--test-to` is not an official-recipient override.
-Use the separate TEST template below rather than asking the app to guess which mode to run.
+Copy [the unified bootstrap](../.github/copilot/daily-bootstrap-prompt.md) and fill just
+**REPORT_MODE** (`test` or `official`) and **TO_ADDRESS** (one literal mailbox). No test
+number is required. The former email-test prompt is only a pointer to this same template.
+
+```powershell
+python -m agent_insights_quality run-daily --report-mode "$REPORT_MODE" --to-address "$TO_ADDRESS"
+```
+
+For a new integrated automation launch, use a fresh latest-main worktree. For an explicitly
+authorized manual candidate TEST, keep that committed candidate; do not replace it with old main.
+Recovery retains the source frozen by the active launch, even if main has advanced.
+Set `PYTHONPATH` to that worktree's `src`. Python validates both inputs before runtime/provider
+construction, then reserves source, identity and routing under runtime ownership before traffic.
+The app does not select version units, assess evidence or direct retries.
+
+| Mode | Identity and publication | Eligible mail | Ineligible measurement |
+| --- | --- | --- | --- |
+| `test` | Python allocates a positive private rerun; fresh traffic; no ADX/public reports/official latest | Frozen TO_ADDRESS, never the team mailbox | Same frozen private TO_ADDRESS |
+| `official` | Latest-main weekday/date singleton; normal official publication | Exact TO_ADDRESS authorized and frozen at initialization | Always the separately frozen private configuration fallback |
+
+One address is supported, not lists or display names. An explicit official address is an
+initialization input, never a send-time override. Mode is never inferred from a mailbox.
+Unfilled placeholders, header injection and invalid inputs fail without falling back to
+configuration. Keep filled templates/commands private; do not log raw arguments, destinations or
+the launch descriptor to shared logs, ADX or Git. No role grants or access changes are implied.
 
 The runner supplies a delivery ID and private email record. The app claims that record, reads
 the exact prepared recipient/subject/HTML, sends once in HTML mode using its native email capability,
@@ -31,37 +50,36 @@ an already connected WorkIQ service exposes `sendMail`; inspect its current acti
 pass the prepared fields unchanged with an explicit HTML body. Tool discovery is not permission
 or delivery proof, and must not send a probe message or install an alternative integration.
 
-## New private trial versus recovery
+## Automatic identity and recovery
 
-Use `.github/copilot/email-test-prompt.md` from the reviewed, committed candidate for an
-explicitly authorized new private measurement. Before submitting it to the GitHub Copilot app,
-the human operator fills **TEST_TO_ADDRESS** with exactly one literal private TEST address and
-**NEW_POSITIVE_RERUN** with a new positive integer:
+Python reserves above all retained private TEST run/outbox numbers, including legacy manual
+runs. The first automatic launch does not adopt an arbitrary manual TEST. Its small
+`outboxes/automation/progress/active.json` pointer freezes `run_id`, `report_date`,
+`source_revision`, `report_mode`, `to_address` and integer `rerun` (schema `1.0.0`).
+`outboxes/automation/completed/launches/<run_id>.json` retains the immutable same descriptor.
+Both are beneath private `runner-v1/daily`; checkpoint failure stops provider work. A
+pointer-only interrupted reservation resumes that exact identity.
 
-```powershell
-python -m agent_insights_quality run-daily --test-run --rerun <NEW_POSITIVE_RERUN> --fresh-traffic --test-to "<TEST_TO_ADDRESS>"
-```
+Repeat the same unified command while the run is unfinished or mail is prepared, claimed
+or unknown. It resumes the exact date/source/destination across midnight. It cannot change
+source, To or mode to bypass unfinished work. Completing the Python process or preparing
+an email does **not** release this identity. Only accepted/delivered or definitively rejected
+email evidence lets a later automatic TEST invocation allocate another identity. The existing
+rejected request remains terminal and is never resent. Ambiguous sends must be reconciled.
+Official mail remains a date singleton, including after terminal delivery on the same date.
 
-The template includes a pre-launch placeholder check. Unfilled placeholders, blank/invalid
-addresses, header injection, multiple addresses and the fixed team mailbox are blockers before
-traffic. No display-name parsing, contact lookup or inference from conversation text is allowed.
-Keep filled templates/commands private; never commit real addresses or record raw arguments in
-shared logs, ADX or public artifacts. This remains a single private recipient contract; multiple
-recipients or official overrides would require a separate reviewed scope decision.
+The existing completed `delivery-recipient` freezes the private recipient/failure fallback.
+New unified `delivery-inputs` and email requests carry an optional `delivery_binding` containing
+the exact immutable launch descriptor. Reading, claiming, restoring and previewing validate
+that binding against private checkpoints; adding a plausible mailbox is not authorization.
+There is no migration or rewriting of old prepared email.
 
-Python freezes the exact input in the private run's completed `delivery-recipient` record under
-runtime ownership before provider construction or traffic. A filled placeholder is explicit
-run input, not permission for the app to edit a prepared request. Omitting `--test-to` on a new
-run retains the existing private configuration fallback. An explicitly supplied invalid value
-never falls back, even if a valid default or earlier frozen recipient exists.
-
-Do not replace the candidate with main. An explicitly authorized app TEST after normal integration
-can use a fresh latest-main worktree. For recovery, first inspect the existing runner and
-checkpoints, then resume the original identity/source, recipient and frozen intent. Use the same
-exact address or omit `--test-to`; later edits to the template or default file cannot redirect
-the run. Conflicting explicit recipients or modes fail before more work. A new rerun is not a
-recovery mechanism; completed or ambiguously submitted traffic and email must not be repeated.
-TEST never writes ADX/public reports, advances official latest or sends team mail.
+Legacy `run-daily` (official) and `--test-run --rerun ... [--test-to ...] [--fresh-traffic]`
+remain supported. Do not mix those identity flags with the unified pair. Eligible legacy official
+mail still uses fixed TEAM_RECIPIENT; the original request serialization stays unchanged.
+An existing manually initialized official date must resume with its legacy command rather
+than retrofitting an override. Legacy TEST input omission retains the private configuration
+default for a new identity or the already frozen recipient on recovery.
 
 Legacy delivery inputs or private email requests supply their exact retained recipient without
 being rewritten, including prepared, claimed, unknown and completed sends. A legacy unfinished
@@ -89,7 +107,8 @@ adding visible Full/Partial or quality PASS/FAIL labels.
   editing this shared default never changes an existing run or prepared email.
 - `config/report-links.json` under that root selects an immutable, exact-content-matched scoring
   guide revision, as described in [Operations](OPERATIONS.md#automatic-private-report-publication).
-- The reviewed team mailbox remains repository configuration, not a model-selected destination.
+- Legacy official mail keeps the reviewed team mailbox. Unified eligible official mail uses only
+  its frozen explicit To; neither is a model-selected destination.
 - Optional private work-item query/context never enters public artifacts or assessment inputs.
 - Optional `config/adx.json` under the runtime root contains `schema_version: "1.0"`,
   `cluster_uri` and `database`. Only the approved existing analytics database is used.

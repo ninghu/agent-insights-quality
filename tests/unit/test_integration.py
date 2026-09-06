@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from agent_insights_quality.contracts import Environment
-from agent_insights_quality.email import EmailRecord, EmailRequest, claim_email, record_email_outcome
+from agent_insights_quality.email import (
+    EmailRecord, EmailRequest, TEAM_RECIPIENT, claim_email, record_email_outcome,
+)
 from agent_insights_quality.errors import QualityError
 from agent_insights_quality.integration import (
     RunIntegration, _exception_diagnostics, _previous_official_snapshot, command_status,
@@ -666,7 +668,8 @@ def prior_email(
 ):
     day = date.fromisoformat(cutoff[:10])
     request = EmailRequest(
-        identifier, "synthetic@example.invalid", "Synthetic report", "<html>synthetic</html>",
+        identifier, TEAM_RECIPIENT if mode == "official" else "synthetic@example.invalid",
+        "Synthetic report", "<html>synthetic</html>",
         mode, day.isoformat(), mode == "test", 1 if mode == "test" else 0,
     )
     terminal = status in {"accepted", "delivered", "unknown", "rejected"}

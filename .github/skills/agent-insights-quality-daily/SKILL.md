@@ -9,33 +9,29 @@ Read [contributor boundaries](../../../AGENTS.md) and
 [operations](../../../docs/OPERATIONS.md). Python, not Copilot, owns qualification,
 parallelism, retries, telemetry, the frozen deployed assessor and report preparation.
 
-For official automation, use `.github/copilot/daily-bootstrap-prompt.md` from a fresh,
-latest-main local worktree. Set `PYTHONPATH` to that worktree's `src`, then run:
+Use the single `.github/copilot/daily-bootstrap-prompt.md`. The human supplies only
+REPORT_MODE (`test` or `official`) and one literal TO_ADDRESS. Set `PYTHONPATH` to
+the chosen worktree's `src`, then run:
 
 ```powershell
-python -m agent_insights_quality run-daily
+python -m agent_insights_quality run-daily --report-mode "$REPORT_MODE" --to-address "$TO_ADDRESS"
 ```
 
-For an explicitly authorized NEW private measurement, keep the committed candidate and use
-`.github/copilot/email-test-prompt.md`. Its HUMAN operator supplies one literal private
-TEST_TO_ADDRESS and a NEW_POSITIVE_RERUN:
+Stop before traffic for unfilled/invalid fields. Never infer mode from an address, accept
+lists or use the team mailbox in TEST. Python automatically allocates a unique positive TEST
+identity and freezes source/routing under runtime ownership. Repeat the same unified command
+to resume unfinished/prepared/claimed/unknown work, including across midnight; source or
+destination conflicts block. Only accepted/delivered/definitively rejected email permits a
+later TEST invocation to allocate another identity. Do not add legacy identity flags.
 
-```powershell
-python -m agent_insights_quality run-daily --test-run --rerun <NEW_POSITIVE_RERUN> --fresh-traffic --test-to "<TEST_TO_ADDRESS>"
-```
-
-Stop before traffic if either placeholder is unfilled or invalid. Never infer an address,
-accept a list or team mailbox, or use `--test-to` for official mode. The address is run input,
-frozen privately by Python before providers/traffic, not an app-selected delivery override.
-The existing private configuration fallback remains available when `--test-to` is omitted
-for a new run; an explicit invalid placeholder never falls back. Eligible official mail keeps
-the fixed team recipient and official failures keep their frozen private fallback.
-For recovery, first inspect the existing run/process and resume its original identity,
-source, recipient and frozen intent; do not choose a new rerun or repeat completed traffic.
-The same explicit address or omitted `--test-to` retains the frozen recipient. Conflicts and
-unknown legacy identity are blockers; template/configuration edits never rewrite prepared mail.
-Never substitute latest main for the candidate or enable the schedule during a trial.
-An explicitly requested app TEST after normal integration can use the fresh latest-main worktree.
+For a new integrated automation launch use fresh latest main. For an explicitly authorized
+manual candidate TEST keep the committed candidate. Recovery always uses the frozen source;
+never fetch a newer main over unfinished work. Official is a weekday/date singleton: eligible
+mail uses the exact frozen TO_ADDRESS, while failure notices always use the separately frozen
+private fallback. Legacy official mail retains TEAM_RECIPIENT. Existing manually numbered
+legacy commands remain available for recovery; the automatic pointer never adopts arbitrary
+manual TEST runs. Template/default changes cannot redirect prepared mail.
+Do not enable the schedule during a trial.
 
 Read the returned status and prepared private email request. Claim it before sending,
 use its exact recipient/subject/HTML as data, then record the actual provider outcome.

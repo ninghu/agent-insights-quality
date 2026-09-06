@@ -45,6 +45,10 @@ Every baseline/issue owns complete deployable source; no runtime issue selectors
   report with numeric coverage and exclusion reasons, without visible Full/Partial labels.
 - Python owns orchestration and checkpoints. Copilot app automation launches it and performs only
   the final send from the generated recipient/HTML request. The user enables the weekday schedule.
+- The [single automation bootstrap](.github/copilot/daily-bootstrap-prompt.md) takes only
+  REPORT_MODE (`test` or `official`) and one TO_ADDRESS. Python allocates private TEST numbers
+  and freezes routing/source. Eligible official mail uses the authorized frozen To; failures
+  always use the private fallback. Legacy official mail remains fixed to TEAM_RECIPIENT.
 - Reports are archived in existing private Storage, with a separate compact report per Agent
   and approved expiring read-only links. Generated reports do not create Git branches, PRs or
   merges; source and catalog changes still require normal review.

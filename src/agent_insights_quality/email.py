@@ -67,11 +67,14 @@ class EmailRequest:
     test_run: bool
     rerun: int
     report_access: dict | None = None
+    delivery_binding: dict | None = None
 
     def to_private_dict(self) -> dict[str, Any]:
         value = asdict(self)
         if self.report_access is None:
             value.pop("report_access")
+        if self.delivery_binding is None:
+            value.pop("delivery_binding")
         return value
 
 
@@ -101,7 +104,7 @@ def _read(outbox: RecordStore, delivery_id: str, *, missing_ok: bool = False) ->
     if (
         set(raw) != required or raw["schema_version"] != "1.0"
         or not isinstance(raw["request"], dict)
-        or set(raw["request"]) - {"report_access"} != {
+        or set(raw["request"]) - {"report_access", "delivery_binding"} != {
             "delivery_id", "recipient", "subject", "html", "mode",
             "report_date", "test_run", "rerun",
         }
@@ -110,6 +113,8 @@ def _read(outbox: RecordStore, delivery_id: str, *, missing_ok: bool = False) ->
         raise EmailError("email_record_invalid")
     request = EmailRequest(**raw["request"])
     _validate_request(request)
+    from .automation_launch import validate_email_binding
+    validate_email_binding(outbox._runtime, request)
     if request.delivery_id != delivery_id:
         raise EmailError("email_record_invalid")
     claimed = raw["status"] != "prepared"
@@ -133,7 +138,7 @@ def _validate_request(request: EmailRequest) -> None:
     except (TypeError, ValueError) as error:
         raise EmailError("email_date_invalid") from error
     if (
-        request.mode not in {"test", "official", "failure"}
+        not isinstance(request.mode, str) or request.mode not in {"test", "official", "failure"}
         or type(request.test_run) is not bool or type(request.rerun) is not int
         or request.test_run != (request.mode == "test")
         or (request.rerun < 1 if request.test_run else request.rerun != 0)
@@ -143,6 +148,20 @@ def _validate_request(request: EmailRequest) -> None:
         or request.mode != "official" and request.recipient.casefold() == TEAM_RECIPIENT
     ):
         raise EmailError("email_request_invalid")
+    if request.delivery_binding is None:
+        if request.mode == "official" and request.recipient != TEAM_RECIPIENT:
+            raise EmailError("email_recipient_isolation")
+    else:
+        from .automation_launch import validate_launch
+        binding = validate_launch(request.delivery_binding)
+        if (
+            binding["run_id"] != request.delivery_id
+            or binding["report_date"] != request.report_date
+            or binding["rerun"] != request.rerun
+            or (binding["report_mode"] == "test") is not request.test_run
+            or request.mode != "failure" and binding["to_address"] != request.recipient
+        ):
+            raise EmailError("email_delivery_binding_invalid")
     if request.report_access is not None:
         from .report_access import validate_descriptor
         validate_descriptor(request.report_access, request.delivery_id)
@@ -215,7 +234,7 @@ def prepare_email(
     report_context: ReviewedReportContext | None = None,
     region_display: str | None = None, source_revision: str | None = None,
     scoring_link: VerifiedScoringLink | None = None, agent_links: dict[str, str] | None = None,
-    report_access=None,
+    report_access=None, delivery_binding: dict | None = None,
 ) -> EmailRequest:
     """Prepare one private record (including the HTML preview), without sending.
 
@@ -224,9 +243,18 @@ def prepare_email(
     Test mode cannot select the team recipient or invoke any public sink.
     """
     team = _address(team_recipient)
+    if team != TEAM_RECIPIENT:
+        raise EmailError("email_recipient_isolation")
+    if delivery_binding is not None:
+        from .automation_launch import validate_launch
+        validate_launch(delivery_binding)
+        if source_revision is not None and source_revision != delivery_binding["source_revision"]:
+            raise EmailError("email_delivery_binding_invalid")
     mode = "test" if test_run else "official" if result.team_report_eligible else "failure"
     recipient = _address(
-        test_recipient if mode == "test" else team if mode == "official" else failure_recipient
+        test_recipient if mode == "test" else (
+            delivery_binding["to_address"] if delivery_binding is not None else team
+        ) if mode == "official" else failure_recipient
     )
     if mode != "official" and recipient.casefold() in {team.casefold(), TEAM_RECIPIENT}:
         raise EmailError("email_recipient_isolation")
@@ -241,8 +269,11 @@ def prepare_email(
     request = EmailRequest(
         delivery_id, recipient, subject, html, mode, report_date, test_run, rerun,
         dict(report_access.descriptor) if report_access is not None else None,
+        delivery_binding,
     )
     _validate_request(request)
+    from .automation_launch import validate_email_binding
+    validate_email_binding(outbox._runtime, request)
     with _LOCK:
         previous = _read(outbox, delivery_id, missing_ok=True)
         if previous is not None:

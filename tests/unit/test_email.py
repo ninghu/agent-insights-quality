@@ -73,7 +73,7 @@ def test_claim_before_send_replay_content_conflict_and_acceptance_not_delivery(t
         box = runtime.outbox("email")
         request = prepare(box)
         assert prepare(box) == request
-        with pytest.raises(StateConflict):
+        with pytest.raises(EmailError, match="email_recipient_isolation"):
             prepare(box, team_recipient="different-team@example.test")
         with pytest.raises(EmailError, match="claim_conflict"):
             record_email_outcome(

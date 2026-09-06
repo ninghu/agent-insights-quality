@@ -505,12 +505,21 @@ class RunIntegration:
         from .report_review import RetainedReviewContext
         from .reporting import render_private_markdown
         from .report_context import ReportMetadata
+        from .automation_launch import read_launch
 
         outbox = self.runtime.outbox("email")
         existing = outbox.read(self.run_id, missing_ok=True)
         if existing is not None:
             return read_email(outbox, self.run_id)
         frozen = self.records.read_completed("delivery-inputs", missing_ok=True)
+        binding = read_launch(self.runtime, self.run_id)
+        if binding is not None and (
+            binding["source_revision"] != source_revision
+            or binding["report_date"] != self.report_date.isoformat()
+            or (binding["report_mode"] == "test") is not self.test_run
+            or binding["rerun"] != rerun
+        ):
+            raise StateError("automation_delivery_binding_mismatch")
         context = load_report_context(self.root, allowed_units=self.allowed_units)
         if frozen is None:
             warnings = set(self.warnings)
@@ -609,6 +618,7 @@ class RunIntegration:
                 else unavailable_context("work_item_context_missing"),
                 "warnings": sorted(warnings), "recipient": recipient(),
                 "report_context": context.to_private_dict(),
+                **({"delivery_binding": binding} if binding is not None else {}),
                 "configured_assessor": configured,
                 "presentation": {
                     "assignments": context.assignments, "foundry_links": links,
@@ -643,5 +653,6 @@ class RunIntegration:
             report_context=context,
             scoring_link=scoring, agent_links=presentation.get("foundry_links"),
             report_access=access,
+            delivery_binding=frozen.get("delivery_binding"),
         )
         return read_email(outbox, self.run_id)

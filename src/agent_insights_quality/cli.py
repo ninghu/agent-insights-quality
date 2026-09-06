@@ -2,8 +2,8 @@
 
 Run commands construct qualification ports; private-report-flush opens only storage.
 Email commands cannot send.
-Test injection is Python-only; there is no CLI runtime-root or official-recipient override.
-An explicit single-recipient TEST input is validated and frozen before provider work.
+Test injection is Python-only; there is no CLI runtime-root override.
+Unified mode/destination inputs are validated and frozen before provider work.
 """
 
 from __future__ import annotations
@@ -36,8 +36,13 @@ def parser() -> argparse.ArgumentParser:
     staging.add_argument("--full", action="store_true")
     staging.add_argument("--new-run", action="store_true", help="Start a new full run after the previous full run completed")
     daily = commands.add_parser("run-daily", help="Run or resume today's Daily measurement")
-    daily.add_argument("--test-run", action="store_true")
-    daily.add_argument("--rerun", type=int, default=0)
+    daily.add_argument("--report-mode", choices=("test", "official"),
+                       help="Unified launch: automatic private TEST identity or official date singleton")
+    daily.add_argument("--to-address", metavar="TO_ADDRESS",
+                       help="One literal mailbox, required with --report-mode; frozen before traffic")
+    daily.add_argument("--test-run", action="store_true", default=None,
+                       help="Legacy private mode; requires a positive --rerun")
+    daily.add_argument("--rerun", type=int, default=None)
     daily.add_argument(
         "--test-to", metavar="TEST_TO_ADDRESS",
         help="One human-provided private TEST recipient; requires --test-run and positive --rerun. "
@@ -92,6 +97,28 @@ def parser() -> argparse.ArgumentParser:
 
 def _recipient(runtime) -> str:
     return configured_private_recipient(runtime)
+
+
+def _daily_arguments(args) -> None:
+    from .automation_launch import validate_input
+    unified = args.report_mode is not None or args.to_address is not None
+    if unified:
+        if any(value is not None for value in (
+            args.test_run, args.rerun, args.test_to, args.fresh_traffic,
+        )):
+            raise QualityError("automation_mixed_identity_flags")
+        validate_input(args.report_mode, args.to_address)
+        args.test_run = args.report_mode == "test"
+        args.rerun = 0
+        args.fresh_traffic = True if args.test_run else None
+    else:
+        args.test_run = bool(args.test_run)
+        args.rerun = args.rerun if args.rerun is not None else 0
+        if (args.rerun < 1 if args.test_run else args.rerun != 0):
+            raise QualityError("runner_test_identity_invalid")
+        validate_test_recipient_input(test_run=args.test_run, test_to=args.test_to)
+        if args.fresh_traffic and not args.test_run:
+            raise QualityError("fresh_traffic_requires_test_rerun")
 
 
 def _official_source(root: Path) -> None:
@@ -264,16 +291,36 @@ async def _run(
         ):
             raise QualityError("staging_policy_migration_invalid")
     test_run = is_daily and args.test_run
-    if is_daily and (args.rerun < 1 if test_run else args.rerun != 0):
+    unified = is_daily and getattr(args, "report_mode", None) is not None
+    if is_daily and not unified and (args.rerun < 1 if test_run else args.rerun != 0):
         raise QualityError("runner_test_identity_invalid")
     if is_daily and args.fresh_traffic and not test_run:
         raise QualityError("fresh_traffic_requires_test_rerun")
-    if is_daily and not test_run:
-        _official_source(catalog.root)
-    _committed_inputs(catalog.root)
-    revision = source_revision(catalog)
+    def checked_source():
+        if is_daily and not test_run and not unified:
+            _official_source(catalog.root)
+        _committed_inputs(catalog.root)
+        return source_revision(catalog)
+
+    launch = None
+    if unified:
+        from .automation_launch import resolve_launch
+        launch = resolve_launch(
+            runtime, report_mode=args.report_mode, to_address=args.to_address,
+            today=today, source=checked_source,
+            validate_new_source=(lambda: _official_source(catalog.root)) if not test_run else None,
+        )
+        today = date.fromisoformat(launch["report_date"])
+        args.rerun = launch["rerun"]
+        revision = launch["source_revision"]
+    else:
+        revision = checked_source()
     if is_daily:
         run_id = f"daily-{today.isoformat()}" + (f"-test-{args.rerun}" if test_run else "")
+        from .automation_launch import read_launch
+        retained_launch = read_launch(runtime, run_id)
+        if retained_launch is not None and retained_launch["source_revision"] != revision:
+            raise QualityError("automation_resume_source_changed")
         targets = select_daily(catalog, today, test_run=test_run)
         selections = None
     else:
@@ -282,7 +329,8 @@ async def _run(
         targets = tuple(item.target for item in selections)
     records = runtime.run(run_id)
     private_recipient = freeze_private_recipient(
-        runtime, run_id, test_run=test_run, test_to=getattr(args, "test_to", None),
+        runtime, run_id, test_run=test_run,
+        test_to=launch["to_address"] if launch and test_run else getattr(args, "test_to", None),
     ) if is_daily else None
     if is_daily and (
         records.read_completed("delivery-inputs", missing_ok=True) is None
@@ -506,9 +554,7 @@ def main(
     integrations = RunIntegration if integrations is None else integrations
     try:
         if args.command == "run-daily":
-            if (args.rerun < 1 if args.test_run else args.rerun != 0):
-                raise QualityError("runner_test_identity_invalid")
-            validate_test_recipient_input(test_run=args.test_run, test_to=args.test_to)
+            _daily_arguments(args)
         if staging_policy_migration is not None and args.command != "run-staging":
             raise QualityError("staging_policy_migration_invalid")
         if args.command in {"validate", "generate-docs"}:

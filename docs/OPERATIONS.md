@@ -22,7 +22,7 @@ python -m agent_insights_quality validate
 python -m agent_insights_quality generate-docs
 python -m agent_insights_quality run-staging
 python -m agent_insights_quality run-staging --full
-python -m agent_insights_quality run-daily --test-run --rerun <new-positive-integer> --fresh-traffic
+python -m agent_insights_quality run-daily --report-mode test --to-address "<TO_ADDRESS>"
 python -m agent_insights_quality status --profile staging
 python -m agent_insights_quality status --profile daily
 ```
@@ -30,6 +30,12 @@ python -m agent_insights_quality status --profile daily
 `generate-docs` updates `AGENT_CATALOG.md` and `ISSUE_CATALOG.md`; it never rewrites traffic
 or expected behavior. Runtime commands now use the replacement runner; there is no legacy
 fallback. Production readiness still requires the candidate's deployed trial and TEST email.
+Daily automation uses [one bootstrap](../.github/copilot/daily-bootstrap-prompt.md): only
+REPORT_MODE (`test` or `official`) and one literal TO_ADDRESS, with no human test counter.
+`run-daily --help` lists the unified and retained legacy forms; never mix their identity flags.
+Eligible official mail uses its initialized, immutable To; official failure notices always use
+the separately frozen private configuration fallback, not the official distribution.
+Legacy official mail retains TEAM_RECIPIENT. See [routing and launch records](AUTOMATION_SETUP.md).
 
 ## Staging qualification and diagnostics
 
@@ -59,12 +65,18 @@ Insights, Daily score, report email or quality-publication rows.
 
 ## Recovery
 
-For an explicitly requested new private measurement, use a new nonzero `--rerun` identity
-with `--test-run --fresh-traffic`. This bypasses previous-trial traffic reuse without deleting
-earlier evidence. Repeating the same run resumes its frozen intent and completed checkpoints,
-even when the flag is omitted; it does not generate another fresh measurement. An unfinished
-fresh run cannot silently switch source. Ordinary official new-day runs remain fresh without
-this private-only flag.
+For unified automation, Python allocates a positive TEST identity above retained run/outbox
+numbers and freezes its exact source, date, mode and destination before providers. The same
+command resumes that identity across midnight while unfinished/prepared/claimed/unknown.
+Only accepted/delivered/definitively rejected email evidence releases it for a later new TEST;
+process completion and prepared mail are not authorization for another run. Never change
+source, mode or To to bypass recovery. Official mode retains the weekday/date singleton.
+Use the frozen source worktree for recovery, not a freshly advanced main.
+
+Legacy manually numbered trials remain supported with `--test-run --rerun` and optional
+`--fresh-traffic`. A new positive legacy identity with fresh traffic bypasses earlier-trial
+reuse without deleting evidence. Its repeated command resumes frozen intent even when that
+flag is omitted. An unfinished fresh run cannot silently switch source.
 
 Repeat the same command to resume matching work. Do not manually invent generation IDs, clear
 state, delete Agent objects or resend completed traffic. A code/scenario change selects affected
@@ -83,7 +95,7 @@ Preserve pending deployment/session/Insights records after an interrupted reques
 POSTs are not safe to repeat. Native Insights submission keys and their exact request bodies are
 reused when supported. A definitively rejected submission gets a fresh key and recomputed lookback;
 uncertain window coverage is excluded from Engine scoring, not counted as a missed issue.
-A new email delivery test uses an explicit nonzero rerun identity; an
+A new automatic TEST reserves its own nonzero rerun identity; an
 ambiguous previous send is reconciled, never sent again blindly.
 
 ## Email presentation and local review

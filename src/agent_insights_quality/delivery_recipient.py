@@ -1,7 +1,7 @@
 """Freeze one human-provided private destination before Daily provider work.
 
-This is the TEST recipient and the official failure-notice fallback, never an
-official team-mail override. It neither prepares nor changes email requests.
+This is the TEST recipient and the official failure-notice fallback. Explicit
+official routing is separately bound by automation_launch, never by this default.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ _SOURCES = {
 }
 
 
-def _private_address(value: str | None) -> str:
+def literal_address(value: str | None) -> str:
     address = _address(value)
     local, domain = address.rsplit("@", 1)
     if (
@@ -28,11 +28,16 @@ def _private_address(value: str | None) -> str:
     ):
         raise QualityError("email_recipient_invalid")
     if (
-        "test_to_address" in address.casefold()
+        "to_address" in address.casefold()
         or "new_positive_rerun" in address.casefold()
         or any(marker in address for marker in ("{", "}"))
     ):
         raise QualityError("private_recipient_placeholder")
+    return address
+
+
+def _private_address(value: str | None) -> str:
+    address = literal_address(value)
     if address.casefold() == TEAM_RECIPIENT.casefold():
         raise QualityError("email_recipient_isolation")
     return address
@@ -82,6 +87,27 @@ def _check_identity(value: dict, identity: dict) -> None:
         raise QualityError("delivery_recipient_identity_mismatch")
 
 
+def read_private_recipient(runtime: RuntimeStore, run_id: str, *, test_run: bool) -> str:
+    """Read a strict frozen fallback without configuration or write-side recovery."""
+    frozen = runtime.run(run_id).read_completed(_KEY)
+    _validate_frozen(frozen, run_id, _identity(runtime, run_id, test_run))
+    return _private_address(frozen["recipient"])
+
+
+def _validate_frozen(frozen: dict, run_id: str, identity: dict) -> None:
+    if set(frozen) != {
+        "schema_version", "purpose", "run_id", "report_date", "test_run",
+        "rerun", "recipient", "source",
+    } or (
+        frozen["schema_version"] != "1.0.0"
+        or frozen["purpose"] != "daily_private_recipient"
+        or frozen["run_id"] != run_id
+        or not isinstance(frozen["source"], str) or frozen["source"] not in _SOURCES
+    ):
+        raise QualityError("private_recipient_record_invalid")
+    _check_identity(frozen, identity)
+
+
 def freeze_private_recipient(
     runtime: RuntimeStore, run_id: str, *, test_run: bool, test_to: str | None = None,
 ) -> str:
@@ -114,27 +140,15 @@ def freeze_private_recipient(
                 raise QualityError("delivery_recipient_identity_mismatch")
         retained: list[tuple[str, str]] = []
         if frozen is not None:
-            if set(frozen) != {
-                "schema_version", "purpose", "run_id", "report_date", "test_run",
-                "rerun", "recipient", "source",
-            } or (
-                frozen["schema_version"] != "1.0.0"
-                or frozen["purpose"] != "daily_private_recipient"
-                or frozen["run_id"] != run_id
-                or not isinstance(frozen["source"], str) or frozen["source"] not in _SOURCES
-            ):
-                raise QualityError("private_recipient_record_invalid")
-            _check_identity(frozen, identity)
+            _validate_frozen(frozen, run_id, identity)
             retained.append((_private_address(frozen["recipient"]), frozen["source"]))
         if delivery is not None:
             _check_identity(delivery, identity)
             retained.append((_private_address(delivery.get("recipient")), "delivery_inputs"))
         if email is not None:
             _check_identity(email.request.to_private_dict(), identity)
-            if email.request.mode == "official":
-                if email.request.recipient.casefold() != TEAM_RECIPIENT.casefold():
-                    raise QualityError("email_recipient_isolation")
-            else:
+            # read_email already verifies fixed legacy or explicitly bound official routing.
+            if email.request.mode != "official":
                 retained.append((_private_address(email.request.recipient), "email_request"))
 
         if retained:

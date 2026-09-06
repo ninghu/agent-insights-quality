@@ -211,6 +211,143 @@ def test_recipient_checkpoint_failure_prevents_provider_work(app, capsys, monkey
     assert "checkpoint" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("arguments", [
+    ["--report-mode", "test"],
+    ["--to-address", "literal@example.test"],
+    ["--report-mode", "test", "--to-address", "<TO_ADDRESS>"],
+    ["--report-mode", "official", "--to-address", "TO_ADDRESS@example.test"],
+    ["--report-mode", "test", "--to-address", TEAM_RECIPIENT],
+    ["--report-mode", "test", "--to-address", "a@example.test;b@example.test"],
+    ["--report-mode", "official", "--to-address", "a@example.test\r\nBcc: b@example.test"],
+    *[
+        ["--report-mode", "test", "--to-address", "literal@example.test", *legacy]
+        for legacy in (
+            ["--test-run"], ["--rerun", "0"], ["--rerun", "1"],
+            ["--fresh-traffic"], ["--test-to", "literal@example.test"],
+        )
+    ],
+])
+def test_unified_invalid_or_mixed_inputs_fail_before_runtime_or_source(arguments, monkeypatch, capsys):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Invalid unified input reached runtime/source")
+    monkeypatch.setattr(cli, "_catalog", forbidden)
+    monkeypatch.setattr(cli, "_official_source", forbidden)
+    assert cli.main(["run-daily", *arguments], runtime_factory=forbidden) == 2
+    error = capsys.readouterr()
+    assert "blocked" in error.err and "@" not in error.err + error.out
+
+
+@pytest.mark.parametrize("mode", ["", "formal", "TEST", "failure"])
+def test_unified_mode_choices_fail_before_runtime(mode):
+    with pytest.raises(SystemExit):
+        cli.main(
+            ["run-daily", "--report-mode", mode, "--to-address", "literal@example.test"],
+            runtime_factory=lambda *_: pytest.fail("Invalid mode reached runtime"),
+        )
+
+
+def test_unified_help_lists_exact_modes_without_sdk_imports():
+    result = subprocess.run(
+        [sys.executable, "-m", "agent_insights_quality", "run-daily", "--help"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+    assert "--report-mode {test,official}" in result.stdout
+    assert "--to-address TO_ADDRESS" in result.stdout and "--test-run" in result.stdout
+
+
+@pytest.mark.parametrize("key", ["active", "launches/", "delivery-recipient", "traffic-intent"])
+def test_unified_checkpoint_failure_prevents_ports_and_traffic(app, monkeypatch, capsys, key):
+    save = RecordStore._save
+    def fail(records, collection, name, value):
+        if name.startswith(key):
+            raise CheckpointError()
+        return save(records, collection, name, value)
+    monkeypatch.setattr(RecordStore, "_save", fail)
+    assert app.cli(
+        "run-daily", "--report-mode", "test", "--to-address", "literal@example.test",
+    ) == 2
+    assert "checkpoint" in capsys.readouterr().err
+    assert not app.port_calls and not app.cloud.invocations and not app.cloud.starts
+
+
+def test_unified_test_pipeline_resumes_prepared_claimed_unknown_across_midnight(app, monkeypatch, capsys):
+    from agent_insights_quality.email import claim_email, record_email_outcome
+    address = "literal@example.test"
+    command = ("run-daily", "--report-mode", "test", "--to-address", address)
+    monkeypatch.setattr(cli, "_official_source", lambda *_: pytest.fail("TEST switched to main"))
+    assert app.cli(*command) == 0
+    first, _ = last_json(capsys)
+    delivery = first["delivery_id"]
+    request = read_email(app.store.outbox("email"), delivery).request
+    assert request.delivery_binding["to_address"] == address and request.rerun == 1
+    records = app.store.run(delivery)
+    assert records.read_completed("traffic-intent") == {
+        "fresh_traffic": True, "reuse_run_id": None, "source_revision": "a" * 40,
+    }
+    counts = len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)
+    for status in ("prepared", "claimed", "unknown"):
+        with app.store.ownership():
+            if status == "claimed":
+                claim_email(app.store.outbox("email"), delivery, claim_id="native")
+            elif status == "unknown":
+                record_email_outcome(
+                    app.store.outbox("email"), delivery, claim_id="native", outcome="unknown",
+                    provider_result={"synthetic": "ambiguous submission"},
+                )
+        assert app.cli(*command, day=date(2026, 9, 7)) == 0
+        resumed, _ = last_json(capsys)
+        assert resumed["delivery_id"] == delivery and resumed["email_status"] == status
+        assert read_email(app.store.outbox("email"), delivery).request == request
+    monkeypatch.setattr(runner, "source_revision", lambda _: "b" * 40)
+    assert app.cli(*command) == 2
+    assert "automation_resume_source_changed" in capsys.readouterr().err
+    monkeypatch.setattr(runner, "source_revision", lambda _: "a" * 40)
+    assert app.cli(*command[:-1], "changed@example.test") == 2
+    assert "automation_unfinished_input_conflict" in capsys.readouterr().err
+    assert (len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)) == counts
+    assert app.cli("status") == 0
+    status, _ = last_json(capsys)
+    output = json.dumps(first) + json.dumps(resumed) + json.dumps(status)
+    output += (records.directory / "runner.log").read_text() + (records.directory / "events.jsonl").read_text()
+    assert address not in output and "to_address" not in output and "report_mode" not in output
+    assert not app.store.outbox("events").directory.exists()
+    assert not app.store.outbox("publication").directory.exists()
+    assert not (app.catalog.root / "reports").exists()
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_unified_official_custom_to_or_private_failure_and_immutable_recovery(app, monkeypatch, capsys, failed):
+    monkeypatch.setattr(cli, "_official_source", lambda _: None)
+    if failed:
+        app.cloud.ready_count = 0
+        settings = app.catalog.root / "config"
+        settings.mkdir(parents=True)
+        (settings / "runtime.json").write_text(json.dumps({"hydration_seconds": 0}))
+    address = "authorized-official@example.test"
+    command = ("run-daily", "--report-mode", "official", "--to-address", address)
+    assert app.cli(*command) == (2 if failed else 0)
+    first, _ = last_json(capsys)
+    delivery = first["delivery_id"]
+    request = read_email(app.store.outbox("email"), delivery).request
+    assert request.recipient == ("synthetic@example.invalid" if failed else address)
+    assert request.mode == ("failure" if failed else "official")
+    assert request.rerun == 0 and not request.test_run
+    assert request.delivery_binding["to_address"] == address
+    before = app.store.outbox("email")._path("progress", delivery).read_bytes()
+    counts = len(app.port_calls), len(app.cloud.invocations)
+    (app.store.root / "config" / "email-recipient.json").unlink()
+    assert app.cli(*command) == (2 if failed else 0)
+    last_json(capsys)
+    assert app.cli("run-daily") == (2 if failed else 0)
+    last_json(capsys)
+    assert app.store.outbox("email")._path("progress", delivery).read_bytes() == before
+    assert (len(app.port_calls), len(app.cloud.invocations)) == counts
+    assert app.cli(*command[:-1], "changed@example.test") == 2
+    assert "automation_unfinished_input_conflict" in capsys.readouterr().err
+    assert (len(app.port_calls), len(app.cloud.invocations)) == counts
+
+
 def test_legacy_email_without_delivery_inputs_cannot_trigger_remeasurement(app, capsys):
     assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
     value, _ = last_json(capsys)

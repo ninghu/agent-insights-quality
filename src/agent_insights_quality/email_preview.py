@@ -154,7 +154,9 @@ def _frozen_inputs(runtime, request):
     }
     if (
         not required <= frozen.keys()
-        or frozen.keys() - required - {"configured_assessor", "work_item_context", "presentation"}
+        or frozen.keys() - required - {
+            "configured_assessor", "work_item_context", "presentation", "delivery_binding",
+        }
         or frozen["test_run"] is not request.test_run
         or type(frozen["rerun"]) is not int or frozen["rerun"] != request.rerun
         or frozen["report_date"] != request.report_date
@@ -163,6 +165,10 @@ def _frozen_inputs(runtime, request):
         or not isinstance(frozen["warnings"], list)
     ):
         raise PreviewError("email_preview_frozen_invalid")
+    if frozen.get("delivery_binding") != request.delivery_binding:
+        raise PreviewError("email_preview_delivery_mismatch")
+    from .automation_launch import validate_email_binding
+    validate_email_binding(runtime, request)
     if _address(frozen["recipient"]).casefold() == TEAM_RECIPIENT:
         raise PreviewError("email_preview_delivery_mismatch")
     if "work_item_context" in frozen:
@@ -225,8 +231,11 @@ def _frozen_inputs(runtime, request):
         if presentation.get("report_access") != request.report_access:
             raise PreviewError("email_preview_delivery_mismatch")
     mode = "test" if request.test_run else "official" if result.team_report_eligible else "failure"
+    official_recipient = (
+        request.delivery_binding["to_address"] if request.delivery_binding else TEAM_RECIPIENT
+    )
     if request.mode != mode or request.recipient != (
-        TEAM_RECIPIENT if mode == "official" else frozen["recipient"]
+        official_recipient if mode == "official" else frozen["recipient"]
     ):
         raise PreviewError("email_preview_delivery_mismatch")
     # Bind the frozen plan and source to this run, not a later result or reused lane.

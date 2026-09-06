@@ -52,19 +52,25 @@ def quality(*, failed=False, scoring_policy=None):
     return aggregate_results(plan, () if failed else measured, **kwargs), plan
 
 
-def seed(runtime, *, mode="test", frozen=True, mutate=None, status="prepared", html=None, scoring_policy=None):
+def seed(
+    runtime, *, mode="test", frozen=True, mutate=None, status="prepared", html=None,
+    scoring_policy=None, delivery_binding=None,
+):
     failed = mode in {"failure", "failed-test"}
     test_run = mode in {"test", "failed-test"}
     result, plan = quality(failed=failed, scoring_policy=scoring_policy)
     delivery_id = "daily-" + DAY + ("-test-2" if test_run else "")
     request = EmailRequest(
-        delivery_id, PRIVATE if test_run or failed else TEAM_RECIPIENT,
+        delivery_id, PRIVATE if test_run or failed else (
+            delivery_binding["to_address"] if delivery_binding else TEAM_RECIPIENT
+        ),
         "[TEST Full] Original frozen subject — café ☕",
         html or (
             "<!doctype html><html><body><h1>Original frozen presentation — café ☕</h1>"
             f"<p>Original score: {result.score}</p></body></html>"
         ),
         "test" if test_run else mode, DAY, test_run, 2 if test_run else 0,
+        delivery_binding=delivery_binding,
     )
     with runtime.ownership():
         box = runtime.outbox("email")
@@ -89,6 +95,7 @@ def seed(runtime, *, mode="test", frozen=True, mutate=None, status="prepared", h
                 "warnings": ["work_item_unavailable"], "recipient": PRIVATE,
                 "report_context": load_report_context(ROOT, allowed_units=plan).to_private_dict(),
                 "configured_assessor": None,
+                **({"delivery_binding": delivery_binding} if delivery_binding is not None else {}),
             }
             if mutate:
                 mutate(inputs)
@@ -140,6 +147,37 @@ def test_exact_exports_preserve_prepared_fields_and_every_existing_record(runtim
     assert manifest["measurement_source_revision"] == SOURCE
     assert preview.directory.parent.parent == runtime.directory / "previews"
     assert originals(runtime) == before
+
+
+@pytest.mark.parametrize("mode", ["official", "failure"])
+@pytest.mark.parametrize("policy_name", ["v1", "v2"])
+def test_unified_official_routing_survives_exact_restyle_and_rescore_preview(runtime, mode, policy_name):
+    from datetime import date
+    from agent_insights_quality.automation_launch import resolve_launch
+    from agent_insights_quality.delivery_recipient import freeze_private_recipient
+    from agent_insights_quality.scoring import SCORING_POLICY, LEGACY_SCORING_POLICY
+    with runtime.ownership():
+        config = runtime.root / "config" / "email-recipient.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({
+            "schema_version": "1.0.0", "purpose": "daily_test", "recipient": PRIVATE,
+        }))
+        launch = resolve_launch(
+            runtime, report_mode="official", to_address="authorized-official@example.test",
+            today=date.fromisoformat(DAY), source=lambda: SOURCE,
+        )
+        freeze_private_recipient(runtime, launch["run_id"], test_run=False)
+    request, _, _ = seed(
+        runtime, mode=mode, delivery_binding=launch,
+        scoring_policy=LEGACY_SCORING_POLICY if policy_name == "v1" else SCORING_POLICY,
+    )
+    before = originals(runtime)
+    for flags in ({}, {"restyle": True}, {"restyle": True, "rescore": True}):
+        preview = exported(runtime, request, **flags)
+        assert str(message(preview)["To"]) == request.recipient
+        assert originals(runtime) == before
+    with runtime.ownership():
+        assert email.claim_email(runtime.outbox("email"), request.delivery_id, claim_id="native") == request
 
 
 def test_restyle_uses_frozen_result_current_style_and_distinct_local_identity(runtime):

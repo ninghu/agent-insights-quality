@@ -94,7 +94,8 @@ staging/Daily fallbacks or stale procedural docs/skills as new authority.
   mail is blocked; explicit access refresh never rewrites or resends it. Keep normal
   source/catalog/scoring reviews and historical public validation.
 - Acceptance requires a real private TEST email with recomputable counts, evidence-backed gaps
-  and disclosed coverage. Explicit test mode uses `--test-run` and a nonzero rerun identity,
+  and disclosed coverage. Unified `run-daily --report-mode test --to-address` allocates and
+  freezes a private nonzero rerun; legacy `--test-run --rerun` remains supported. TEST
   sends only to the private test recipient, and writes private reports/previews/evidence/logs only:
   no public report/trend, ADX writes, generated PR or official team email.
 - Provider acceptance alone is not inbox-delivery proof. The USER enables weekday automation
@@ -102,6 +103,11 @@ staging/Daily fallbacks or stale procedural docs/skills as new authority.
 - Claim the prepared email request before the app sends it, then persist the send outcome.
   An interrupted/ambiguous send is reconciled, not retried blindly. Do not choose recipients or
   rewrite report content in the automation prompt.
+- The single bootstrap accepts only REPORT_MODE (`test|official`) and one literal TO_ADDRESS.
+  Python freezes source/mode/routing before providers. Pending/prepared/claimed/unknown automatic
+  launches resume unchanged across midnight; only terminal email evidence permits a new TEST.
+  Eligible unified official mail uses its frozen explicit To; official failures always use the
+  separate frozen private fallback. Legacy eligible official mail retains TEAM_RECIPIENT.
 
 ## Local development
 
