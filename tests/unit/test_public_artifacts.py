@@ -67,8 +67,9 @@ def test_historical_public_rendering_remains_deterministic(repository):
     for target in targets:
         assert target.unit_id.logical_version in markdown
         assert f'id="{target.unit_id.agent}"' in markdown
-    assert "No unexpected finding" in markdown
-    assert "Expected defect detected" in markdown
+    assert "No unexpected finding" not in markdown
+    assert "Expected defect detected" not in markdown
+    assert "Expected issue: Detected" in markdown
     assert "card-0001: expected_detection (scored)" not in markdown
 
 
