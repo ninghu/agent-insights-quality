@@ -42,6 +42,9 @@ staging/Daily fallbacks or stale procedural docs/skills as new authority.
   violation; probability-tolerant issues use their reviewed threshold, currently eight of ten.
   Assess all ten, distinguish PASS/FAIL/INCOMPLETE, and never resample misses to force a pass.
   Record the staging policy used; retain historical six-of-ten results without relabeling them.
+- Staging root hygiene separately rejects proven independent extra Agent defects. Material
+  unresolved candidates or inadequate evidence stay INCOMPLETE; legacy hygiene is NOT_EVALUATED.
+  Same-root symptoms and correctly handled operational failures are not extra Agent defects.
 - Staging creates no Insights runs, Daily score, team email or quality-publication rows.
   There is no staging PASS admission gate, digest chain, promotion receipt or staging-to-Daily
   approval ceremony. Ordinary source review remains required.
