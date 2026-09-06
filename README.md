@@ -32,16 +32,21 @@ Every baseline/issue owns complete deployable source; no runtime issue selectors
 - Staging tests changed or missing targets. The initial full inventory is five baselines plus
   36 issues, with ten attempts each and no deployed paired-v0. Qualification requires eight
   adequately evidenced observations; a proven baseline or deterministic-contract violation
-  still disqualifies the version. Staging policy changes do not rewrite historical results.
+  still disqualifies the version. Scoped single-root hygiene separately checks for additional
+  independent Agent defects; unresolved material candidates or inadequate evidence stay
+  incomplete. Staging policy changes do not rewrite historical results.
 - Daily runs all five Agents concurrently. Within each Agent, baseline and four rotated issue
   versions run sequentially, with six attributable trace-present attempts required out of ten.
 - Sol assesses raw evidence directly. Correctness, Noise and Duplicate classification are separate
   from execution failure. Candidate gaps receive a bounded no-new-traffic evidence review.
 - The score is `100 * C / (E_scored + N_scored + 0.25 * D_scored)`. Baseline penalties count;
-  severity and suggested fixes are diagnostic. At most two unscorable version units permit an
-  explicitly Partial report.
+  severity and suggested fixes are diagnostic. At most two unscorable version units permit a
+  report with numeric coverage and exclusion reasons, without visible Full/Partial labels.
 - Python owns orchestration and checkpoints. Copilot app automation launches it and performs only
   the final send from the generated recipient/HTML request. The user enables the weekday schedule.
+- Reports are archived in existing private Storage, with a separate compact report per Agent
+  and approved expiring read-only links. Generated reports do not create Git branches, PRs or
+  merges; source and catalog changes still require normal review.
 
 Both environments reuse their Sweden Central Accounts/Projects and Agent objects:
 `aiq-staging-swedencentral` and `aiq-daily-swedencentral`.
@@ -66,6 +71,16 @@ they are not collected by default.
 See [Operations](docs/OPERATIONS.md) for staging, Daily and checkpoint recovery,
 [Quality rules](docs/QUALITY_BAR.md) for evidence/scoring, and
 [App automation](docs/AUTOMATION_SETUP.md) for the one-command launch and email handoff.
+
+## Skills
+
+Skills are thin task entry points, not another orchestrator or a duplicate policy authority.
+
+| Task | Skill |
+| --- | --- |
+| Maintain an Agent or issue; explicitly review inventory changes | [maintain-test-agents](.github/skills/maintain-test-agents/SKILL.md) |
+| Launch authorized staging or resume its checkpoints | [staging-qualification](.github/skills/staging-qualification/SKILL.md) |
+| Launch Daily and hand off the exact prepared email | [agent-insights-quality-daily](.github/skills/agent-insights-quality-daily/SKILL.md) |
 
 Application Insights is read-only. Formal qualification invokes deployed endpoints.
 Credentials, raw evidence, provider identifiers, checkpoints, logs and email requests stay under

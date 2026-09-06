@@ -1,7 +1,8 @@
 # Interpreting Insight results
 
-Read the numeric score alongside coverage and confirmed quality gaps. A high Partial score does not
-establish the same coverage as a Full score.
+Read the numeric score alongside scored/planned coverage, exclusions and confirmed quality gaps.
+A high score with excluded units does not establish the same coverage as a fully measured run.
+Full/Partial remain internal coverage classifications, not visible report labels.
 
 The adapter captures detailed cards before and after each Insights run. Current contributions are
 separate from unchanged history. Cards do not need a per-card run ID, and their links may accumulate
@@ -34,5 +35,12 @@ Confirm that evidence was visible for the actual analysis window before calling 
 Engine gap. Late telemetry, untriggered Agent defects, malformed execution and incomplete evidence
 must not be blamed on the Insight Engine.
 
-Detailed reproduction/evidence references stay private. Public reports contain approved aliases,
-counts and explanations only. See [Quality rules](QUALITY_BAR.md) for score and exclusion semantics.
+Review the private per-Agent report's five version rows alongside its saved classifications and
+short Notes. The report never silently rejudges a card; an unexpected real finding may require an
+Agent fix, further clarification or no Agent action when recovery was correct.
+
+Detailed reproduction/evidence references stay private. New reports are archived in private
+Storage; approved expiring links grant read access to individual Agent files. They are not public
+reports or generated-report PRs. Historical public reports remain unchanged, and optional official
+ADX receives only its allowlisted projection. See [Quality rules](QUALITY_BAR.md) for score and
+exclusion semantics and [Operations](OPERATIONS.md) for report access and recovery.

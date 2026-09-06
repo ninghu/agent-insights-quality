@@ -1,10 +1,19 @@
 # Operations
 
-Use an authenticated local environment. Keep configuration and generated private artifacts under
-`$HOME\.aiq-runtime\agent-insights-quality\`, never in the repository.
+Use an authenticated local environment. Keep secrets, environment-specific configuration and
+generated private artifacts under `$HOME\.aiq-runtime\agent-insights-quality\`, never in Git.
+Public-safe runner settings in source `config/runtime.json` are different: review and commit
+them before launch. Never bypass the source-integrity check with an ignored local override.
 
 Set `PYTHONPATH` to the active source checkout before repository Python commands. Official automation
 uses a fresh latest-main worktree; a private trial uses the candidate being evaluated.
+Confirm module resolution and the intended Azure CLI subscription before live work. On a shared
+machine, use an operator-prepared private `AZURE_CONFIG_DIR` for the environment rather than
+changing the shared default subscription. Set it in each new process; keep its credentials private.
+
+The [three repository skills](../README.md#skills) are thin workflow entry points. Source changes
+follow [Contributing](../CONTRIBUTING.md); evidence, classification and scoring follow
+[Quality rules](QUALITY_BAR.md). Neither skills nor app prompts replace the Python orchestrator.
 
 ## Entry points
 
@@ -13,7 +22,7 @@ python -m agent_insights_quality validate
 python -m agent_insights_quality generate-docs
 python -m agent_insights_quality run-staging
 python -m agent_insights_quality run-staging --full
-python -m agent_insights_quality run-daily --test-run --rerun 1
+python -m agent_insights_quality run-daily --test-run --rerun <new-positive-integer> --fresh-traffic
 python -m agent_insights_quality status --profile staging
 python -m agent_insights_quality status --profile daily
 ```
@@ -21,6 +30,20 @@ python -m agent_insights_quality status --profile daily
 `generate-docs` updates `AGENT_CATALOG.md` and `ISSUE_CATALOG.md`; it never rewrites traffic
 or expected behavior. Runtime commands now use the replacement runner; there is no legacy
 fallback. Production readiness still requires the candidate's deployed trial and TEST email.
+
+## Staging qualification and diagnostics
+
+Run staging only on an explicitly authorized committed candidate. Python selects affected
+targets and applies the recorded [staging and single-root policy](QUALITY_BAR.md#staging).
+Expected activation and additional findings remain separate. Preserve FAIL, INCOMPLETE and
+historical NOT_EVALUATED hygiene rather than interpreting a missing finding as a clean result.
+The app must not add assessments or resample traffic to change a qualification outcome.
+
+Use the [trace-context audit](#caller-invocation-context) on retained results for propagation
+diagnostics. An explicitly authorized [session preparation trial](STAGING_PREPARATION_TRIAL.md)
+can exercise the bounded Travel lookahead inside normal staging, followed by its read-only audit.
+Neither audit changes a judgment, creates traffic or enables Daily. Staging generates no
+Insights, Daily score, report email or quality-publication rows.
 
 ## Recovery
 
@@ -355,12 +378,14 @@ restart can change context, so the comparison never changes readiness or exclusi
 Caller uniqueness is not proof of end-to-end propagation. Keep the platform outcome
 unknown until the fresh staging evidence supports acceptance; do not silently claim
 the platform honored the header. Ten attempts, six Daily readiness, eight-observation
-staging qualification, scoring and the default-off Travel session lookahead are unchanged.
+staging expected-observation requirements and scoring are unchanged. The lookahead settings
+have default zero; a separately reviewed configuration may opt into the staging trial.
 
 Daily keeps five Agent lanes and sequential versions within each lane. Independent attempts
 use up to `daily_attempt_workers` (default 4), under the shared `daily_attempt_budget` (default 10).
 Each attempt's setup and verification turns remain ordered. Travel business attempts remain
-serial because its graph-wide booking ledger is shared; staging remains serial per target.
+serial because its graph-wide booking ledger is shared; staging business calls remain serial
+per target even when next-session preparation is explicitly enabled.
 Completed immutable evidence/card snapshots enter the four-worker assessment pipeline immediately,
 while other safe lane work continues. Final aggregation waits for both execution and assessment.
 
@@ -420,9 +445,10 @@ Staging uses `aiq-staging-swedencentral`; Daily uses `aiq-daily-swedencentral`. 
 objects and separate g30 telemetry. The canonical deployment registry is in the dedicated
 Sweden private `deployment-registries` blob container. There is no legacy-region/storage fallback.
 
-Staging never runs Agent Insights, scores Daily cards or sends a team report. It may emit safe
-operational events. An email-only Daily test writes private evidence/previews/logs and sends only
-to the configured private recipient: no public report, ADX writes or generated PR.
+Staging never runs Agent Insights, scores Daily cards or sends a report email. It may emit safe
+operational events. A TEST Daily still performs qualification, but keeps evidence, previews,
+logs and approved report archives private; its email is only for the configured private
+recipient. It creates no public report, ADX writes, generated PR or official latest update.
 
 When blocked by access, a provider capability or an ambiguous outcome, keep checkpoints and surface
 the specific decision needed. Continue unrelated safe work rather than hiding the blocker or
