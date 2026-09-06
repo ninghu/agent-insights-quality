@@ -8,6 +8,7 @@ permissions:
   contents: read
 
 jobs:
+  # Retained validation only. Daily no longer creates report branches or PRs.
   validate-generated-paths:
     runs-on: ubuntu-latest
     steps:

@@ -205,7 +205,7 @@ def _frozen_inputs(runtime, request):
         from .report_links import validate_foundry_link
         presentation = frozen["presentation"]
         if (
-            not isinstance(presentation, dict) or set(presentation) != {
+            not isinstance(presentation, dict) or set(presentation) - {"report_access"} != {
                 "assignments", "foundry_links", "scoring_link", "blockers", "private_report_artifact",
             }
             or not isinstance(presentation["assignments"], dict)
@@ -218,6 +218,8 @@ def _frozen_inputs(runtime, request):
             raise PreviewError("email_preview_frozen_invalid")
         for href in presentation["foundry_links"].values():
             validate_foundry_link(href)
+        if presentation.get("report_access") != request.report_access:
+            raise PreviewError("email_preview_delivery_mismatch")
     mode = "test" if request.test_run else "official" if result.team_report_eligible else "failure"
     if request.mode != mode or request.recipient != (
         TEAM_RECIPIENT if mode == "official" else frozen["recipient"]
@@ -288,6 +290,7 @@ def _renderer_provenance(root: Path) -> dict:
             "email_preview.py", "email.py", "reporting.py", "report_context.py",
             "privacy.py", "results.py", "scoring.py", "work_items.py",
             "report_review.py", "report_links.py",
+            "report_access.py",
         )
     }
     return {
@@ -396,6 +399,11 @@ def export_email_preview(
         scoring_link = VerifiedScoringLink(root, scoring_revision)
     if restored is not None:
         frozen, plan, result, metadata = restored
+        if request.report_access is not None:
+            from .report_access import read_report_access
+            access = read_report_access(runtime, request.report_access, delivery_id=delivery_id)
+            if access.expired():
+                blockers.append("report_access_expired_needs_explicit_new_revision")
         current = None
         if restyle:
             current = load_report_context(root, allowed_units=plan)
@@ -427,6 +435,15 @@ def export_email_preview(
             report_context=current, metadata=metadata, delivery_id=delivery_id,
         )
         detail_kind = "frozen_result"
+        if not restyle and "presentation" in frozen:
+            retained_report = runtime.run(delivery_id).read_artifact("presentation/report")
+            if (
+                retained_report.get("format") != "markdown" or retained_report.get("private") is not True
+                or not isinstance(retained_report.get("markdown"), str)
+            ):
+                raise PreviewError("email_preview_frozen_invalid")
+            markdown = retained_report["markdown"]
+            detail_kind = "frozen_private_markdown"
         if restyle:
             review = RetainedReviewContext(runtime, delivery_id, result)
             if "presentation" in frozen:

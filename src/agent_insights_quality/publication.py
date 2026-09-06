@@ -259,7 +259,7 @@ class PublicationOutbox:
         return request
 
     def read_request(self, identity: str) -> dict[str, Any] | None:
-        """Read the validated DTO for a future app-native publication step."""
+        """Read the validated ADX DTO; never an app/GitHub upload request."""
         if self.test_run:
             return None
         self._validate_context(required=True)

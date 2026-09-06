@@ -72,6 +72,7 @@ def render_private_markdown(
     review_context: RetainedReviewContext, warnings: tuple[str, ...] = (),
     report_context: ReviewedReportContext | None = None,
     metadata: ReportMetadata | None = None, delivery_id: str | None = None,
+    agent: str | None = None,
 ) -> str:
     """Explicit private boundary; never used by public_artifacts or ADX."""
     if type(review_context) is not RetainedReviewContext:
@@ -79,7 +80,7 @@ def render_private_markdown(
     return _render_markdown(
         result, allowed_units=allowed_units, warnings=warnings,
         report_context=report_context, metadata=metadata, delivery_id=delivery_id,
-        private=review_context.for_result(result),
+        private=review_context.for_result(result), agent=agent,
     )
 
 
@@ -169,7 +170,7 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
 
 
 def _render_markdown(
-    result, *, allowed_units, warnings, report_context, metadata, delivery_id, private=None,
+    result, *, allowed_units, warnings, report_context, metadata, delivery_id, private=None, agent=None,
 ) -> str:
     value, context = _inputs(result, allowed_units, report_context, metadata)
     if delivery_id is not None and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", delivery_id) is None:
@@ -191,6 +192,23 @@ def _render_markdown(
     if not value["team_report_eligible"]:
         lines += ["", "Personal notice: no valid overall measurement. Counts describe the scored subset only."]
     agents = dict.fromkeys(unit["unit_id"]["agent"] for unit in value["units"])
+    if agent is not None:
+        if agent not in agents or private is None:
+            raise ReportContextError("report_agent_invalid")
+        units = [unit for unit in value["units"] if unit["unit_id"]["agent"] == agent]
+        scored = [unit for unit in units if unit["scorable"]]
+        lines[0] += " - " + _agent_name(agent)
+        lines[2] = "Overall Daily " + lines[2][0].lower() + lines[2][1:]
+        lines[4] = "Overall Daily " + lines[4][0].lower() + lines[4][1:]
+        lines += [
+            "", "This Agent (no separate score): "
+            f"{sum(unit['counts']['correct_issues'] for unit in scored)}/"
+            f"{sum(unit['counts']['expected_issues'] for unit in scored)} scored issues detected; "
+            f"{sum(unit['counts']['noise_cards'] for unit in scored)} Noise; "
+            f"{sum(unit['counts']['duplicate_cards'] for unit in scored)} Duplicate; "
+            f"{len(units) - len(scored)} excluded units.",
+        ]
+        agents = (agent,)
     for agent in agents:
         units = [unit for unit in value["units"] if unit["unit_id"]["agent"] == agent]
         lines += ["", f'<a id="{agent}"></a>', f"## {_agent_name(agent)}"]
@@ -366,7 +384,7 @@ def _agent_name(name: str) -> str:
     return name.removesuffix("-agent").replace("-", " ").title()
 
 
-def _html_summary(value: dict, context: dict, details_href, scoring_link, warnings: tuple[str, ...]) -> str:
+def _html_summary(value: dict, context: dict, details_href, scoring_link, warnings: tuple[str, ...], access_links=None) -> str:
     counts, coverage = value["counts"], value["coverage"]
     score = (
         '<strong style="font-size:28px;line-height:36px;color:#12304a;">'
@@ -396,7 +414,7 @@ def _html_summary(value: dict, context: dict, details_href, scoring_link, warnin
     body = banner + html_table(("Summary", "Result"), rows, raw_cells={(0, 1), (3, 1)})
     exclusions = [unit for unit in value["units"] if not unit["scorable"]]
     if exclusions:
-        references = ", ".join(_detail_link(unit, context, details_href) for unit in exclusions)
+        references = ", ".join(_detail_link(unit, context, details_href, access_links=access_links) for unit in exclusions)
         body += (
             f'<p style="margin:12px 0;color:#704c16;{_FONT}">'
             f'{len(exclusions)} unit(s) excluded from every score count; evidence is not complete. '
@@ -409,17 +427,21 @@ def _html_summary(value: dict, context: dict, details_href, scoring_link, warnin
     return html_section("Summary", body)
 
 
-def _detail_link(unit: dict, context: dict, details_href: str | None, *, short: bool = False) -> str:
+def _detail_link(unit: dict, context: dict, details_href: str | None, *, short: bool = False, access_links=None) -> str:
     label = unit["unit_id"]["logical_version"] if short else _unit_name(unit, context)
-    if details_href is None:
+    agent = unit["unit_id"]["agent"]
+    href = access_links[agent]["html"] if access_links else (
+        f"{details_href}#{agent}" if details_href else None
+    )
+    if href is None:
         return escape(label)
     return (
-        f'<a href="{escape(details_href, quote=True)}#{unit["unit_id"]["agent"]}" '
+        f'<a href="{escape(href, quote=True)}" '
         f'style="color:#0067b8;text-decoration:underline;">{escape(label)}</a>'
     )
 
 
-def _html_improvements(value: dict, context: dict, details_href: str | None) -> str:
+def _html_improvements(value: dict, context: dict, details_href: str | None, access_links=None) -> str:
     specifications = (
         ("Missed expected defects",
          lambda unit: unit["kind"] == "issue" and not unit["counts"]["correct_issues"],
@@ -440,7 +462,7 @@ def _html_improvements(value: dict, context: dict, details_href: str | None) -> 
     for title, matches, observation, needed in specifications:
         affected = [unit for unit in value["units"] if unit["scorable"] and matches(unit)]
         if affected:
-            links = "<br>".join(_detail_link(unit, context, details_href) for unit in affected)
+            links = "<br>".join(_detail_link(unit, context, details_href, access_links=access_links) for unit in affected)
             rows.append((title, f"{len(affected)} {escape(observation)}.<br><br>{links}", needed))
     body = (
         html_table(("Product gap", "What happened", "Needed behavior"), rows,
@@ -471,7 +493,7 @@ def _html_working(value: dict) -> str:
 
 def _html_agents(
     value: dict, context: dict, details_href: str | None, assignments: dict, agent_links: dict,
-    *, attached_report: bool,
+    *, attached_report: bool, access_links=None, access_expiry=None,
 ) -> str:
     rows = []
     for agent in dict.fromkeys(unit["unit_id"]["agent"] for unit in value["units"]):
@@ -501,11 +523,24 @@ def _html_agents(
             f"Attached report.md: {_agent_name(agent)}" if attached_report else
             "Detailed report link unavailable"
         )
+        if access_links:
+            references = (
+                f'<a href="{escape(access_links[agent]["html"], quote=True)}" '
+                'style="color:#0067b8;">View report</a><br>'
+                f'<a href="{escape(access_links[agent]["markdown"], quote=True)}" '
+                'style="color:#0067b8;">Download MD</a>'
+            )
         rows.append((name, card_text, references, assignments.get(agent, "Assignment unavailable")))
-    return html_section("Test Agents", html_table(
+    body = html_table(
         ("Agent", "Findings", "Human Validation", "Assigned To"), rows,
         raw_cells={(index, column) for index in range(len(rows)) for column in (0, 2)},
-    ))
+    )
+    if access_links:
+        body += _paragraph(
+            f"Links expire {access_expiry} (up to 7 days). "
+            "Anyone holding a link can read that file; forward carefully."
+        )
+    return html_section("Test Agents", body)
 
 
 def render_email_html(
@@ -515,6 +550,7 @@ def render_email_html(
     details_href: str | None = None, delivery_id: str | None = None,
     scoring_link: VerifiedScoringLink | None = None,
     agent_links: dict[str, str] | None = None, attached_report: bool = False,
+    report_access=None,
 ) -> str:
     """Compact email projection; private context is inserted by the email boundary."""
     if details_href not in {None, "report.html"}:
@@ -532,12 +568,21 @@ def render_email_html(
         raise ReportContextError("report_foundry_link_invalid")
     for link in agent_links.values():
         validate_foundry_link(link)
+    access_links = None
+    if report_access is not None:
+        from .report_access import VerifiedReportAccess
+        if type(report_access) is not VerifiedReportAccess:
+            raise ReportContextError("report_access_unverified")
+        access_links = report_access.for_agents(
+            {unit["unit_id"]["agent"] for unit in value["units"]}, delivery_id,
+        )
     parts = [
-        _html_summary(value, context, details_href, scoring_link, warnings),
-        _html_improvements(value, context, details_href),
+        _html_summary(value, context, details_href, scoring_link, warnings, access_links),
+        _html_improvements(value, context, details_href, access_links),
         _html_working(value),
         _html_agents(value, context, details_href, report_context.assignments if report_context else {},
-                     agent_links, attached_report=attached_report),
+                     agent_links, attached_report=attached_report, access_links=access_links,
+                     access_expiry=report_access.expires_at if report_access else None),
         "<!--private-context-->",
     ]
     return _html_page("".join(parts), metadata=metadata, test_run=test_run)

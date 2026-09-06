@@ -66,9 +66,13 @@ class EmailRequest:
     report_date: str
     test_run: bool
     rerun: int
+    report_access: dict | None = None
 
     def to_private_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        value = asdict(self)
+        if self.report_access is None:
+            value.pop("report_access")
+        return value
 
 
 @dataclass(frozen=True)
@@ -83,7 +87,10 @@ class EmailRecord:
         return self.status == "delivered"
 
     def to_private_dict(self) -> dict[str, Any]:
-        return {"schema_version": "1.0", **asdict(self)}
+        return {
+            "schema_version": "1.0", "request": self.request.to_private_dict(),
+            "status": self.status, "claim_id": self.claim_id, "provider_result": self.provider_result,
+        }
 
 
 def _read(outbox: RecordStore, delivery_id: str, *, missing_ok: bool = False) -> EmailRecord | None:
@@ -94,7 +101,7 @@ def _read(outbox: RecordStore, delivery_id: str, *, missing_ok: bool = False) ->
     if (
         set(raw) != required or raw["schema_version"] != "1.0"
         or not isinstance(raw["request"], dict)
-        or set(raw["request"]) != {
+        or set(raw["request"]) - {"report_access"} != {
             "delivery_id", "recipient", "subject", "html", "mode",
             "report_date", "test_run", "rerun",
         }
@@ -136,6 +143,9 @@ def _validate_request(request: EmailRequest) -> None:
         or request.mode != "official" and request.recipient.casefold() == TEAM_RECIPIENT
     ):
         raise EmailError("email_request_invalid")
+    if request.report_access is not None:
+        from .report_access import validate_descriptor
+        validate_descriptor(request.report_access, request.delivery_id)
 
 
 def render_email_content(
@@ -147,6 +157,7 @@ def render_email_content(
     details_href: str | None = None, delivery_id: str | None = None,
     scoring_link: VerifiedScoringLink | None = None,
     agent_links: dict[str, str] | None = None, attached_report: bool = False,
+    report_access=None,
 ) -> tuple[str, str]:
     """Render only: no recipients, claims, delivery records or provider calls."""
     try:
@@ -166,6 +177,7 @@ def render_email_content(
         result, allowed_units=allowed_units, warnings=warnings, report_context=report_context,
         metadata=metadata, test_run=test_run, details_href=details_href, delivery_id=delivery_id,
         scoring_link=scoring_link, agent_links=agent_links, attached_report=attached_report,
+        report_access=report_access,
     )
     prefix = "[TEST] " if test_run else ""
     summary = (
@@ -203,6 +215,7 @@ def prepare_email(
     report_context: ReviewedReportContext | None = None,
     region_display: str | None = None, source_revision: str | None = None,
     scoring_link: VerifiedScoringLink | None = None, agent_links: dict[str, str] | None = None,
+    report_access=None,
 ) -> EmailRequest:
     """Prepare one private record (including the HTML preview), without sending.
 
@@ -223,9 +236,11 @@ def prepare_email(
         report_context=report_context, region_display=region_display, source_revision=source_revision,
         delivery_id=delivery_id,
         scoring_link=scoring_link, agent_links=agent_links,
+        report_access=report_access,
     )
     request = EmailRequest(
         delivery_id, recipient, subject, html, mode, report_date, test_run, rerun,
+        dict(report_access.descriptor) if report_access is not None else None,
     )
     _validate_request(request)
     with _LOCK:
@@ -254,6 +269,13 @@ def claim_email(
             if record.status in {"claimed", "unknown"}:
                 raise EmailError("email_reconciliation_required")
             raise EmailError("email_already_finalized")
+        if record.request.report_access is not None:
+            from .report_access import read_report_access
+            access = read_report_access(
+                outbox._runtime, record.request.report_access, delivery_id=delivery_id,
+            )
+            if access.expired():
+                raise EmailError("email_report_access_expired_needs_new_revision")
         claimed = EmailRecord(record.request, "claimed", claim_id)
         outbox.save_progress(delivery_id, claimed.to_private_dict())
         return record.request

@@ -1,13 +1,11 @@
-"""Deterministic public report artifacts; never invoked by an email-only test."""
+"""Read-only validation of historical public reports; never a Daily publisher."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
-import tempfile
 from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
@@ -53,54 +51,6 @@ def public_markdown(root: Path, document: Mapping[str, Any]) -> str:
         metadata=ReportMetadata(value["report_date"], value["region"], value["source_commit"]),
         delivery_id=value["framework_run_id"],
     )
-
-
-def _write(path: Path, data: str, *, replace: bool) -> None:
-    encoded = data.encode("utf-8")
-    if path.exists():
-        if path.read_bytes() == encoded:
-            return
-        if not replace:
-            raise QualityError("public_report_conflict")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=".aiq-", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if replace:
-            os.replace(temporary, path)
-        else:
-            try:
-                os.link(temporary, path)
-            except FileExistsError as error:
-                if path.read_bytes() != encoded:
-                    raise QualityError("public_report_conflict") from error
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
-def write_public_report(
-    root: Path, document: Mapping[str, Any], *, test_run: bool,
-) -> tuple[str, ...]:
-    if test_run:
-        raise QualityError("test_publication_forbidden")
-    value, _, _ = approved_document(root, document)
-    report_date = date.fromisoformat(value["report_date"])
-    directory = root / "reports" / "daily" / report_date.strftime("%Y/%m/%d")
-    data = json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
-    markdown = public_markdown(root, value)
-    outputs = (
-        (directory / "report.json", data, False),
-        (directory / "report.md", markdown, False),
-        (root / "reports" / "latest.json", data, True),
-        (root / "reports" / "latest.md", markdown, True),
-    )
-    for path, content, replace in outputs:
-        _write(path, content, replace=replace)
-    return tuple(path.relative_to(root).as_posix() for path, _, _ in outputs)
 
 
 def verify_artifact(

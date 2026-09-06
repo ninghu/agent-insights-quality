@@ -2,12 +2,13 @@ import json
 import shutil
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agent_insights_quality.catalogs import load_catalog
 from agent_insights_quality.errors import QualityError
-from agent_insights_quality.public_artifacts import public_markdown, verify_artifact, write_public_report
+from agent_insights_quality.public_artifacts import public_markdown, verify_artifact
 from agent_insights_quality.publication import build_public_report
 from agent_insights_quality.results import (
     CardVerdict, CoreVerdict, PlannedUnit, UnitResult, aggregate_results,
@@ -48,23 +49,17 @@ def repository(tmp_path):
     return tmp_path
 
 
-def test_email_test_never_writes_public_files(repository):
-    value = document(repository)
-    with pytest.raises(QualityError, match="test_publication_forbidden"):
-        write_public_report(repository, value, test_run=True)
+def test_public_validator_has_no_report_writer(repository):
+    from agent_insights_quality import public_artifacts
+    assert not hasattr(public_artifacts, "write_public_report")
+    public_markdown(repository, document(repository))
     assert not (repository / "reports").exists()
 
 
-def test_public_files_share_one_validated_envelope_and_rendering(repository):
+def test_historical_public_rendering_remains_deterministic(repository):
     value = document(repository)
-    paths = write_public_report(repository, value, test_run=False)
-    assert len(paths) == 4
-    dated = repository / "reports" / "daily" / "2026" / "09" / "04"
-    assert json.loads((dated / "report.json").read_text()) == value
-    assert (dated / "report.md").read_text() == public_markdown(repository, value)
-    assert (repository / "reports" / "latest.json").read_bytes() == (dated / "report.json").read_bytes()
-    assert write_public_report(repository, value, test_run=False) == paths
-    markdown = (dated / "report.md").read_text()
+    markdown = public_markdown(repository, value)
+    assert public_markdown(repository, value) == markdown
     assert "Report date: " + value["report_date"] in markdown
     assert "Region: " + value["region"] in markdown
     assert "Source commit: " + value["source_commit"] in markdown
@@ -77,10 +72,19 @@ def test_public_files_share_one_validated_envelope_and_rendering(repository):
     assert "card-0001: expected_detection (scored)" not in markdown
 
 
-def test_dated_report_is_not_overwritten_by_a_different_measurement(repository):
-    write_public_report(repository, document(repository), test_run=False)
-    with pytest.raises(QualityError, match="public_report_conflict"):
-        write_public_report(repository, document(repository, incorrect=True), test_run=False)
+def test_historical_validator_reads_but_does_not_rewrite(repository, monkeypatch):
+    from agent_insights_quality import public_artifacts
+    monkeypatch.setattr(public_artifacts.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    value = document(repository)
+    path, markdown = repository / "report.json", repository / "report.md"
+    path.write_text(json.dumps(value))
+    markdown.write_text(public_markdown(repository, value))
+    before = path.read_bytes(), markdown.read_bytes()
+    verify_artifact(repository, path, markdown, "reports/daily/2026/09/04/report.json")
+    assert (path.read_bytes(), markdown.read_bytes()) == before
+    markdown.write_text("changed")
+    with pytest.raises(QualityError, match="public_report_rendering_mismatch"):
+        verify_artifact(repository, path, markdown)
 
 
 def test_shadowed_public_fields_are_rejected(repository):

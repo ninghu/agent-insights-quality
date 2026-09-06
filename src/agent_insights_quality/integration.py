@@ -17,7 +17,8 @@ from .email import prepare_email, read_email
 from .errors import QualityError
 from .events import RunLogger
 from .privacy import restore_public_result
-from .publication import AzureCliAdxClient, PublicationOutbox, build_public_report
+from .publication import AzureCliAdxClient, PublicationOutbox
+from .private_publication import AzurePrivateReportBlob, PrivateReportOutbox
 from .results import PlannedUnit, QualityResult
 from .settings import AssessmentSettings
 from .state import RuntimeStore, StateError
@@ -219,21 +220,6 @@ def _retained_context(value: dict) -> tuple[dict, str | None]:
     return unavailable_context("work_item_legacy_snapshot"), value["text"]
 
 
-def _generated_paths(report_date: str) -> tuple[str, ...]:
-    day = date.fromisoformat(report_date)
-    prefix = day.strftime("reports/daily/%Y/%m/%d")
-    return (prefix + "/report.json", prefix + "/report.md", "reports/latest.json", "reports/latest.md")
-
-
-def _write_report(root: Path, document: Mapping, *, test_run: bool) -> tuple[str, ...]:
-    from .public_artifacts import write_public_report
-    for name in _generated_paths(document["report_date"]):
-        path = root.joinpath(*name.split("/"))
-        if path.absolute() != path.resolve() or not path.resolve().is_relative_to(root.resolve()):
-            raise QualityError("public_report_path_invalid")
-    return write_public_report(root, document, test_run=test_run)
-
-
 class RunIntegration:
     """One run's bounded outbox worker; explicit test mode never touches ADX.
 
@@ -247,13 +233,13 @@ class RunIntegration:
         fetch_context: Callable[..., Awaitable[dict]] = _context,
         adx_factory=AzureCliAdxClient, outbox_factory=PublicationOutbox,
         tick: Callable[[asyncio.Event], Awaitable[bool]] = _tick,
-        write_report: Callable = _write_report,
+        private_blob_factory=None,
     ) -> None:
         self.root, self.runtime, self.run_id = root, runtime, run_id
         self.records = runtime.run(run_id)
         self.allowed_units, self.report_date, self.test_run = allowed_units, report_date, test_run
         self.fetch_context, self.adx_factory, self.outbox_factory = fetch_context, adx_factory, outbox_factory
-        self.tick, self.write_report = tick, write_report
+        self.tick, self.private_blob_factory = tick, private_blob_factory or AzurePrivateReportBlob
         self.warnings: set[str] = set()
         self.context: str | None = None
         self.work_item_context: dict | None = None
@@ -261,6 +247,7 @@ class RunIntegration:
         self.outbox = self.client = self.worker = None
         self.stop = asyncio.Event()
         self.disabled = False
+        self.private_disabled = False
 
     def warn(self, code: str) -> None:
         if code not in self.warnings:
@@ -407,49 +394,97 @@ class RunIntegration:
         await self.finish_publication()
 
     def publish_report(self, result: QualityResult, environment: Environment, source_revision: str) -> dict:
-        if self.test_run or self.runtime.environment != "daily" or not result.team_report_eligible:
+        if self.runtime.environment != "daily":
             return {}
         output = {}
         metadata = {
             "report_date": self.report_date.isoformat(),
             "source_commit": source_revision, "region": environment.region_display,
         }
-        try:
-            document = build_public_report(
-                result, allowed_units=self.allowed_units, framework_run_id=self.run_id, **metadata,
-            )
-            self.records.save_artifact("publication/report", document)
-            output["public_report_path"] = str(self.records._path("artifacts", "publication/report"))
-        except (QualityError, OSError):
-            self.warn("github_publication_failed")
-            self.warn("adx_delivery_failed")
-            return output
-        if self.outbox is not None and not self.disabled:
+        if not self.test_run and result.team_report_eligible and self.outbox is not None and not self.disabled:
             try:
                 self.outbox.queue_report(result, **metadata)
             except (QualityError, OSError):
                 self.warn("adx_delivery_failed")
+        if self.private_disabled:
+            return output
+        logger = self.logger or RunLogger(self.records.directory, test_run=self.test_run)
+        client = None
         try:
-            expected = _generated_paths(metadata["report_date"])
-            paths = self.write_report(self.root, document, test_run=False)
-            if tuple(paths) != expected:
-                raise QualityError("public_report_paths_mismatch")
-            request = {
-                "schema_version": "1.0", "operation": "publish-generated-report",
-                "repository": "ninghu/agent-insights-quality", "base_branch": "main",
-                "branch": "generated/quality-" + metadata["report_date"],
-                "title": "Agent Insights quality - " + metadata["report_date"],
-                "body": "Publish the generated daily quality report. Changes are restricted to the listed report files.",
-                "allowed_paths": list(expected), "source_commit": source_revision,
-                "report_date": metadata["report_date"],
-            }
-            self.records.save_artifact("publication/github-request", request)
-            output.update(
-                generated_paths=list(expected),
-                github_request_path=str(self.records._path("artifacts", "publication/github-request")),
+            private = PrivateReportOutbox(self.runtime, self.run_id)
+            if (
+                private.records.read_completed(private.request_key, missing_ok=True) is None
+                and self.runtime.outbox("email").read(self.run_id, missing_ok=True) is not None
+            ):
+                # No implicit backfill/restyle of already prepared historical mail.
+                return {"private_report": {"status": "not_prepared", "code": "existing_email_unchanged"}}
+            logger.emit("started", stage="outbox", code="private_report_publication")
+            request = private.prepare(
+                self.root, result, allowed_units=self.allowed_units, environment=environment,
+                source_revision=source_revision, report_date=self.report_date.isoformat(),
+                test_run=self.test_run,
             )
-        except (QualityError, OSError):
-            self.warn("github_publication_failed")
+            output["private_report"] = private.status(request)
+            if output["private_report"]["status"] not in {"delivered", "conflict"}:
+                client = self.private_blob_factory(request["account"])
+                output["private_report"] = private.flush(client)
+            if output["private_report"]["status"] != "delivered":
+                self.warn("private_report_publication_failed")
+                logger.emit("warning", stage="outbox", code="private_report_publication_failed")
+                code = output["private_report"].get("code", "private_report_pending")
+                logger.emit("warning", stage="outbox", code=code)
+            else:
+                logger.emit("completed", stage="outbox", code="private_report_delivered")
+            if output["private_report"].get("receipt_path"):
+                from .report_access import VerifiedReportAccess, prepare_report_access
+                access_key = self.run_id + "/" + request["presentation_id"] + "/access/initial"
+                try:
+                    access = None
+                    if private.records.read_completed(access_key, missing_ok=True) is not None:
+                        access = VerifiedReportAccess(self.runtime, access_key)
+                    elif self.runtime.outbox("email").read(self.run_id, missing_ok=True) is None:
+                        client = client or self.private_blob_factory(request["account"])
+                        access = prepare_report_access(private, client)
+                    if access:
+                        output["private_report"]["access"] = access.status()
+                        if access.expired():
+                            self.warn("private_report_access_unavailable")
+                except (QualityError, OSError) as error:
+                    if isinstance(error, StateError):
+                        self.private_disabled = True
+                        self.warn("private_report_checkpoint_failed")
+                    code = error.code if isinstance(error, QualityError) else "report_access_unavailable"
+                    output["private_report"]["access"] = {"status": "blocked", "code": code}
+                    logger.emit("warning", stage="outbox", code=code)
+                    self.warn("private_report_access_unavailable")
+            self.records.save_progress("private-publication", output["private_report"])
+        except (QualityError, OSError) as error:
+            if isinstance(error, StateError):
+                self.private_disabled = True
+                self.warn("private_report_checkpoint_failed")
+            self.warn("private_report_publication_failed")
+            code = error.code if isinstance(error, QualityError) else "private_report_unavailable"
+            logger.emit("warning", stage="outbox", code=code)
+            output["private_report"] = {
+                **output.get("private_report", {}), "status": "pending", "code": code,
+            }
+            if not self.private_disabled:
+                try:
+                    self.records.save_progress("private-publication", output["private_report"])
+                except (QualityError, OSError):
+                    self.private_disabled = True
+                    self.warn("private_report_checkpoint_failed")
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except (QualityError, OSError):
+                    self.warn("private_report_publication_failed")
+                    logger.emit("warning", stage="outbox", code="private_report_close_failed")
+            if logger.health_warnings:
+                self.warn("logging_failed")
+            if self.logger is None:
+                logger.close()
         return output
 
     def frozen_result(self) -> QualityResult | None:
@@ -502,17 +537,36 @@ class RunIntegration:
             blockers = [*link_blockers]
             if scoring is None:
                 blockers.append("scoring_link_publication_required")
-            review = RetainedReviewContext(self.runtime, self.run_id, result)
-            markdown = render_private_markdown(
-                result, allowed_units=self.allowed_units, review_context=review,
-                warnings=tuple(sorted(warnings)), report_context=context,
-                metadata=ReportMetadata(self.report_date.isoformat(), environment.region_display, source_revision),
-                delivery_id=self.run_id,
-            )
-            self.records.save_artifact("presentation/report", {
-                "format": "markdown", "private": True, "markdown": markdown,
-                "retained_review": review.provenance(),
-            })
+            detail = self.records.read_artifact("presentation/report", missing_ok=True)
+            if detail is None:
+                try:
+                    publication = self.runtime.outbox("private-reports").read_completed(
+                        "requests/" + self.run_id, missing_ok=True,
+                    )
+                    if publication is not None:
+                        publication = PrivateReportOutbox(self.runtime, self.run_id).request()
+                except (QualityError, OSError):
+                    publication = None
+                    warnings.add("private_report_publication_failed")
+                if publication is not None:
+                    # Reuse the exact published MD, not a render with newer warnings.
+                    markdown = publication["files"]["report.md"]
+                    provenance = publication["retained_review"]
+                else:
+                    review = RetainedReviewContext(self.runtime, self.run_id, result)
+                    markdown = render_private_markdown(
+                        result, allowed_units=self.allowed_units, review_context=review,
+                        warnings=tuple(sorted(warnings)), report_context=context,
+                        metadata=ReportMetadata(self.report_date.isoformat(), environment.region_display, source_revision),
+                        delivery_id=self.run_id,
+                    )
+                    provenance = review.provenance()
+                detail = {
+                    "format": "markdown", "private": True, "markdown": markdown,
+                    "retained_review": provenance,
+                }
+                self.records.save_artifact("presentation/report", detail)
+            markdown = detail["markdown"]
             from .state import _atomic_write, _confirm_durable, _inside, _open_snapshot
             report_path = _inside(
                 self.runtime.root, self.records._path("artifacts", "presentation/report").with_suffix(".md"),
@@ -530,7 +584,23 @@ class RunIntegration:
                     if existing_report != encoded_report:
                         raise StateError("delivery_private_report_conflict")
                     _confirm_durable(report_path)
-            blockers.append("human_validation_link_unavailable")
+            from .report_access import VerifiedReportAccess
+            access = None
+            try:
+                published = self.runtime.outbox("private-reports").read_completed(
+                    "requests/" + self.run_id, missing_ok=True,
+                )
+                if published:
+                    access_key = self.run_id + "/" + published["presentation_id"] + "/access/initial"
+                    if self.runtime.outbox("private-reports").read_completed(access_key, missing_ok=True):
+                        access = VerifiedReportAccess(self.runtime, access_key)
+                        if access.expired():
+                            blockers.append("report_access_expired_needs_explicit_new_revision")
+                            access = None
+            except (QualityError, OSError):
+                warnings.add("private_report_access_unavailable")
+            if access is None:
+                blockers.append("human_validation_link_unavailable")
             frozen = {
                 "report": result.to_dict(), "test_run": self.test_run, "rerun": rerun,
                 "report_date": self.report_date.isoformat(), "region_display": environment.region_display,
@@ -544,6 +614,7 @@ class RunIntegration:
                     "assignments": context.assignments, "foundry_links": links,
                     "scoring_link": scoring.to_dict() if scoring else None,
                     "blockers": blockers, "private_report_artifact": "presentation/report",
+                    **({"report_access": dict(access.descriptor)} if access else {}),
                 },
             }
             self.records.save_completed("delivery-inputs", frozen)
@@ -557,6 +628,11 @@ class RunIntegration:
             VerifiedScoringLink.from_retained(self.root, presentation["scoring_link"])
             if presentation.get("scoring_link") else None
         )
+        from .report_access import read_report_access
+        access = (
+            read_report_access(self.runtime, presentation["report_access"], delivery_id=self.run_id)
+            if presentation.get("report_access") else None
+        )
         prepare_email(
             outbox, self.run_id, result, allowed_units=self.allowed_units,
             report_date=frozen["report_date"], test_run=frozen["test_run"], rerun=frozen["rerun"],
@@ -566,5 +642,6 @@ class RunIntegration:
             region_display=frozen["region_display"], source_revision=frozen["source_revision"],
             report_context=context,
             scoring_link=scoring, agent_links=presentation.get("foundry_links"),
+            report_access=access,
         )
         return read_email(outbox, self.run_id)

@@ -2,7 +2,8 @@ Run the weekday Agent Insights quality automation locally.
 
 1. Read AGENTS.md. In the fresh automation worktree, fetch origin/main and fast-forward to it.
    Set PYTHONPATH to this worktree's src and confirm the imported module resolves there.
-2. Invoke `python -m agent_insights_quality run-daily` once. Python owns all qualification work.
+2. Invoke `python -m agent_insights_quality run-daily` once. Python owns all qualification work
+   and automatic private report storage publication.
    Do not create workers, invoke Agents directly, assess evidence, modify source or retry phases.
 3. Read the returned status and private delivery record. If no sendable request exists, report the
    precise blocker; do not fabricate a score, recipient, HTML body or delivery receipt.
@@ -13,14 +14,17 @@ Run the weekday Agent Insights quality automation locally.
 6. Save the actual provider result privately and call `email-result` with the same delivery/claim IDs,
    its result-file path and the correct outcome. Use accepted unless actual delivery is proven.
    If submission is ambiguous, record unknown and stop; never blindly send again.
-7. If the runner prepared an optional GitHub publication request, use only its four validated
-   dated/latest report paths. Confirm there are no unrelated changes before committing them.
-   Reconcile an existing generated branch/PR before creating another; use the app's native
-   pull-request tool and leave merge manual. A publication failure must not resend the email
-   or restart qualification.
+7. Report the private publication status as returned. Do not upload artifacts, write repository
+   reports/trends, create generated branches/PRs or merge reports. Publication-only recovery is
+   `private-report-flush --delivery-id <returned-id>`; do not rerun qualification or resend mail.
+   Python alone signs the user-approved, read-only per-Agent links (up to seven days).
+   Keep the exact expiry and forwarding warning. Never mint SAS, upload files or rewrite links.
+   An expired claim is a blocker, not permission to send anyway. Explicit access refresh creates
+   only a private revision/preview and never makes the original expired email claimable.
 
 Eligible official reports use the fixed team mailbox; an ineligible run prepares a private failure
 notice instead. Never replace the recipient selected by the runner. Optional publication failures
-are warnings, not reasons to rerun qualification. Use only prepared, validated public artifacts for any generated
-GitHub publication; never copy private runtime data or provider receipts into a pull request.
+are warnings, not reasons to rerun qualification. Source/catalog/scoring changes still require
+normal review; this removal applies only to generated Daily reports. Never copy private runtime
+data or provider receipts into a pull request.
 Do not enable or alter automation schedules.

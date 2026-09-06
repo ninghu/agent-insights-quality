@@ -44,6 +44,9 @@ WARNING_TEXT = {
     "work_item_unavailable": "Optional work-item context is unavailable.",
     "adx_delivery_failed": "Optional ADX delivery has not completed.",
     "github_publication_failed": "Optional GitHub publication has not completed.",
+    "private_report_publication_failed": "Private report storage publication has not completed; inline email remains available.",
+    "private_report_checkpoint_failed": "Private report publication stopped because its durable checkpoint failed.",
+    "private_report_access_unavailable": "Time-limited private report links are unavailable; the archived report and inline email remain.",
     "improvement_unavailable": "Optional improvement analysis is unavailable.",
     "logging_failed": "Operational logging reported a failure.",
 }

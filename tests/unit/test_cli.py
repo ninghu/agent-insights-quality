@@ -21,6 +21,12 @@ def app(tmp_path, monkeypatch):
     h = fake.Harness(tmp_path, issues=4)
     fake.fake_storage(monkeypatch)
     from agent_insights_quality import report_context
+    from agent_insights_quality import integration, private_publication, report_access
+    from test_private_publication import FakeBlob
+    h.report_blobs = FakeBlob()
+    monkeypatch.setattr(integration, "AzurePrivateReportBlob", lambda _: h.report_blobs)
+    monkeypatch.setattr(private_publication, "AzurePrivateReportBlob", lambda _: h.report_blobs)
+    monkeypatch.setattr(report_access, "AzurePrivateReportBlob", lambda _: h.report_blobs)
     h.catalog = fake.replace(h.catalog, targets=tuple(fake.replace(target, expectation={
         "title": "Synthetic reviewed defect", "root_cause": "Synthetic input contradiction",
         "expected_fix": "Honor the synthetic reviewed input",
@@ -114,6 +120,64 @@ def test_cli_test_pipeline_and_claim_actual_outcome_no_raw_stdout(app, capsys):
     status, _ = last_json(capsys)
     assert status["runs"][0]["status"] == "Full"
     assert "synthetic_provider" not in json.dumps(status)
+
+
+def test_publication_only_cli_recovers_without_ports_assessment_or_email_change(app, capsys, monkeypatch):
+    app.report_blobs.fail_key = "report.html"
+    assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
+    before, _ = last_json(capsys)
+    assert before["private_report"]["status"] == "pending"
+    request = read_email(app.store.outbox("email"), before["delivery_id"])
+    counts = len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)
+    monkeypatch.setattr(cli, "_catalog", lambda *a: pytest.fail("Recovery loaded current catalog"))
+    app.report_blobs.fail_key = None
+    assert app.cli("private-report-flush", "--delivery-id", before["delivery_id"], "--read-only") == 2
+    readonly, _ = last_json(capsys)
+    assert readonly["private_report"]["status"] == "pending"
+    assert app.cli("private-report-flush", "--delivery-id", before["delivery_id"]) == 0
+    flushed, _ = last_json(capsys)
+    assert flushed["private_report"]["status"] == "delivered"
+    assert read_email(app.store.outbox("email"), before["delivery_id"]) == request
+    assert (len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)) == counts
+    assert not app.store.outbox("publication").directory.exists()
+    assert not (app.catalog.root / "reports").exists()
+    assert app.cli("status") == 0
+    status, _ = last_json(capsys)
+    actual = next(run for run in status["runs"] if run["run_id"] == before["delivery_id"])
+    assert actual["private_report"]["status"] == "delivered"
+
+
+def test_expired_cli_claim_and_explicit_access_refresh_never_rewrite_or_send(app, capsys, monkeypatch):
+    from datetime import datetime, timedelta
+    from agent_insights_quality import report_access
+    assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
+    status, _ = last_json(capsys)
+    assert status["private_report"]["access"]["status"] == "ready"
+    delivery = status["delivery_id"]
+    before = read_email(app.store.outbox("email"), delivery)
+    assert before.request.report_access and "View report" in before.request.html
+    expires = datetime.fromisoformat(before.request.report_access["expires_at"].replace("Z", "+00:00"))
+    monkeypatch.setattr(report_access, "utc_now", lambda: expires + timedelta(seconds=1))
+    counts = len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)
+    assert app.cli("email-claim", "--delivery-id", delivery, "--claim-id", "expired-claim") == 2
+    error = capsys.readouterr()
+    assert "expired_needs_new_revision" in error.err and "sig=" not in error.out + error.err
+    assert app.cli(
+        "private-report-refresh-access", "--delivery-id", delivery, "--access-revision", "refresh-1",
+    ) == 0
+    refreshed, errors = last_json(capsys)
+    assert not errors and refreshed["report_access"]["status"] == "ready"
+    assert Path(refreshed["report_access"]["preview_path"]).is_file()
+    assert "sig=" not in json.dumps(refreshed)
+    assert read_email(app.store.outbox("email"), delivery) == before
+    assert (len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)) == counts
+    assert app.cli("status") == 0
+    current, _ = last_json(capsys)
+    actual = next(run for run in current["runs"] if run["run_id"] == delivery)
+    assert actual["private_report"]["access"]["status"] == "expired_needs_explicit_new_access_revision"
+    logs = (app.store.run(delivery).directory / "runner.log").read_text()
+    events = (app.store.run(delivery).directory / "events.jsonl").read_text()
+    assert "sig=" not in logs + events
 
 
 @pytest.mark.parametrize("arguments", [
@@ -515,14 +579,8 @@ def test_cli_official_flushes_logger_events_during_traffic_and_keeps_work_items_
         loop = asyncio.get_running_loop()
         gate.update(tick=integrations.Tick(), written=asyncio.Event())
         client.before_manage = lambda _: loop.call_soon_threadsafe(gate["written"].set)
-        def write(root, document, *, test_run):
-            writes.append(document)
-            return (
-                "reports/daily/2026/09/04/report.json", "reports/daily/2026/09/04/report.md",
-                "reports/latest.json", "reports/latest.md",
-            )
         return RunIntegration(*args, **kwargs, fetch_context=fetch, tick=gate["tick"],
-                              adx_factory=lambda *_: client, write_report=write)
+                              adx_factory=lambda *_: client)
     original = app.cloud.invoke
     async def invoke(*args, **kwargs):
         if not app.cloud.invocations:
@@ -540,7 +598,8 @@ def test_cli_official_flushes_logger_events_during_traffic_and_keeps_work_items_
         ports=ports, integrations=auxiliary, today=fake.DAY,
     ) == 0
     value, _ = last_json(capsys)
-    assert value["status"] == "Full" and value["github_request_path"]
+    assert value["status"] == "Full" and value["private_report"]["status"] == "delivered"
+    assert not {"github_request_path", "generated_paths", "public_report_path"} & value.keys()
     email = read_email(app.store.outbox("email"), value["delivery_id"])
     assert "Synthetic private quality item" in email.request.html
     assert "Synthetic private quality item" not in json.dumps(app.sol.calls)
@@ -844,7 +903,7 @@ def test_private_daily_metrics_are_segmented_paths_only_and_never_use_adx(app, c
         pytest.fail("Private metrics accessed ADX or public publication")
     def integrations(*args, **kwargs):
         return RunIntegration(*args, **kwargs, adx_factory=forbidden,
-                              outbox_factory=forbidden, write_report=forbidden)
+                              outbox_factory=forbidden)
     @asynccontextmanager
     async def ports(*args):
         yield app.cloud, app.sol, app.registry

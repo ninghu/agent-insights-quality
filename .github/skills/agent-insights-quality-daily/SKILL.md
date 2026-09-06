@@ -27,5 +27,12 @@ Missing app mail capability is a blocker, not permission to choose another integ
 Do not create per-Agent sessions, run manual assessments, inject traces, change the
 score/coverage policy or retry individual phases outside the runner. Repeat the same
 command only to resume its checkpoints. Optional publication warnings do not invalidate
-a completed measurement. Publish only the runner's validated generated-only artifacts;
-test mode must not write ADX/public reports, create a PR or send team mail.
+a completed measurement. Python automatically publishes frozen reports to existing private
+storage; the app never uploads them or creates generated report branches/PRs/merges.
+Publication-only recovery uses `private-report-flush --delivery-id <run-id>`, not another
+measurement or email send. Python owns approved per-Agent user-delegation read SAS links,
+with exact UTC expiry (up to seven days) and a forwarding warning. Never mint links in the app
+or rewrite a prepared email. Expired unclaimed mail is blocked; explicit
+`private-report-refresh-access --delivery-id <run-id> --access-revision <new-revision>`
+creates only a private access revision/preview, not a replacement email or send authorization.
+TEST must not write ADX/public reports or official latest, create a PR or send team mail.

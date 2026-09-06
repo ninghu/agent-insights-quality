@@ -93,7 +93,8 @@ creates a clearly labelled local presentation preview from that delivery's froze
 when the reviewed unit context still matches. Both export `email.html`, `email.eml`, `report.md`,
 `report.html` and a provenance manifest under the private Daily `previews/` folder.
 The MD is the EML's actual `text/markdown` attachment. `report.html` is a browser view derived
-from that same MD, not an independent report. Browser email links to its per-Agent anchors;
+from that same MD, not an independent report. Restyled local browser email uses per-Agent anchors;
+new prepared mail instead uses the independently published per-Agent files described below.
 EML tells readers which heading to open in the attachment, without broken relative/cid/file links.
 Exact export preserves the original email HTML bytes, even when the original presentation is
 obsolete. A legacy request without frozen inputs gets an explicit unavailable-detail MD notice,
@@ -108,8 +109,132 @@ The preview CLI returns `report_markdown_path`, `report_html_path`, `email_html_
 New delivery preparation also durably saves private `artifacts/presentation/report.md` and its
 evidence-reference checkpoint before freezing delivery inputs. Daily status exposes
 `private_report_markdown_path` and `presentation_blockers`. Existing prepared requests return
-unchanged. Native HTML handoff does not claim to attach a report: absent a delivery-available
-detail URL it discloses that the link is unavailable; local EML export supplies the attachment.
+unchanged. Native HTML handoff does not claim to attach a report: verified time-limited links
+are inline; when unavailable, that limitation is disclosed. Local EML export supplies the attachment.
+
+## Automatic private report publication
+
+Daily no longer writes `reports/` in Git or prepares generated branches, PRs or merge requests.
+Historical reports and their read-only CI validator remain; ordinary source, catalog and scoring
+changes still require review. ADX remains a separate optional allowlisted projection for official
+runs only. TEST never touches ADX, public reports/trends, generated PRs or the team mailbox.
+
+After measurement, Python freezes the private overview Markdown from the final `QualityResult`
+and `RetainedReviewContext`, five independent per-Agent Markdown documents, their derived HTML,
+and a minimal manifest. Each Agent document contains only that Agent's five compact version rows,
+owner, actual versions and saved classifications/Notes. It does not recompute a per-Agent score.
+Any global score/counts/coverage are explicitly labelled **Overall Daily**; Agent counts are sums
+of that same result's units. It binds exact UTF-8 bytes,
+hashes, source revision, reviewed plan, report date, run ID, profile, assessment identity and
+renderer version/hash before contacting storage. Work-item snapshots, email recipients, raw
+trace/model payloads, credentials and private local paths are not manifest fields. The bundle
+contains the overview `report.md`/`report.html`, `agents/{agent}/report.md`/`report.html`, and
+`manifest.json`, not email, raw evidence or SAS URLs.
+
+The destination account is the run's **saved** `Environment.storage_account_name`. The existing
+`quality-artifacts` container must already exist, have no public access, and the account's
+`allowBlobPublicAccess` must be explicitly false. Verification failures stop publication.
+The adapter reads account metadata with normal Azure CLI credentials and uses lazy
+`azure-storage-blob` imports. It never creates containers/accounts, changes roles/credentials,
+requests account keys, or accesses `deployment-registries`. Python callers may inject a token
+credential and matching read-only account-privacy verifier; there is no new hosted viewer or
+GitHub data repository. Injected service account/endpoint scope is validated too.
+
+Immutable keys are `reports/daily/{official|test|failure}/{run-id}/{presentation-id}/...`.
+Only eligible official reports can CAS-update `reports/daily/official/latest.json`, and only
+after every object and the manifest have exact content readback and a durable receipt. A newer report date
+cannot be replaced by an old retry; different content for the same date is a visible conflict.
+TEST and failure notices never update official latest. Existing objects are conditionally
+created, never overwritten. Accepted PUTs are reconciled by reading the exact bytes, not treated
+as delivery proof. A missing object may be retried only with the same frozen conditional PUT.
+
+Private requests, local MD/HTML/manifest copies, intents and verified receipts live in
+`daily/outboxes/private-reports/` under the normal runtime root. Publication does not depend on
+the checkout location after preparation. A flush has a 90-second budget, 10-second per-operation
+timeout input, one PUT per immutable object, and at most two latest CAS attempts. SDK retries
+are disabled. Calls are synchronous under runtime ownership, after measurement: no SDK worker
+threads survive cancellation/unwind. An in-flight synchronous operation drains with its configured
+credential/network timeouts before ownership can exit; the deadline prevents further calls.
+Publication checkpoint failure disables further publication in that worker. Measurement is kept;
+an otherwise eligible inline email is still prepared. No retry triggers traffic, assessment or mail.
+
+Daily output and `status` expose `private_report`: publication status/code, presentation ID,
+request/receipt paths, local Markdown/HTML/manifest paths and truthful access metadata.
+`generated_paths`, `github_request_path` and `public_report_path` are no longer Daily outputs.
+The private receipt contains authenticated-storage references with `access_required: true`,
+`auth_mode: entra_storage_data_plane`, and `human_validation_available: false`.
+
+### Approved seven-day read access
+
+The user approved **user-delegation SAS** after acknowledging that anyone holding a link can read
+its one file without prior Storage RBAC. Python signs only after the immutable report receipt
+exists and each Agent file has verified byte readback. It obtains a user delegation key through
+the existing Entra/Azure CLI identity, not `listKeys`, an account key or a new role grant.
+`GetUserDelegationKey` denial is an explicit `report_access_delegation_denied` blocker; no fallback
+or self-grant is attempted. The storage container remains private.
+
+Every SAS is scoped to one exact account/container/Agent blob: `sr=b`, `sp=r`, `spr=https`.
+There is no list, write or delete permission, and no container/account SAS. The key begins at
+current UTC minus five minutes for clock skew and ends exactly seven days after that start.
+Thus the displayed expiry is **up to seven days**, normally six days 23 hours 55 minutes after
+issuance—not seven days plus skew. The actual UTC expiry and URLs are frozen in a private,
+versioned access record, bound by hash to the prepared email. Keys/token credentials themselves
+are never persisted. The provider is closed before email preparation.
+
+Each email Human Validation cell has **View report** and **Download MD**, each pointing to that
+Agent's own blob with its own read grant, not a fragment in the overview. The email shows the
+exact expiry and a forwarding warning. No SAS URL appears in another report's body, the uploaded
+manifest, Git, ADX, operational events or CLI output. Status exposes only the access record/preview
+paths, expiry and readiness under `private_report.access`. Bare storage references still require
+authenticated storage access; the separate, approved SAS grants provide browser access directly
+without an Entra-login app or a new viewer service.
+
+When signing is unavailable, inline email remains eligible and the archived/local report remains
+available. `human_validation_link_unavailable` is retained only when no usable grant is bound.
+The immutable scoring-guide link and its retained receipt are unchanged.
+
+```powershell
+python -m agent_insights_quality private-report-flush --delivery-id <run-id>
+python -m agent_insights_quality private-report-flush --delivery-id <run-id> --read-only
+python -m agent_insights_quality private-report-refresh-access --delivery-id <run-id> --access-revision refresh-1
+```
+
+The flush commands only resume an **existing frozen publication request**, even from another source
+checkout. `--read-only` performs remote reads and persists local reconciliation receipts, never
+remote writes. Both use normal runtime ownership and log safe codes privately. Neither opens
+qualification ports, refetches work items, renders again, prepares/claims/sends mail, or updates
+old requests. Already prepared historical deliveries without a publication request are not
+automatically backfilled or restyled. Their previous manual uploads/previews are not automatic
+publisher receipts. A separate reviewed migration is required to enroll such a historical bundle.
+
+`private-report-refresh-access` is an explicit, separate operation: it signs the **same already
+published Agent files** into a new immutable access revision and creates a private **NOT SENT**
+access preview. It neither republishes report bytes nor changes any EmailRequest, claim or send
+record. Repeating the same access revision reuses its URLs/expiry, even when expired. Interrupted
+signing requires a new explicit revision, never an automatic remint under the old identity.
+
+An unclaimed email whose links have expired is rejected by `email-claim` with
+`email_report_access_expired_needs_new_revision`; no claim is persisted. Refreshing access does
+**not** make that original email claimable or silently replace its links. Use the explicit refresh
+preview for separately authorized review; preparing a different send request is a separate reviewed
+action, not part of this command. A sent email's eventual link expiry is expected, while the
+underlying report stays archived. Status reads recompute expiry; exact email exports preserve
+old HTML and disclose expired access as a blocker. No expiry path reinvokes Agents, reassesses,
+changes recipients, automatically sends/resends mail, or enables a schedule.
+
+Every access restore/read and new email claim also requires the matching immutable **bundle
+receipt**, not merely a saved SAS record. Missing, corrupt or mismatched receipts/grants make
+current access unavailable and refuse a new claim before its checkpoint. A verified bundle does
+not depend on advancing the optional latest pointer: pending/conflicting latest delivery alone
+does not invalidate its links.
+
+Read-only `status` reconstructs publication/access from the frozen request, validated receipt
+and grant (including the prepared email's hash-bound descriptor), never cached
+`private-publication` readiness. Missing/corrupt records produce explicit unavailable/error
+states, not cached `delivered` or `ready` claims. It performs no Azure, credential, rendering,
+signing or writer-ownership work. `email_status` and `inbox_delivery_confirmed` describe the
+stored historical send outcome separately; invalid current links never rewrite or reclassify
+an accepted, delivered or unknown email record.
 
 Summary's **How Scoring Works** row links only to a verified, immutable GitHub version of
 `docs/QUALITY_BAR.md`. It never assumes `main` has the current formula. `--scoring-revision`
@@ -121,8 +246,8 @@ For new preparation or restyle without an existing receipt, an operator can prov
 with the presentation; resume uses the retained receipt, not a mutable branch.
 Without a correct published version, `scoring_link_publication_required` is an explicit
 publication blocker and the row says the link is pending. This does not block eligible inline
-email, authorize publication, change credentials, or publish TEST content. Optional generated
-report files/PR requests are not proof that a detailed GitHub report URL is available.
+email, authorize publication, change credentials, or expose TEST content publicly. Historical
+report files are not proof that a detailed report URL is delivery-available.
 
 New work-item tables include Type and use a frozen provider-as-of snapshot. Closed items cover
 the interval since the previous successfully submitted eligible official report's snapshot;

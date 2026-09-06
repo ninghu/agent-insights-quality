@@ -17,6 +17,7 @@ from agent_insights_quality.state import CheckpointError, RuntimeStore
 from agent_insights_quality.work_items import render_work_item_html, unavailable_context
 import test_publication as publishing
 import test_runner as fake
+import test_private_publication as private
 
 DAY = date(2026, 9, 4)
 RUN = "daily-2026-09-04"
@@ -79,6 +80,7 @@ class Tick:
 
 
 def integration(tmp_path, runtime, *, test_run=False, **kwargs):
+    kwargs.setdefault("private_blob_factory", lambda _: private.FakeBlob())
     return RunIntegration(
         tmp_path / "repo", runtime, kwargs.pop("run_id", RUN), allowed_units=publishing.quality()[1],
         report_date=kwargs.pop("report_date", DAY), test_run=test_run, **kwargs,
@@ -139,9 +141,11 @@ def test_periodic_run_events_flush_while_lane_is_still_working(tmp_path, profile
 def test_test_mode_never_constructs_or_reads_any_publication_outbox_even_backlog(tmp_path, monkeypatch):
     runtime = RuntimeStore("daily", root=tmp_path / "private")
     config(runtime)
+    reviewed_catalog(tmp_path, monkeypatch)
     def forbidden(*args, **kwargs):
         pytest.fail("Explicit test accessed publication")
     with runtime.ownership():
+        run_id = private.seed(runtime, *publishing.quality(), test_run=True)
         backlog = PublicationOutbox(runtime.outbox("publication"), framework_run_id="prior-official",
                                     profile="daily", allowed_units=publishing.quality()[1])
         backlog.queue_event(publishing.event())
@@ -155,10 +159,10 @@ def test_test_mode_never_constructs_or_reads_any_publication_outbox_even_backlog
         async def run():
             async with integration(
                 tmp_path, runtime, test_run=True, adx_factory=forbidden, outbox_factory=forbidden,
-                write_report=forbidden, fetch_context=lambda *args, **kwargs: asyncio.sleep(0, result=snapshot()),
+                run_id=run_id, fetch_context=lambda *args, **kwargs: asyncio.sleep(0, result=snapshot()),
             ) as adapters:
                 adapters.queue_event(publishing.event())
-                assert adapters.publish_report(publishing.quality()[0], ENVIRONMENT, SOURCE) == {}
+                assert adapters.publish_report(publishing.quality()[0], ENVIRONMENT, SOURCE)["private_report"]["status"] == "delivered"
                 await adapters.finish_publication()
                 assert adapters.client is None and adapters.outbox is None
         asyncio.run(run())
@@ -274,51 +278,150 @@ def test_unexpected_publisher_bug_is_not_swallowed_as_warning(tmp_path):
         asyncio.run(run())
 
 
-def test_only_eligible_official_reports_queue_generated_only_requests(tmp_path, monkeypatch):
+def test_official_publication_is_automatic_private_and_never_prepares_git_request(tmp_path, monkeypatch):
     runtime = RuntimeStore("daily", root=tmp_path / "private")
     config(runtime, context=False)
     client = publishing.FakeClient()
-    writes = []
-    def write(root, document, *, test_run):
-        assert not test_run
-        writes.append(deepcopy(document))
-        return ("reports/daily/2026/09/04/report.json", "reports/daily/2026/09/04/report.md",
-                "reports/latest.json", "reports/latest.md")
+    reviewed_catalog(tmp_path, monkeypatch)
+    blobs = private.FakeBlob()
     async def run():
-        async with integration(tmp_path, runtime, adx_factory=lambda *_: client, write_report=write) as adapters:
+        async with integration(tmp_path, runtime, adx_factory=lambda *_: client,
+                               private_blob_factory=lambda _: blobs) as adapters:
             result, _ = publishing.quality()
             output = adapters.publish_report(result, ENVIRONMENT, SOURCE)
-            assert output["generated_paths"] == [
-                "reports/daily/2026/09/04/report.json", "reports/daily/2026/09/04/report.md",
-                "reports/latest.json", "reports/latest.md",
-            ]
-            request = json.loads(Path(output["github_request_path"]).read_text())
-            assert request["allowed_paths"] == output["generated_paths"]
-            assert request["repository"] == "ninghu/agent-insights-quality"
-            assert request["base_branch"] == "main" and request["operation"] == "publish-generated-report"
-            assert not any("private" in json.dumps(value) for value in request.values())
-            assert writes[0]["region"] == "Sweden Central"
-            assert writes[0]["report"] == result.to_dict()
-            assert adapters.publish_report(publishing.quality(excluded=3)[0], ENVIRONMENT, SOURCE) == {}
+            assert output["private_report"]["status"] == "delivered"
+            assert set(output) == {"private_report"}
+            assert not adapters.records.read_artifact("publication/github-request", missing_ok=True)
+            assert not (tmp_path / "repo" / "reports").exists()
         assert client.rows[0]["Region"] == "Sweden Central"
     with runtime.ownership():
+        private.seed(runtime, *publishing.quality())
         asyncio.run(run())
+    assert blobs.closed
 
 
-def test_public_write_failure_does_not_prevent_final_adx_report_queue(tmp_path):
+def test_private_write_failure_does_not_prevent_adx_or_inline_email(tmp_path, monkeypatch):
     runtime = RuntimeStore("daily", root=tmp_path / "private")
     config(runtime, context=False)
     client = publishing.FakeClient()
-    def fail(*args, **kwargs):
-        raise OSError("synthetic private failure text")
+    reviewed_catalog(tmp_path, monkeypatch)
+    blobs = private.FakeBlob()
+    blobs.fail_key = "report.md"
     async def run():
-        async with integration(tmp_path, runtime, adx_factory=lambda *_: client, write_report=fail) as adapters:
+        async with integration(tmp_path, runtime, adx_factory=lambda *_: client,
+                               private_blob_factory=lambda _: blobs) as adapters:
             output = adapters.publish_report(publishing.quality()[0], ENVIRONMENT, SOURCE)
             assert "github_request_path" not in output
-            assert "github_publication_failed" in adapters.warnings
+            assert "private_report_publication_failed" in adapters.warnings
+            email = adapters.prepare_delivery(
+                publishing.quality()[0], ENVIRONMENT, SOURCE, rerun=0,
+                recipient=lambda: "synthetic@example.invalid",
+            )
+            assert email.status == "prepared" and email.request.mode == "official"
         assert len(client.commands) == 1
     with runtime.ownership():
+        private.seed(runtime, *publishing.quality())
         asyncio.run(run())
+
+
+def test_publication_metadata_failure_is_logged_without_blocking_inline_email(tmp_path, monkeypatch, capsys):
+    runtime = RuntimeStore("daily", root=tmp_path / "private")
+    reviewed_catalog(tmp_path, monkeypatch)
+    result, _ = publishing.quality()
+    def forbidden(*args):
+        pytest.fail("Missing source metadata permitted provider construction")
+    with runtime.ownership():
+        adapters = integration(tmp_path, runtime, test_run=True, private_blob_factory=forbidden)
+        output = adapters.publish_report(result, ENVIRONMENT, SOURCE)
+        assert output["private_report"]["status"] == "pending"
+        assert "private_report_publication_failed" in adapters.warnings
+        assert adapters.prepare_delivery(
+            result, ENVIRONMENT, SOURCE, rerun=1, recipient=lambda: "synthetic@example.invalid",
+        ).status == "prepared"
+        log = (runtime.run(RUN).directory / "runner.log").read_text()
+        assert "state_record_missing" in log
+        assert output["private_report"]["code"] == "state_record_missing"
+    assert "synthetic@example.invalid" not in capsys.readouterr().out
+
+
+def test_private_checkpoint_failure_disables_only_publication_and_preserves_result(tmp_path, monkeypatch):
+    from agent_insights_quality.state import RecordStore
+    runtime = RuntimeStore("daily", root=tmp_path / "private")
+    reviewed_catalog(tmp_path, monkeypatch)
+    blobs = private.FakeBlob()
+    original = RecordStore._save
+    def fail(records, collection, key, value):
+        if records.directory.name == "private-reports" and key.endswith("/intent"):
+            raise CheckpointError()
+        original(records, collection, key, value)
+    monkeypatch.setattr(RecordStore, "_save", fail)
+    with runtime.ownership():
+        result, plan = publishing.quality()
+        private.seed(runtime, result, plan)
+        adapters = integration(tmp_path, runtime, private_blob_factory=lambda _: blobs)
+        adapters.publish_report(result, ENVIRONMENT, SOURCE)
+        assert adapters.private_disabled and not blobs.writes
+        assert "private_report_checkpoint_failed" in adapters.warnings
+        assert adapters.publish_report(result, ENVIRONMENT, SOURCE) == {}
+        assert adapters.prepare_delivery(
+            result, ENVIRONMENT, SOURCE, rerun=0, recipient=lambda: "synthetic@example.invalid",
+        ).status == "prepared"
+        assert runtime.run(RUN).read_artifact("results/final") == result.to_dict()
+        assert "state_checkpoint_failed" in (runtime.run(RUN).directory / "runner.log").read_text()
+
+
+def test_historical_prepared_email_not_reopened_or_implicitly_published(tmp_path, monkeypatch):
+    runtime = RuntimeStore("daily", root=tmp_path / "private")
+    reviewed_catalog(tmp_path, monkeypatch)
+    with runtime.ownership():
+        adapters = integration(
+            tmp_path, runtime, test_run=True,
+            private_blob_factory=lambda *a: pytest.fail("Historical request uploaded"),
+        )
+        email = adapters.prepare_delivery(
+            publishing.quality()[0], ENVIRONMENT, SOURCE, rerun=1,
+            recipient=lambda: "synthetic@example.invalid",
+        )
+        before = runtime.run(RUN).read_completed("delivery-inputs")
+        output = adapters.publish_report(publishing.quality()[0], ENVIRONMENT, SOURCE)
+        assert output["private_report"]["code"] == "existing_email_unchanged"
+        assert runtime.run(RUN).read_completed("delivery-inputs") == before
+        assert adapters.prepare_delivery(
+            publishing.quality()[0], ENVIRONMENT, SOURCE, rerun=1,
+            recipient=lambda: pytest.fail("Recipient rebuilt"),
+        ) == email
+        assert not runtime.outbox("private-reports").directory.exists()
+
+
+def test_delegation_permission_denied_is_explicit_but_inline_email_is_eligible(tmp_path, monkeypatch):
+    from agent_insights_quality.report_access import ReportAccessError
+    runtime = RuntimeStore("daily", root=tmp_path / "private")
+    reviewed_catalog(tmp_path, monkeypatch)
+    client = private.FakeBlob()
+    client.sign_error = ReportAccessError("report_access_delegation_denied")
+    with runtime.ownership():
+        result, plan = publishing.quality()
+        private.seed(runtime, result, plan)
+        adapters = integration(tmp_path, runtime, private_blob_factory=lambda _: client)
+        status = adapters.publish_report(result, ENVIRONMENT, SOURCE)
+        assert status["private_report"]["status"] == "delivered"
+        assert status["private_report"]["access"]["code"] == "report_access_delegation_denied"
+        assert client.closed, "Signing client must close before preparing mail"
+        email = adapters.prepare_delivery(
+            result, ENVIRONMENT, SOURCE, rerun=0, recipient=lambda: "synthetic@example.invalid",
+        )
+        assert email.status == "prepared" and email.request.report_access is None
+        assert "Detailed report link unavailable" in email.request.html
+        assert "private_report_access_unavailable" in adapters.warnings
+        assert "report_access_delegation_denied" in (runtime.run(RUN).directory / "runner.log").read_text()
+        assert len(client.signings) == 1
+        original = email.request
+        client.sign_error = None
+        adapters.publish_report(result, ENVIRONMENT, SOURCE)
+        assert len(client.signings) == 1
+        assert adapters.prepare_delivery(
+            result, ENVIRONMENT, SOURCE, rerun=0, recipient=lambda: pytest.fail("recipient reloaded"),
+        ).request == original
 
 
 def test_bootstrap_failure_is_durable_safe_and_programming_error_propagates(tmp_path):
@@ -365,8 +468,8 @@ def test_private_diagnostics_capture_errno_windows_code_and_cause_frames_without
     output = capsys.readouterr()
     logs = (run_path / "runner.log").read_text() + (run_path / "events.jsonl").read_text()
     assert "command_io_failed" in logs
-    for private in ("synthetic private outer", "synthetic credential timeout", "synthetic-private-file"):
-        assert private not in diagnostic_text + logs + output.out + output.err
+    for private_text in ("synthetic private outer", "synthetic credential timeout", "synthetic-private-file"):
+        assert private_text not in diagnostic_text + logs + output.out + output.err
     assert "credential_boundary" not in logs + output.out + output.err
     assert "diagnostics_path" not in logs + output.out + output.err
 
@@ -430,12 +533,10 @@ def test_diagnostic_checkpoint_failure_propagates_without_authorizing_more_work(
 
 
 def test_real_official_artifacts_and_email_use_one_result_and_private_context_never_leaks(tmp_path, monkeypatch):
-    from agent_insights_quality import public_artifacts
     runtime = RuntimeStore("daily", root=tmp_path / "private")
     config(runtime)
     reviewed_catalog(tmp_path, monkeypatch)
     result, plan = publishing.quality()
-    monkeypatch.setattr(public_artifacts, "_plan", lambda *_: plan)
     client = publishing.FakeClient()
     async def fetch(*args, **kwargs):
         return snapshot()
@@ -443,7 +544,7 @@ def test_real_official_artifacts_and_email_use_one_result_and_private_context_ne
         async with integration(tmp_path, runtime, adx_factory=lambda *_: client, fetch_context=fetch) as adapters:
             output = adapters.publish_report(result, ENVIRONMENT, SOURCE)
             await adapters.finish_publication()
-            assert "github_request_path" in output
+            assert output["private_report"]["status"] == "delivered"
             email = adapters.prepare_delivery(
                 result, ENVIRONMENT, SOURCE, rerun=0, recipient=lambda: "synthetic@example.invalid",
             )
@@ -456,16 +557,19 @@ def test_real_official_artifacts_and_email_use_one_result_and_private_context_ne
             report_path = adapters.records._path("artifacts", "presentation/report").with_suffix(".md")
             assert report_path.read_text(encoding="utf-8") == detail["markdown"]
             assert DAY.isoformat() in email.request.html
-            for relative in output["generated_paths"]:
-                document = (tmp_path / "repo" / relative).read_text()
-                assert "Synthetic private quality item" not in document
-                if relative.endswith(".json"):
-                    assert json.loads(document)["report"] == result.to_dict()
-            public = json.loads((tmp_path / "repo" / "reports" / "latest.json").read_text())
-            assert public["region"] == "Sweden Central"
+            assert "View report" in email.request.html and "Download MD" in email.request.html
+            assert "Anyone holding a link" in email.request.html
+            assert "human_validation_link_unavailable" not in adapters.records.read_completed(
+                "delivery-inputs",
+            )["presentation"]["blockers"]
+            private_markdown = Path(output["private_report"]["markdown_path"]).read_text()
+            assert "Synthetic private quality item" not in private_markdown
+            assert detail["markdown"] == private_markdown
+            assert not (tmp_path / "repo" / "reports").exists()
             assert client.rows[0]["Payload"] == result.to_dict()
             assert "Synthetic private quality item" not in json.dumps(client.rows)
     with runtime.ownership():
+        private.seed(runtime, result, plan)
         asyncio.run(run())
 
 

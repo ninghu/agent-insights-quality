@@ -76,11 +76,20 @@ staging/Daily fallbacks or stale procedural docs/skills as new authority.
   exclude each wholly from score counts; show coverage, exclusions/reasons and unscored findings.
   More than two, no scorable issue or systemic integrity failure means no quality score/team
   report, only a private failure notice. Missing attempts are not the same as excluded units.
-- All sinks use one result model. Work-item enrichment, ADX, GitHub publication and stateless
+- All sinks use one result model. Work-item enrichment, ADX, private report storage and stateless
   improvement analysis are optional warnings, not reasons to rerun or block eligible inline email.
+- Python publishes frozen MD/derived HTML/minimal manifests to the existing private
+  `quality-artifacts` container, never repository reports or generated branches/PRs.
+  Each Agent has its own compact MD/HTML report from the same result, without rescoring.
+  Conditional writes/readback precede receipts and approved user-delegation SAS signing.
+  Grants are blob-specific, HTTPS/read-only, up to seven days including key clock skew; never
+  account-key SAS, role grants or public container access. SAS belongs only in private access
+  records/email/previews, never uploaded reports, manifests, ADX, Git or logs. Expired unclaimed
+  mail is blocked; explicit access refresh never rewrites or resends it. Keep normal
+  source/catalog/scoring reviews and historical public validation.
 - Acceptance requires a real private TEST email with recomputable counts, evidence-backed gaps
   and disclosed coverage. Explicit test mode uses `--test-run` and a nonzero rerun identity,
-  sends only to the private test recipient, and writes private previews/evidence/logs only:
+  sends only to the private test recipient, and writes private reports/previews/evidence/logs only:
   no public report/trend, ADX writes, generated PR or official team email.
 - Provider acceptance alone is not inbox-delivery proof. The USER enables weekday automation
   after acceptance and normal integration to main; never enable it as part of the private trial.

@@ -1,6 +1,7 @@
 """Offline commands and a narrow, private production entry point.
 
-Only run-staging/run-daily construct Azure ports. Email commands cannot send.
+Run commands construct qualification ports; private-report-flush opens only storage.
+Email commands cannot send.
 Test injection is Python-only; there is no CLI runtime-root or recipient override.
 """
 
@@ -40,6 +41,19 @@ def parser() -> argparse.ArgumentParser:
     )
     status = commands.add_parser("status", help="Show safe local run status")
     status.add_argument("--profile", choices=("daily", "staging"), default="daily")
+    publication = commands.add_parser(
+        "private-report-flush", help="Reconcile/retry one frozen private report; never remeasure or send",
+    )
+    publication.add_argument("--delivery-id", required=True)
+    publication.add_argument(
+        "--read-only", action="store_true",
+        help="Read/reconcile remote blobs and save local receipts, without remote writes",
+    )
+    access = commands.add_parser(
+        "private-report-refresh-access", help="Create a private access revision/preview only; never send",
+    )
+    access.add_argument("--delivery-id", required=True)
+    access.add_argument("--access-revision", required=True)
     preview = commands.add_parser("email-preview", help="Export private local HTML/EML; never claim or send")
     preview.add_argument("--delivery-id", required=True)
     preview.add_argument(
@@ -374,6 +388,40 @@ def _daily_status(runtime, records, run_id, result, email, published, warnings):
     }, 0 if result.team_report_eligible else 2
 
 
+def _unavailable_report_state(error):
+    return {
+        "status": "unavailable",
+        "code": error.code if isinstance(error, QualityError) else "private_report_unavailable",
+        "human_validation_available": False,
+    }
+
+
+def _private_report_status(runtime, run_id, *, access_descriptor=None):
+    from .private_publication import PrivateReportOutbox
+    from .report_access import VerifiedReportAccess, read_report_access
+
+    try:
+        outbox = PrivateReportOutbox(runtime, run_id)
+        request = outbox.request()
+        publication = outbox.status(request)
+    except (QualityError, OSError) as error:
+        return {
+            **_unavailable_report_state(error),
+            "access": _unavailable_report_state(error),
+        }
+    try:
+        access = (
+            read_report_access(runtime, access_descriptor, delivery_id=run_id)
+            if access_descriptor is not None else VerifiedReportAccess(
+                runtime, run_id + "/" + request["presentation_id"] + "/access/initial",
+            )
+        )
+        publication["access"] = access.status()
+    except (QualityError, OSError) as error:
+        publication["access"] = _unavailable_report_state(error)
+    return publication
+
+
 def _status(runtime) -> dict:
     runs = []
     directory = runtime.directory / "runs"
@@ -400,6 +448,24 @@ def _status(runtime) -> dict:
         performance = records.read("performance/latest", missing_ok=True)
         if performance:
             runs[-1]["performance_path"] = _artifact_path(records, performance["artifact"])
+        if runtime.environment == "daily":
+            from .email import read_email
+            email = None
+            try:
+                if runtime.outbox("email").read(path.name, missing_ok=True) is not None:
+                    email = read_email(runtime.outbox("email"), path.name)
+                    runs[-1].update(
+                        email_status=email.status, inbox_delivery_confirmed=email.inbox_delivery_confirmed,
+                    )
+            except (QualityError, OSError) as error:
+                runs[-1]["email_status"] = "unavailable"
+                runs[-1]["email_status_code"] = (
+                    error.code if isinstance(error, QualityError) else "email_record_unavailable"
+                )
+            runs[-1]["private_report"] = _private_report_status(
+                runtime, path.name,
+                access_descriptor=email.request.report_access if email else None,
+            )
     return {"profile": runtime.environment, "runs": runs}
 
 
@@ -456,6 +522,24 @@ def main(
                             value["performance_path"] = performance[0].artifact_path
                         if performance[0].health_warnings:
                             value["warnings"] = sorted({*value.get("warnings", []), "logging_failed"})
+            elif args.command == "private-report-refresh-access":
+                from .report_access import refresh_report_access
+                with command_status(runtime, args.command):
+                    status = refresh_report_access(
+                        runtime, args.delivery_id, revision=args.access_revision,
+                    )
+                    value, code = {
+                        "delivery_id": args.delivery_id, "report_access": status,
+                    }, 0 if status["status"] == "ready" else 2
+            elif args.command == "private-report-flush":
+                from .private_publication import flush_private_report
+                with command_status(runtime, args.command):
+                    status = flush_private_report(
+                        runtime, args.delivery_id, read_only=args.read_only,
+                    )
+                    value, code = {
+                        "delivery_id": args.delivery_id, "private_report": status,
+                    }, 0 if status["status"] == "delivered" else 2
             elif args.command == "email-preview":
                 from .email_preview import export_email_preview
                 preview = export_email_preview(

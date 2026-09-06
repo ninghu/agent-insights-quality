@@ -18,6 +18,21 @@ _REVISION = r"[0-9a-f]{40}"
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._()~-]{0,127}"
 
 
+def authenticated_storage_references(account: str, container: str, prefix: str) -> dict:
+    """Storage references are NOT browser login URLs or Human Validation links."""
+    from .private_publication import CONTAINER, _account, _key
+
+    _account(account)
+    if container != CONTAINER:
+        raise ReportContextError("report_storage_reference_invalid")
+    _key(prefix + "/manifest.json")
+    return {name: {
+        "uri": f"https://{account}.blob.core.windows.net/{container}/{prefix}/{name}",
+        "access_required": True, "auth_mode": "entra_storage_data_plane",
+        "human_validation_available": False,
+    } for name in ("report.md", "report.html", "manifest.json")}
+
+
 def _public_read(url: str) -> bytes:
     with urlopen(url, timeout=10) as response:
         # Never follow a redirect to a different host or mutable document.
