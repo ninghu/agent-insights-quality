@@ -483,6 +483,7 @@ def test_actual_hosted_session_is_persisted(environment, target, field):
     }
     assert "/endpoint/sessions?api-version=v1" in wire.url
     assert wire.headers["x-ms-client-request-id"] == "client-request"
+    assert "traceparent" not in wire.headers
 
 
 def test_session_202_preserves_identity_without_invoking_business(environment, target):
@@ -718,6 +719,7 @@ def test_fractional_insights_lookback_native_operation_and_exact_retry(environme
     )
     first, second = transport.requests
     assert first.body == second.body == b'{"lookback_hours":0.01234567}'
+    assert all("traceparent" not in wire.headers for wire in transport.requests)
     assert (
         first.headers["Operation-Id"]
         == second.headers["Operation-Id"]
@@ -920,6 +922,7 @@ def test_structured_sol_exact_deployment_schema_and_bounded_rejection_retry(
     )
     assert result == {"verdict": "synthetic"} and waits == [2]
     first, second = transport.requests
+    assert all("traceparent" not in wire.headers for wire in transport.requests)
     assert first.body == second.body
     body = json.loads(first.body)
     assert body["model"] == "sol-assessment"

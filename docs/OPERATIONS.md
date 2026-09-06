@@ -179,6 +179,59 @@ Integrate repairs after the active run ends, then let incremental selection choo
 
 ## Private performance observations
 
+### Caller invocation context
+
+`invocation_trace_context` is a strict integer setting, 0 or 1, default **1 for new
+staging and Daily runs**. It adds a W3C `traceparent` only to top-level Agent invocation
+POSTs made through the direct REST adapter, not session control, Insights, Sol or
+administrative requests. Setup and probe turns receive independent contexts while
+their Prompt response continuation or Hosted native session remains unchanged.
+Subagent calls inside deployed workflows retain normal root-context inheritance.
+
+The frozen algorithm `aiq-w3c-sha256-v1` derives trace and parent IDs separately from
+the immutable client request ID using SHA-256, with domain
+`agent-insights-quality/invocation-context/v1`, purpose labels `trace` and `parent`,
+and NUL separators. The first 32/16 lowercase hex characters are used; an all-zero
+identifier becomes one. Version is `00`, flags `01` (a sampling hint, not a guarantee).
+No client span is exported and no stored operation ID is assigned or rewritten.
+Known-rejected retries retain the same request ID/context; unknown submissions are
+not repeated. Each turn's small immutable `outbound-context` checkpoint records only
+the algorithm, expected header, request/source identity and pre-invoke provenance.
+It is **not proof that a request reached the network**; no full headers or credentials
+are captured. Failure to persist the plan or invocation stops the POST.
+
+The policy is frozen in `completed/invocation-trace-context.json` before invocation.
+Legacy runs without it remain off, resumed runs restore their frozen policy, and
+inherited traffic uses its owning run's policy. Existing completed receipts are not
+retroactively given headers. The shared context driver (`invocation_context.py`) and
+invocation wire adapters (`providers/runtime.py`, `providers/transport.py`) are traffic
+inputs: their changes select fresh staging traffic for affected reviewed targets,
+including Prompt Agents, rather than reassessing old traffic. Report/presentation,
+read-only audit and assessor-only edits are not new traffic dependencies. This does
+not itself change Agent deployment inputs or require a manual `--full` override.
+
+Explicit Agent context runs in an isolated Python context with optional OpenTelemetry
+HTTP instrumentation suppressed. Conflicting case-insensitive trace headers and
+attempted context-header replacement fail closed; ambient baggage/tracestate is not
+forwarded. This controls the caller, not a platform's later parent selection.
+
+After authorized staging, use its resolved run ID for the offline, read-only audit:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+python -m agent_insights_quality.trace_audit --profile staging --run-id $runId
+```
+
+It reads retained invocation records and attributable Snapshot roots, preferring the
+immutable pre-Insights snapshot where present, and emits aliases rather than raw IDs.
+`different_context_or_unsupported`, missing roots or shared observed contexts require
+inspection before proceeding to a full Daily measurement. A legitimate platform
+restart can change context, so the comparison never changes readiness or exclusions.
+Caller uniqueness is not proof of end-to-end propagation. Keep the platform outcome
+unknown until the fresh staging evidence supports acceptance; do not silently claim
+the platform honored the header. Ten attempts, six Daily readiness, eight-observation
+staging qualification, scoring and the default-off Travel session lookahead are unchanged.
+
 Daily keeps five Agent lanes and sequential versions within each lane. Independent attempts
 use up to `daily_attempt_workers` (default 4), under the shared `daily_attempt_budget` (default 10).
 Each attempt's setup and verification turns remain ordered. Travel business attempts remain

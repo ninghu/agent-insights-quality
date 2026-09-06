@@ -10,11 +10,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import nullcontext
+from contextvars import Context
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from agent_insights_quality.contracts import JsonObject
 from agent_insights_quality.errors import QualityError
+from agent_insights_quality.invocation_context import validate_traceparent
 from agent_insights_quality.providers.cancellation import drain_on_cancel
 
 FOUNDRY_SCOPE = "https://ai.azure.com/.default"
@@ -72,6 +75,48 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _explicit_traceparent(headers: Mapping[str, str]) -> str | None:
+    parents = [value for key, value in headers.items() if key.casefold() == "traceparent"]
+    if not parents:
+        return None
+    if len(parents) != 1 or any(key.casefold() in {"baggage", "tracestate"} for key in headers):
+        raise QualityError("trace_context_headers_conflict", request_accepted=False)
+    validate_traceparent(parents[0])
+    return parents[0]
+
+
+def _suppress_http_tracing():
+    try:
+        from opentelemetry.instrumentation.utils import suppress_instrumentation
+    except ModuleNotFoundError as error:
+        if error.name in {"opentelemetry", "opentelemetry.instrumentation", "opentelemetry.instrumentation.utils"}:
+            return nullcontext()
+        raise QualityError("trace_context_instrumentation_unavailable", request_accepted=False) from None
+    except ImportError:
+        raise QualityError("trace_context_instrumentation_unavailable", request_accepted=False) from None
+    return suppress_instrumentation()
+
+
+class _PinnedTraceRequest(urllib.request.Request):
+    def __init__(self, *args, traceparent: str, **kwargs):
+        self._traceparent = traceparent
+        super().__init__(*args, **kwargs)
+
+    def _check_context(self, key: str, value: str) -> None:
+        if key.casefold() in {"baggage", "tracestate"} or (
+            key.casefold() == "traceparent" and value != self._traceparent
+        ):
+            raise QualityError("trace_context_header_overwrite", request_accepted=False)
+
+    def add_header(self, key, val):
+        self._check_context(key, val)
+        super().add_header(key, val)
+
+    def add_unredirected_header(self, key, val):
+        self._check_context(key, val)
+        super().add_unredirected_header(key, val)
+
+
 class AzureHttpTransport:
     """Current Azure CLI identity; credentials are acquired only when a request is sent."""
 
@@ -81,7 +126,13 @@ class AzureHttpTransport:
         self._credential_lock = threading.Lock()
 
     async def send(self, request: HttpRequest) -> HttpResponse:
+        if _explicit_traceparent(request.headers):
+            return await drain_on_cancel(asyncio.to_thread(Context().run, self._isolated_send, request))
         return await drain_on_cancel(asyncio.to_thread(self._send, request))
+
+    def _isolated_send(self, request: HttpRequest) -> HttpResponse:
+        with _suppress_http_tracing():
+            return self._send(request)
 
     def _send(self, request: HttpRequest) -> HttpResponse:
         validate_url(request.url)
@@ -90,8 +141,11 @@ class AzureHttpTransport:
         token = self._bearer_token(request.scope)
         headers = dict(request.headers)
         headers["Authorization"] = f"Bearer {token}"
-        wire = urllib.request.Request(
-            request.url, data=request.body, headers=headers, method=request.method
+        parent = _explicit_traceparent(headers)
+        request_type = _PinnedTraceRequest if parent else urllib.request.Request
+        wire = request_type(
+            request.url, data=request.body, headers=headers, method=request.method,
+            **({"traceparent": parent} if parent else {}),
         )
         try:
             try:

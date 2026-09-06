@@ -15,6 +15,7 @@ from agent_insights_quality.contracts import (
     Target,
 )
 from agent_insights_quality.errors import QualityError
+from agent_insights_quality.invocation_context import invocation_headers
 from agent_insights_quality.providers.artifacts import ImageBuilder
 from agent_insights_quality.providers.callbacks import safe_persist
 from agent_insights_quality.providers.deployment import DeploymentClient
@@ -187,7 +188,7 @@ class AzureRuntime:
                 path,
                 body,
                 hosted=not prompt,
-                headers={"x-ms-client-request-id": request_id},
+                headers={"x-ms-client-request-id": request_id, **invocation_headers(request_id)},
                 api_version=None if prompt else "v1",
             )
         except QualityError as error:

@@ -104,6 +104,9 @@ def traffic_inputs(target: Target) -> tuple[Path, ...]:
     return (
         target.version_root / "traffic.json",
         root / "src" / "agent_insights_quality" / "traffic.py",
+        root / "src" / "agent_insights_quality" / "invocation_context.py",
+        root / "src" / "agent_insights_quality" / "providers" / "runtime.py",
+        root / "src" / "agent_insights_quality" / "providers" / "transport.py",
     )
 
 

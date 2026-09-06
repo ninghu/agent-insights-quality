@@ -15,6 +15,7 @@ from .catalogs import Catalog
 from .contracts import Attempt, CloudPort, Deployment, Invocation, SolPort, Step, Target
 from .errors import QualityError
 from .events import RunLogger
+from .invocation_context import ALGORITHM, POLICY_KEY, enabled_policy, invocation_context, planned_context
 from .performance import ObservedCloud, ObservedSol, RunMetrics, binding, limited, measure, observe, scope
 from .registry import DeploymentRegistry
 from .results import (
@@ -463,6 +464,16 @@ class Runner:
             if not self.test_run and kind == "daily" and existing["source_revision"] != self.revision:
                 raise QualityError("official_resume_source_changed")
             self.reuse_run_id = existing.get("reuse_run_id")
+        trace_policy = self.run.read_completed(POLICY_KEY, missing_ok=True)
+        if trace_policy is None:
+            trace_policy = {"algorithm": (
+                ALGORITHM if existing is None and self.settings.invocation_trace_context else None
+            )}
+        trace_enabled = enabled_policy(trace_policy)
+        self._save(self.run, "completed", POLICY_KEY, trace_policy)
+        self.settings = replace(self.settings, invocation_trace_context=int(trace_enabled))
+        if self.metrics:
+            self.metrics.configuration = self.settings.to_dict()
         if kind == "daily":
             policy = self.run.read_completed("daily-session-lookahead", missing_ok=True)
             if policy is None:
@@ -848,9 +859,27 @@ class Runner:
                                   error_code="invocation_outcome_unresolved")
             self._save(work.records, "completed", key, asdict(receipt))
             return receipt
+        trace_enabled = enabled_policy(work.records.read_completed(POLICY_KEY, missing_ok=True))
+        request_id = raw["request_id"] if raw else uuid.uuid4().hex
+        context_key = key + "/outbound-context"
+        saved_context = work.records.read_completed(context_key, missing_ok=True)
+        if saved_context is not None and not trace_enabled:
+            raise StateError("trace_context_policy_invalid")
+        if trace_enabled:
+            if saved_context is not None:
+                request_id = saved_context.get("request_id")
+                try:
+                    expected_context = planned_context(request_id, work.binding["traffic_source_revision"])
+                except QualityError as error:
+                    raise StateError("trace_context_checkpoint_invalid") from error
+                if saved_context != expected_context:
+                    raise StateError("trace_context_checkpoint_invalid")
+            self._save(work.records, "completed", context_key, planned_context(
+                request_id, work.binding["traffic_source_revision"],
+            ))
         while True:
             receipt = Invocation(
-                uuid.uuid4().hex, None, session, self.now().isoformat(), "", "submitting",
+                request_id, None, session, self.now().isoformat(), "", "submitting",
             )
             def persist(value: Invocation) -> None:
                 nonlocal receipt
@@ -858,10 +887,11 @@ class Runner:
                 receipt = value
             persist(receipt)
             try:
-                receipt = await self.cloud.invoke(
-                    deployment, step, request_id=receipt.request_id, session_id=session,
-                    previous_response_id=previous if target.is_prompt else None, persist=persist,
-                )
+                with invocation_context(trace_enabled):
+                    receipt = await self.cloud.invoke(
+                        deployment, step, request_id=receipt.request_id, session_id=session,
+                        previous_response_id=previous if target.is_prompt else None, persist=persist,
+                    )
             except QualityError as error:
                 self._fatal(error)
                 self._failure(target, error, "traffic")
