@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 import importlib.util
+from importlib.metadata import version as installed_version
 import json
 import os
 import sys
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import aiohttp
+from azure.ai.agentserver.responses import CreateResponse
 import httpx
 import pytest
 from openai import AsyncOpenAI
@@ -22,6 +24,16 @@ from opentelemetry.trace import StatusCode
 
 ROOT = Path(__file__).resolve().parents[2] / "agents" / "support-ticket-agent"
 VERSIONS = ["v0", *(f"issue-{number:03}" for number in range(29, 37))]
+
+
+def test_hosting_sdk_matches_deployed_plain_mapping_contract():
+    requirement = next(
+        line for line in (ROOT / "v0" / "requirements.txt").read_text().splitlines()
+        if line.startswith("azure-ai-agentserver-responses==")
+    )
+    assert installed_version("azure-ai-agentserver-responses") == requirement.split("==")[1]
+    payload = CreateResponse(input=[{"role": "user", "content": "Acknowledge."}])
+    assert isinstance(payload, dict)
 
 
 @pytest.fixture

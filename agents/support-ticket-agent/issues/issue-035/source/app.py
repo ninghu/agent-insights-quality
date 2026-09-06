@@ -97,7 +97,7 @@ async def responses(payload: CreateResponse, context: ResponseContext, cancellat
     with RUNTIME_IDENTITY.start_span(tracer, f"invoke_agent {RUNTIME_IDENTITY.name}") as span:
         span.set_attribute("gen_ai.operation.name", "invoke_agent")
         span.set_attribute("gen_ai.response.id", context.response_id)
-        span.set_attribute("gen_ai.input.messages", json.dumps(payload.as_dict().get("input")))
+        span.set_attribute("gen_ai.input.messages", json.dumps(payload.get("input")))
         span.set_attribute("issue.id", ISSUE_ID)
         succeeded = False
         present = False
