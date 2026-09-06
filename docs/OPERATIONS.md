@@ -35,6 +35,11 @@ Repeat the same command to resume matching work. Do not manually invent generati
 state, delete Agent objects or resend completed traffic. A code/scenario change selects affected
 work; unchanged completed results retain their original provenance.
 
+An issue-catalog entry-only edit re-evaluates that issue when Git proves the inventory, Agent
+assignment and global catalog settings are unchanged. Unknown comparisons, inventory changes and
+shared verifier changes remain conservative. Expectation-only traffic edits reuse matching raw
+evidence; an explicit execution safety cap is not a substitute for the reviewed early-stop guard.
+
 Staging resumes the same source and selection mode across midnight, retaining its original run
 date and completed calls. Repeating a completed full run is a no-op. Only an explicitly requested
 fresh full exercise uses `run-staging --full --new-run`; it cannot replace an unfinished full run.

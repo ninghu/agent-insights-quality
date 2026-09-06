@@ -11,6 +11,8 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
+import yaml
+
 from .catalogs import Catalog
 from .contracts import Target
 
@@ -39,10 +41,14 @@ class Selection:
 class SourceChanges:
     paths: tuple[Path, ...]
     evaluation_only: tuple[Path, ...] = ()
+    evaluation_scopes: tuple[tuple[Path, tuple[str, ...]], ...] = ()
 
     def __post_init__(self) -> None:
         if not set(self.evaluation_only) <= set(self.paths):
             raise ValueError("Evaluation-only paths must be part of the source comparison")
+        scoped = [path for path, _ in self.evaluation_scopes]
+        if len(scoped) != len(set(scoped)) or not set(scoped) <= set(self.paths):
+            raise ValueError("Evaluation scopes require distinct compared paths")
 
 
 def select_daily(
@@ -158,9 +164,9 @@ def _git_document(root: Path, revision: str, path: Path) -> dict | None:
         ["git", "show", f"{revision}:{name}"],
         cwd=root, capture_output=True, check=True,
     )
-    document = json.loads(result.stdout)
+    document = yaml.safe_load(result.stdout) if path.suffix in {".yaml", ".yml"} else json.loads(result.stdout)
     if not isinstance(document, dict):
-        raise ValueError("Traffic comparison requires a JSON object")
+        raise ValueError("Source comparison requires an object")
     return document
 
 
@@ -172,14 +178,50 @@ def _traffic_execution(document: dict) -> dict:
     return execution
 
 
+def _issue_evaluation_scope(before: dict | None, after: dict | None) -> tuple[str, ...] | None:
+    """Narrow only reviewed-entry edits; inventory/global changes stay conservative."""
+    if before is None or after is None or (
+        {key: value for key, value in before.items() if key != "issues"}
+        != {key: value for key, value in after.items() if key != "issues"}
+    ):
+        return None
+    indexes = []
+    for document in (before, after):
+        issues = document.get("issues")
+        if not isinstance(issues, list) or any(
+            not isinstance(issue, dict)
+            or not isinstance(issue.get("id"), str) or not issue["id"]
+            or not isinstance(issue.get("agent"), str) or not issue["agent"]
+            for issue in issues
+        ):
+            raise ValueError("Invalid issue catalog comparison")
+        index = {issue["id"]: issue for issue in issues}
+        if len(index) != len(issues):
+            raise ValueError("Duplicate issue catalog identity")
+        indexes.append(index)
+    old, new = indexes
+    if old.keys() != new.keys() or any(old[key]["agent"] != new[key]["agent"] for key in old):
+        return None
+    return tuple(sorted(
+        f"{new[key]['agent']}/{key}" for key in new if old[key] != new[key]
+    ))
+
+
 def git_source_changes(
     root: Path, base_revision: str, revision: str = "HEAD",
 ) -> SourceChanges:
-    """Recognize expectation-only traffic edits by comparing ordinary Git contents."""
+    """Resolve expectation-only traffic and unchanged issue-catalog entries from Git."""
     revisions = _git_revisions(root, base_revision, revision)
     paths = _git_paths(root, revisions)
     evaluation_only = []
+    evaluation_scopes = []
     for path in paths:
+        if path == Path("catalogs", "ISSUE_CATALOG.yaml"):
+            before, after = (_git_document(root, commit, path) for commit in revisions)
+            targets = _issue_evaluation_scope(before, after)
+            if targets is not None:
+                evaluation_scopes.append((path, targets))
+            continue
         if path.parts[0] != "agents" or path.name != "traffic.json":
             continue
         before, after = (_git_document(root, commit, path) for commit in revisions)
@@ -189,7 +231,7 @@ def git_source_changes(
             and _traffic_execution(before) == _traffic_execution(after)
         ):
             evaluation_only.append(path)
-    return SourceChanges(paths, tuple(evaluation_only))
+    return SourceChanges(paths, tuple(evaluation_only), tuple(evaluation_scopes))
 
 
 def _changes(root: Path, paths: Iterable[str | Path]) -> tuple[Path, ...]:
@@ -233,15 +275,16 @@ def select_staging(
 
     def normalized(
         changes: Iterable[str | Path] | SourceChanges,
-    ) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    ) -> tuple[tuple[Path, ...], tuple[Path, ...], dict[Path, tuple[str, ...]]]:
         if isinstance(changes, SourceChanges):
             return (
                 _changes(catalog.root, changes.paths),
                 _changes(catalog.root, changes.evaluation_only),
+                {_changes(catalog.root, (path,))[0]: keys for path, keys in changes.evaluation_scopes},
             )
-        return _changes(catalog.root, changes), ()
+        return _changes(catalog.root, changes), (), {}
 
-    common, common_evaluation = normalized(changed_paths)
+    common, common_evaluation, common_scopes = normalized(changed_paths)
     revisions = (
         {key: normalized(paths) for key, paths in changes_by_revision.items()}
         if changes_by_revision is not None else None
@@ -259,20 +302,26 @@ def select_staging(
             reasons.append("incomplete")
         changes = common
         evaluation_only = common_evaluation
+        evaluation_changes = tuple(
+            path for path in common if path not in common_scopes or target.key in common_scopes[path]
+        )
         execution_changes = tuple(path for path in common if path not in common_evaluation)
         if record is not None and revisions is not None and not full:
             if record.source_revision not in revisions:
                 raise ValueError("Missing comparison for last-test source revision")
-            paths, expectation_paths = revisions[record.source_revision]
+            paths, expectation_paths, scopes = revisions[record.source_revision]
             changes += paths
             evaluation_only += expectation_paths
+            evaluation_changes += tuple(
+                path for path in paths if path not in scopes or target.key in scopes[path]
+            )
             execution_changes += tuple(path for path in paths if path not in expectation_paths)
         if _touches(changes, deployment_inputs(target)):
             reasons.append("deployment_changed")
         if _touches(execution_changes, traffic_inputs(target)):
             reasons.append("traffic_changed")
         evaluation_changed = _touches(
-            changes, evaluation_inputs(target) + extra_evaluation,
+            evaluation_changes, evaluation_inputs(target) + extra_evaluation,
         ) or _touches(evaluation_only, traffic_inputs(target))
         if reasons:
             selected.append(Selection(target, "traffic", tuple(reasons)))

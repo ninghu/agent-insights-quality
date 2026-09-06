@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
+import yaml
 
 from agent_insights_quality.catalogs import load_catalog
 from agent_insights_quality.selection import (
@@ -145,6 +146,77 @@ def test_expectation_only_traffic_edits_do_not_retraffic(catalog):
         changes_by_revision={"source-one": changes},
     )
     assert selected[0].action == "traffic"
+
+
+def test_scoped_issue_catalog_change_does_not_reassess_unchanged_units(catalog):
+    path = Path("catalogs/ISSUE_CATALOG.yaml")
+    changes = SourceChanges((path,), evaluation_scopes=((path, ("support-ticket-agent/issue-031",)),))
+    selected = select_staging(catalog, last_tests=records(catalog), changed_paths=changes)
+    assert [(item.target.key, item.action) for item in selected] == [
+        ("support-ticket-agent/issue-031", "reassess"),
+    ]
+    assert len(select_staging(
+        catalog, last_tests=records(catalog), changed_paths=(path,),
+        changes_by_revision={"source-one": changes},
+    )) == 41
+    assert len(select_staging(
+        catalog, last_tests=records(catalog), changed_paths=changes,
+        changes_by_revision={"source-one": (Path("src/agent_insights_quality/assessment.py"),)},
+    )) == 41
+
+
+@pytest.mark.parametrize("mutation,targets", [
+    ("entry", ("support-ticket-agent/issue-031",)),
+    ("reorder", ()),
+    ("global", None),
+    ("owner", None),
+    ("added", None),
+])
+def test_git_catalog_scope_uses_entries_without_narrowing_global_or_inventory_edits(tmp_path, catalog, mutation, targets):
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    git("init", "--quiet")
+    git("config", "user.name", "Synthetic Test")
+    git("config", "user.email", "synthetic@example.invalid")
+    git("config", "commit.gpgsign", "false")
+    relative = Path("catalogs/ISSUE_CATALOG.yaml")
+    path = tmp_path / relative
+    path.parent.mkdir()
+    document = copy.deepcopy(catalog._documents[1])
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    git("add", "--all")
+    git("commit", "--quiet", "-m", "Synthetic reviewed inventory")
+    first = git("rev-parse", "HEAD")
+    issue = next(item for item in document["issues"] if item["id"] == "issue-031")
+    if mutation == "entry":
+        issue["expected_fix"] = "Synthetic clarified existing healthy behavior."
+    elif mutation == "reorder":
+        document["issues"].reverse()
+    elif mutation == "global":
+        document["selection"]["issues_per_agent_daily"] = 3
+    elif mutation == "owner":
+        issue["agent"] = "weather-agent"
+    else:
+        document["issues"].append({**issue, "id": "issue-037"})
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    git("add", "--all")
+    git("commit", "--quiet", "-m", "Synthetic catalog change")
+    changes = git_source_changes(tmp_path, first)
+    expected = () if targets is None else ((relative, targets),)
+    assert changes.evaluation_scopes == expected
+    selected = select_staging(catalog, last_tests=records(catalog), changed_paths=changes)
+    assert len(selected) == (41 if targets is None else len(targets))
+
+
+def test_catalog_scope_rejects_duplicate_entries_and_uncompared_scope_paths():
+    from agent_insights_quality.selection import _issue_evaluation_scope
+    issue = {"id": "issue-031", "agent": "support-ticket-agent"}
+    with pytest.raises(ValueError, match="Duplicate issue"):
+        _issue_evaluation_scope({"issues": [issue]}, {"issues": [issue, issue]})
+    with pytest.raises(ValueError, match="compared paths"):
+        SourceChanges((), evaluation_scopes=((Path("catalogs/ISSUE_CATALOG.yaml"), ()),))
 
 
 def test_deployment_inputs_exclude_traffic_and_verifiers(catalog):
