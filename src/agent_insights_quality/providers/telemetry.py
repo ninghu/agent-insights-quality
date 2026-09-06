@@ -73,7 +73,9 @@ class AzureLogsReader:
             )
         try:
             result = self._client.query_resource(
-                self.resource_id, query, timespan=bounds, server_timeout=180
+                self.resource_id, query, timespan=bounds, server_timeout=180,
+                # Live readiness cannot reuse the API's default two-minute response cache.
+                headers={"Cache-Control": "no-cache"},
             )
         except AzureError:
             raise QualityError("telemetry_query_failed", retryable=True) from None

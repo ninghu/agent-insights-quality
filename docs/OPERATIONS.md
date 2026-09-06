@@ -139,6 +139,12 @@ Deployment polling retains `poll_timeout_seconds` (default 600); trace hydration
 A local wait timeout is not a native failed run. Resume queries the original accepted operation
 before deciding its outcome, without rewriting its existing deadline or creating another analysis.
 
+Live evidence discovery and hydration send `Cache-Control: no-cache`. Azure Monitor's
+[default two-minute response cache](https://learn.microsoft.com/azure/azure-monitor/logs/api/cache)
+can otherwise keep returning the initial incomplete view throughout a bounded hydration window.
+Bypassing that cache does not alter query scope, extend deadlines, lower readiness requirements
+or guarantee telemetry export. Later observations remain later evidence, never retroactive proof.
+
 Local `runner.log` and `events.jsonl` preserve starts, heartbeats, retries and outcomes across
 restart. They work without ADX. Raw evidence is kept separately. Status reads do not take the
 writer lock or perform live work.

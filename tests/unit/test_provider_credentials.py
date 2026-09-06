@@ -322,11 +322,13 @@ def test_logs_default_and_injected_credentials_reach_the_query_client(credential
     assert credentials.constructed == ([] if injected else [credential])
     assert credentials.options == ([] if injected else [{"process_timeout": 60}])
     assert len(queries) == 2
+    assert all(options["headers"] == {"Cache-Control": "no-cache"} for _, options in queries)
 
 
 def test_injected_logs_client_does_not_construct_a_credential(credentials, monkeypatch):
     class Client:
         def query_resource(self, *args, **kwargs):
+            assert kwargs["headers"] == {"Cache-Control": "no-cache"}
             return SimpleNamespace(status="Success", tables=[])
 
     query = ModuleType("azure.monitor.query")
@@ -337,6 +339,54 @@ def test_injected_logs_client_does_not_construct_a_credential(credentials, monke
         "synthetic query", start="2026-09-01T00:00:00Z", end="2026-09-02T00:00:00Z",
     )).complete
     assert not credentials.constructed
+
+
+@pytest.mark.parametrize("initial_roots", [3, 5])
+@pytest.mark.parametrize("honor_bypass,expected_roots", [(True, 10), (False, None)])
+def test_discovery_and_hydration_refresh_within_the_original_response_cache_lifetime(
+    credentials, monkeypatch, initial_roots, honor_bypass, expected_roots,
+):
+    from copy import deepcopy
+    import test_telemetry as telemetry
+
+    query_module = ModuleType("azure.monitor.query")
+    query_module.LogsQueryClient = lambda *_: pytest.fail("Injected client must be retained")
+    monkeypatch.setitem(sys.modules, "azure.monitor.query", query_module)
+    class CachedClient:
+        elapsed = 0
+        roots = initial_roots
+        def __init__(self):
+            self.cache, self.calls = {}, []
+
+        def query_resource(self, resource, query, **kwargs):
+            self.calls.append((resource, query, deepcopy(kwargs)))
+            fresh = honor_bypass and kwargs["headers"] == {"Cache-Control": "no-cache"}
+            if query in self.cache and self.elapsed - self.cache[query][0] < 120 and not fresh:
+                return deepcopy(self.cache[query][1])
+            rows = [telemetry.span(f"response-{index}") for index in range(self.roots)]
+            table = SimpleNamespace(
+                name="PrimaryResult", columns=list(rows[0]), rows=[list(row.values()) for row in rows],
+            )
+            result = SimpleNamespace(status="Success", tables=[table])
+            self.cache[query] = (self.elapsed, deepcopy(result))
+            return result
+
+    client = CachedClient()
+    reader = AzureLogsReader("/synthetic/telemetry", client=client)
+    receipts = tuple(telemetry.invocation(index) for index in range(10))
+    first = asyncio.run(telemetry.collect_snapshot(reader, telemetry.DEPLOYMENT, receipts))
+    client.elapsed, client.roots = 5, 10
+    second = asyncio.run(telemetry.collect_snapshot(reader, telemetry.DEPLOYMENT, receipts))
+    assert len(first.attributable_responses) == initial_roots
+    assert len(second.attributable_responses) == (expected_roots or initial_roots)
+    assert len(client.calls) == 4
+    assert client.calls[0] == client.calls[2]
+    assert client.calls[1] == client.calls[3]
+    assert "operation_Id in" not in client.calls[0][1]
+    assert "operation_Id in" in client.calls[1][1]
+    assert all(call[2]["headers"] == {"Cache-Control": "no-cache"} for call in client.calls)
+    assert first.query_complete and second.query_complete
+    assert second.window_start == first.window_start and second.window_end == first.window_end
 
 
 def test_cli_logs_auth_failure_does_not_switch_identity(credentials, monkeypatch):
