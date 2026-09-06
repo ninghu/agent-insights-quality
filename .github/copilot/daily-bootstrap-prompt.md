@@ -1,4 +1,11 @@
-Run the weekday Agent Insights quality automation locally.
+Run the official weekday Agent Insights quality automation locally.
+
+This template is official mode only: no TEST recipient or official-recipient override.
+For a private TEST, use `.github/copilot/email-test-prompt.md` instead. Its operator fills
+TEST_TO_ADDRESS with one literal private address and NEW_POSITIVE_RERUN with a new positive
+integer before starting. Do not guess the mode or infer an address from message content.
+Manual candidate TEST trials keep that candidate; only automation after normal integration
+uses a fresh latest-main worktree. Neither template authorizes enabling a schedule.
 
 1. Read AGENTS.md. In the fresh automation worktree, fetch origin/main and fast-forward to it.
    Set PYTHONPATH to this worktree's src and confirm the imported module resolves there.
@@ -23,7 +30,9 @@ Run the weekday Agent Insights quality automation locally.
    only a private revision/preview and never makes the original expired email claimable.
 
 Eligible official reports use the fixed team mailbox; an ineligible run prepares a private failure
-notice instead. Never replace the recipient selected by the runner. Optional publication failures
+notice instead, using the run's frozen private configuration fallback. Never pass `--test-to`
+in official mode or replace the recipient selected by the runner. Editing a template or the
+default configuration cannot redirect a prepared, claimed or sent request. Optional publication failures
 are warnings, not reasons to rerun qualification. Source/catalog/scoring changes still require
 normal review; this removal applies only to generated Daily reports. Never copy private runtime
 data or provider receipts into a pull request.
