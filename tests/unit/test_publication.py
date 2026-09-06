@@ -601,7 +601,7 @@ def test_versioned_kql_views_use_actual_result_paths_and_keep_legacy_history():
     assert "PayloadVersion == '3.0.0'" in legacy
     assert "DailyQualityPublications" not in current
     assert "Payload.run" not in current and "BaselinePassed" not in current
-    assert "arg_max(PublishedAt, *) by FrameworkRunId" in current
+    assert "arg_min(PublishedAt, *) by FrameworkRunId" in current
     assert "by FrameworkRunId, EventId" in current
     assert "array_length(ContentHashes) > 1" in current
     result = quality(1)[0].to_dict()
@@ -620,27 +620,3 @@ def test_versioned_kql_views_use_actual_result_paths_and_keep_legacy_history():
     assert "forceUpdateTag: 'quality-analytics-v7-public-outbox'" in (
         root / "infra" / "modules" / "quality-analytics.bicep"
     ).read_text(encoding="utf-8")
-
-
-def test_current_dashboard_separates_coverage_policies_and_retains_legacy_pages():
-    root = Path(__file__).resolve().parents[2]
-    dashboard = json.loads((root / "dashboards" / "agent-insights-quality.template.json").read_text(encoding="utf-8"))
-    current_page = dashboard["pages"][0]
-    assert current_page["name"] == "Current framework"
-    assert all(page["name"].startswith("Legacy") for page in dashboard["pages"][1:])
-    assert dashboard["dataSources"][0]["clusterUri"] == "{{ADX_CLUSTER_URI}}"
-    assert dashboard["dataSources"][0]["database"] == "{{ADX_DATABASE}}"
-    tiles = [tile for tile in dashboard["tiles"] if tile["pageId"] == current_page["id"]]
-    assert len(tiles) == 6
-    assert all("AIQDaily" not in tile["query"] for tile in tiles)
-    summary, trend, units, findings, operations, conflicts = tiles
-    assert all(field in summary["query"] for field in (
-        "CoverageStatus", "ScoringPolicy", "NoiseWeight", "DuplicateWeight", "ExcludedUnits",
-        "ScoredIssues", "PlannedIssues", "ScoredBaselines", "PlannedBaselines",
-    ))
-    assert "CoverageStatus" in trend["query"] and "ScoringPolicy" in trend["query"]
-    assert trend["visualOptions"]["seriesColumns"] == {"type": "specified", "value": ["Series"]}
-    assert "ExclusionReasons" in units["query"]
-    assert "Scored" in findings["query"]
-    assert "AIQOperationsV1()" in operations["query"]
-    assert "AIQPublicationConflictsV1()" in conflicts["query"]

@@ -1,8 +1,6 @@
 {
   "$schema": "https://dataexplorer.azure.com/static/d/schema/20/dashboard.json",
-  "autoRefresh": {
-    "enabled": false
-  },
+  "autoRefresh": {"enabled": false},
   "dataSources": [
     {
       "clusterUri": "{{ADX_CLUSTER_URI}}",
@@ -16,157 +14,115 @@
   "eTag": "327bd46d-da15-46aa-a3a5-49f713e2f896",
   "id": "d8396ea4-e60c-45e9-b705-68d88d0b25d8",
   "pages": [
-    {
-      "id": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "name": "Current framework"
-    },
-    {
-      "id": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "name": "Legacy trend"
-    },
-    {
-      "id": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "name": "Legacy daily results"
-    },
-    {
-      "id": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "name": "Legacy explanations"
-    }
+    {"id": "d5313032-245b-4c3b-a7aa-6d55c7453e21", "name": "Overview"},
+    {"id": "2a7768b8-083b-4337-9835-c4812d5fafcd", "name": "Explain change"},
+    {"id": "8f04f149-93f7-47a3-9099-02a23a70a61f", "name": "Legacy history (read-only)"}
   ],
   "parameters": [
     {
       "beginVariableName": "_startTime",
-      "defaultValue": {
-        "count": 90,
-        "kind": "dynamic",
-        "unit": "days"
-      },
-      "description": "Pacific report-date range for trend visuals",
-      "displayName": "Time range",
+      "defaultValue": {"count": 90, "kind": "dynamic", "unit": "days"},
+      "displayName": "Report dates",
       "endVariableName": "_endTime",
       "id": "f2989ea6-67e6-4b58-82fd-c10fcacb82f4",
       "kind": "duration",
-      "showOnPages": {
-        "kind": "all"
-      }
+      "showOnPages": {"kind": "all"}
     },
     {
       "dataSource": {
-        "columns": {
-          "label": "Label",
-          "value": "Value"
-        },
+        "columns": {"label": "Label", "value": "Value"},
         "consumedVariables": [],
         "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
         "kind": "query",
-        "query": "AIQDailyRuns()\n| extend Value = format_datetime(ReportDate, 'yyyy-MM-dd')\n| project Value, Label = Value\n| distinct Value, Label\n| order by Value desc"
+        "query": "AIQRunsV1()\n| extend Value = tolower(replace_string(Region, ' ', ''))\n| distinct Value\n| project Value, Label = Value\n| order by Value asc"
       },
-      "defaultValue": {
-        "kind": "all"
+      "defaultValue": {"kind": "value", "value": "swedencentral"},
+      "displayName": "Region",
+      "id": "776c0320-2f16-4e0d-9b35-9da5b33488d3",
+      "kind": "string",
+      "selectionType": "single",
+      "showOnPages": {"kind": "selection", "pageIds": ["d5313032-245b-4c3b-a7aa-6d55c7453e21", "2a7768b8-083b-4337-9835-c4812d5fafcd"]},
+      "variableName": "_region"
+    },
+    {
+      "dataSource": {
+        "columns": {"label": "Label", "value": "Value"},
+        "consumedVariables": ["_region"],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "AIQRunsV1()\n| where tolower(replace_string(Region, ' ', '')) == _region\n| project Value = ScoringPolicy, Label = ScoringPolicy\n| distinct Value, Label\n| order by Value asc"
       },
+      "defaultValue": {"kind": "value", "value": "unique-issues-noise-1-duplicate-05-miss-025-v2"},
+      "displayName": "Recorded scoring policy",
+      "id": "d3b4d09d-c4e5-4a88-9eed-6a8d3d6622ed",
+      "kind": "string",
+      "selectionType": "single",
+      "showOnPages": {"kind": "selection", "pageIds": ["d5313032-245b-4c3b-a7aa-6d55c7453e21", "2a7768b8-083b-4337-9835-c4812d5fafcd"]},
+      "variableName": "_policy"
+    },
+    {
+      "dataSource": {
+        "columns": {"label": "Label", "value": "Value"},
+        "consumedVariables": ["_startTime", "_endTime", "_region", "_policy"],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "AIQSnapshotsV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| project Value = FrameworkRunId, Label = strcat(format_datetime(ReportDate, 'yyyy-MM-dd'), ' / ', FrameworkRunId), ReportDate\n| order by ReportDate desc\n| project Value, Label"
+      },
+      "defaultValue": {"kind": "all"},
+      "displayName": "Snapshot (All = latest)",
+      "id": "b5ef014a-00fc-43c7-a0f9-257b7a87f594",
+      "kind": "string",
+      "selectionType": "single-all",
+      "showOnPages": {"kind": "selection", "pageIds": ["2a7768b8-083b-4337-9835-c4812d5fafcd"]},
+      "variableName": "_snapshot"
+    },
+    {
+      "dataSource": {
+        "columns": {"label": "Label", "value": "Value"},
+        "consumedVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot"],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "let Selected = AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1;\nAIQUnitsV1()\n| where FrameworkRunId in (Selected | project FrameworkRunId) or FrameworkRunId in (Selected | project PreviousRunId)\n| project Value = Agent, Label = Agent\n| distinct Value, Label\n| order by Value asc"
+      },
+      "defaultValue": {"kind": "all"},
+      "displayName": "Agent",
+      "id": "5fa9e5ae-bde1-407b-b8b9-0e82aa9d341a",
+      "kind": "string",
+      "selectionType": "single-all",
+      "showOnPages": {"kind": "selection", "pageIds": ["2a7768b8-083b-4337-9835-c4812d5fafcd"]},
+      "variableName": "_currentAgent"
+    },
+    {
+      "dataSource": {
+        "columns": {"label": "Label", "value": "Value"},
+        "consumedVariables": ["_startTime", "_endTime"],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| extend Value = format_datetime(ReportDate, 'yyyy-MM-dd')\n| project Value, Label = Value\n| distinct Value, Label\n| order by Value desc"
+      },
+      "defaultValue": {"kind": "all"},
       "displayName": "Legacy report date",
       "id": "250e0a32-9ae6-40c1-8d31-e663c13f01b7",
       "kind": "string",
       "selectionType": "single-all",
-      "showOnPages": {
-        "kind": "all"
-      },
+      "showOnPages": {"kind": "selection", "pageIds": ["8f04f149-93f7-47a3-9099-02a23a70a61f"]},
       "variableName": "_reportDate"
     },
     {
       "dataSource": {
-        "columns": {
-          "label": "Label",
-          "value": "Value"
-        },
-        "consumedVariables": [],
+        "columns": {"label": "Label", "value": "Value"},
+        "consumedVariables": ["_startTime", "_endTime", "_reportDate"],
         "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
         "kind": "query",
-        "query": "AIQDailyAgents()\n| project Value = Agent, Label = Agent\n| distinct Value, Label\n| order by Value asc"
+        "query": "AIQDailyAgents()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| project Value = Agent, Label = Agent\n| distinct Value, Label\n| order by Value asc"
       },
-      "defaultValue": {
-        "kind": "all"
-      },
-      "displayName": "Legacy test Agent",
+      "defaultValue": {"kind": "all"},
+      "displayName": "Legacy Agent",
       "id": "12351920-7e2e-4af3-980d-b8fbd5ff349d",
       "kind": "string",
       "selectionType": "single-all",
-      "showOnPages": {
-        "kind": "all"
-      },
+      "showOnPages": {"kind": "selection", "pageIds": ["8f04f149-93f7-47a3-9099-02a23a70a61f"]},
       "variableName": "_agent"
-    },
-    {
-      "dataSource": {
-        "columns": {
-          "label": "Label",
-          "value": "Value"
-        },
-        "consumedVariables": [
-          "_reportDate",
-          "_agent"
-        ],
-        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-        "kind": "query",
-        "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| project Value = IssueId, Label = strcat(IssueId, ' - ', IssueTitle)\n| distinct Value, Label\n| order by Value asc"
-      },
-      "defaultValue": {
-        "kind": "all"
-      },
-      "displayName": "Legacy tested issue",
-      "id": "e2914627-9583-450d-a27d-127f14a3f9c9",
-      "kind": "string",
-      "selectionType": "single-all",
-      "showOnPages": {
-        "kind": "all"
-      },
-      "variableName": "_issue"
-    },
-    {
-      "dataSource": {
-        "columns": {
-          "label": "Label",
-          "value": "Value"
-        },
-        "consumedVariables": [],
-        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-        "kind": "query",
-        "query": "AIQDailyIssues()\n| project Value = Outcome, Label = Outcome\n| distinct Value, Label\n| order by Value asc"
-      },
-      "defaultValue": {
-        "kind": "all"
-      },
-      "displayName": "Legacy outcome",
-      "id": "8b55301f-f335-45f1-8e48-6008191d10b0",
-      "kind": "string",
-      "selectionType": "single-all",
-      "showOnPages": {
-        "kind": "all"
-      },
-      "variableName": "_result"
-    },
-    {
-      "dataSource": {
-        "columns": {
-          "label": "Label",
-          "value": "Value"
-        },
-        "consumedVariables": [],
-        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-        "kind": "query",
-        "query": "AIQDailyIssues()\n| project Value = Ownership, Label = Ownership\n| distinct Value, Label\n| order by Value asc"
-      },
-      "defaultValue": {
-        "kind": "all"
-      },
-      "displayName": "Legacy ownership",
-      "id": "db4e06e4-5ca8-4845-8e28-f95f741833fb",
-      "kind": "string",
-      "selectionType": "single-all",
-      "showOnPages": {
-        "kind": "all"
-      },
-      "variableName": "_ownership"
     }
   ],
   "schema_version": "20",
@@ -174,544 +130,140 @@
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "5ba655b4-04a6-4a4d-9d3a-5240ffdf6881",
-      "layout": {"height": 8, "width": 24, "x": 0, "y": 0},
+      "layout": {"height": 3, "width": 24, "x": 0, "y": 0},
       "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "AIQRunsV1()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, FrameworkRunId, Region, QualityScore, CoverageStatus, ScoredIssues, PlannedIssues, ScoredBaselines, PlannedBaselines, ExcludedUnits, CorrectIssues, ExpectedIssues, NoiseCards, DuplicateCards, ScoringPolicy, ScoreFormula, NoiseWeight, DuplicateWeight, ScoreRounding, CoveragePolicy, SourceCommit\n| order by ReportDate desc",
-      "title": "Current scores and Full/Partial coverage - Noise 1, Duplicate 0.25; no threshold",
-      "usedParamVariables": ["_startTime", "_endTime"],
-      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
+      "query": "AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project ReportDate, QualityScore, C_E = strcat(CorrectIssues, '/', ExpectedIssues), M = MissedIssues, N = NoiseCards, D = DuplicateCards, ExcludedUnits",
+      "title": "Latest stored quality — C/E detected/scored issues; M misses; N Noise; D Duplicates",
+      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "66f57b36-e671-4588-baf4-c88f9fe8e9c6",
-      "layout": {"height": 8, "width": 24, "x": 0, "y": 8},
+      "layout": {"height": 8, "width": 24, "x": 0, "y": 3},
       "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "AIQRunsV1()\n| where ReportDate between (_startTime .. _endTime)\n| extend Series = strcat(Region, ' / ', ScoringPolicy, ' / ', CoverageStatus, ' / issues ', ScoredIssues, '/', PlannedIssues, ' / baselines ', ScoredBaselines, '/', PlannedBaselines)\n| project ReportDate, QualityScore, Series\n| order by ReportDate asc",
-      "title": "Stored scores - separate policy and coverage series; exclusions differ across Partial runs",
+      "query": "AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| extend Series = strcat(PolicyLabel, ' / ', RegionKey, ' / ', CoveragePolicy)\n| project ReportDate, QualityScore, Series, ComparisonNote\n| order by ReportDate asc",
+      "title": "Stored quality trend — selected policy only; check coverage and rotation limits below",
+      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy"],
+      "visualOptions": {
+        "hideLegend": false,
+        "hideTileTitle": false,
+        "xColumn": {"type": "specified", "value": "ReportDate"},
+        "yColumns": {"type": "specified", "value": ["QualityScore"]},
+        "seriesColumns": {"type": "specified", "value": ["Series"]},
+        "yAxisMinimumValue": {"type": "specified", "value": 0},
+        "yAxisMaximumValue": {"type": "specified", "value": 100}
+      },
+      "visualType": "line"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "c5d97c0f-4f25-42a7-9441-ac0f83c88e73",
+      "layout": {"height": 6, "width": 24, "x": 0, "y": 11},
+      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "query": "let Latest = materialize(AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nunion\n(Latest | project Metric = 'C — detected issues', Previous = PreviousCorrect, Current = CorrectIssues, Change = DeltaCorrect, PreviousWeighted = real(null), CurrentWeighted = real(null)),\n(Latest | project Metric = 'M — missed scored issues', Previous = PreviousMissed, Current = MissedIssues, Change = DeltaMissed, PreviousWeighted = PreviousWeightedMisses, CurrentWeighted = WeightedMisses),\n(Latest | project Metric = 'N — Noise cards', Previous = PreviousNoise, Current = NoiseCards, Change = DeltaNoise, PreviousWeighted = PreviousWeightedNoise, CurrentWeighted = WeightedNoise),\n(Latest | project Metric = 'D — Duplicate cards', Previous = PreviousDuplicates, Current = DuplicateCards, Change = DeltaDuplicates, PreviousWeighted = PreviousWeightedDuplicates, CurrentWeighted = WeightedDuplicates)\n| extend WeightedChange = CurrentWeighted - PreviousWeighted\n| order by Metric asc",
+      "title": "Latest vs previous snapshot — count changes and denominator penalties, not causal attribution",
+      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "0e9c2a34-5b08-4ea0-8f9f-11eb2caaf978",
+      "layout": {"height": 7, "width": 24, "x": 0, "y": 17},
+      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "query": "AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| project ReportDate, PreviousDate, IssueCoverage = strcat(ScoredIssues, '/', PlannedIssues), PreviousIssues = iff(isempty(PreviousRunId), '', strcat(PreviousScoredIssues, '/', PreviousPlannedIssues)), BaselineCoverage = strcat(ScoredBaselines, '/', PlannedBaselines), PreviousBaselines = iff(isempty(PreviousRunId), '', strcat(PreviousScoredBaselines, '/', PreviousPlannedBaselines)), ExcludedUnits, PreviousExcluded, ComparisonNote\n| order by ReportDate desc",
+      "title": "Coverage and comparison limits — scored/planned units; excluded units are not misses",
+      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "d16ff5a9-b5de-4f80-bc78-920c9d29284d",
+      "layout": {"height": 7, "width": 24, "x": 0, "y": 4},
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "let Selected = materialize(AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet CurrentRun = toscalar(Selected | project FrameworkRunId);\nlet PreviousRun = toscalar(Selected | project PreviousRunId);\nAIQUnitsV1()\n| where FrameworkRunId in (CurrentRun, PreviousRun)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| summarize C = sumif(CorrectIssues, Scorable and Kind == 'issue'), E = sumif(ExpectedIssues, Scorable and Kind == 'issue'), N = sumif(NoiseCards, Scorable), D = sumif(DuplicateCards, Scorable), ExcludedUnits = countif(not(Scorable)), Issues = countif(Scorable and Kind == 'issue'), PlannedIssues = countif(Kind == 'issue'), Baselines = countif(Scorable and Kind == 'baseline'), PlannedBaselines = countif(Kind == 'baseline') by Agent, FrameworkRunId, ReportDate\n| project Agent, Snapshot = iff(FrameworkRunId == CurrentRun, 'Current', 'Previous'), ReportDate, C_E = strcat(C, '/', E), M = E - C, N, D, IssueCoverage = strcat(Issues, '/', PlannedIssues), BaselineCoverage = strcat(Baselines, '/', PlannedBaselines), ExcludedUnits\n| order by Agent asc, ReportDate asc",
+      "title": "Agent counts — current and previous snapshots; baselines add penalties, not a score bonus",
+      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot", "_currentAgent"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "e3c0d5b7-92b9-4cc2-9500-f8054965b338",
+      "layout": {"height": 11, "width": 24, "x": 0, "y": 11},
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "let SelectedRun = toscalar(AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project FrameworkRunId);\nAIQUnitChangesV1(SelectedRun)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| project Agent, LogicalVersion, ExpectedIssueAlias, Kind, Previous = strcat(PreviousStatus, '; C/E ', PreviousC, '/', PreviousE, '; M/N/D ', PreviousM, '/', PreviousN, '/', PreviousD), Current = strcat(CurrentStatus, '; C/E ', C, '/', E, '; M/N/D ', M, '/', N, '/', D), DeltaC, DeltaM, DeltaN, DeltaD, CurrentReasons, PreviousReasons\n| order by Agent asc, LogicalVersion asc",
+      "title": "Which units changed? — blank counts/deltas mean excluded, not planned, or no previous snapshot",
+      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot", "_currentAgent"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "9860f0cd-c6d1-453e-bceb-623af41b62ce",
+      "layout": {"height": 7, "width": 24, "x": 0, "y": 22},
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "let SelectedRun = toscalar(AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project FrameworkRunId);\nAIQFindingsV1()\n| where FrameworkRunId == SelectedRun\n| where isempty(_currentAgent) or Agent == _currentAgent\n| summarize Cards = count() by Agent, LogicalVersion, Kind, Scored, Classification, ExclusionReasons = tostring(ExclusionReasons)\n| order by Scored asc, Agent asc, LogicalVersion asc, Classification asc",
+      "title": "Finding counts — scored and unscored stay separate; unexpected real findings are not Noise",
+      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot", "_currentAgent"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "cb06f7e0-b1e6-45b2-913e-1e56772f8e3a",
+      "layout": {"height": 4, "width": 24, "x": 0, "y": 0},
+      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
+      "query": "AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project ReportDate, PreviousDate, ComparisonNote, Metadata = bag_pack('FrameworkRunId', FrameworkRunId, 'PreviousRunId', PreviousRunId, 'SourceCommit', SourceCommit, 'PreviousSourceCommit', PreviousSourceCommit, 'Region', Region, 'ScoringPolicy', ScoringPolicy, 'ScoreFormula', ScoreFormula, 'NoiseWeight', NoiseWeight, 'DuplicateWeight', DuplicateWeight, 'MissWeight', MissWeight, 'CoveragePolicy', CoveragePolicy)",
+      "title": "Selected snapshot and comparison limits — expand Metadata for source and recorded policy",
+      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "9ed47f6f-a002-4d91-b45c-944b1fe01dbd",
+      "layout": {"height": 8, "width": 24, "x": 0, "y": 0},
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| project ReportDate, QualityScore, Series = QualityScoreFormula\n| order by ReportDate asc",
+      "title": "Legacy stored scores — historical formulas; never compare this line as a v2 Engine change",
       "usedParamVariables": ["_startTime", "_endTime"],
       "visualOptions": {
         "hideLegend": false,
         "hideTileTitle": false,
         "xColumn": {"type": "specified", "value": "ReportDate"},
         "yColumns": {"type": "specified", "value": ["QualityScore"]},
-        "seriesColumns": {"type": "specified", "value": ["Series"]}
+        "seriesColumns": {"type": "specified", "value": ["Series"]},
+        "yAxisMinimumValue": {"type": "specified", "value": 0},
+        "yAxisMaximumValue": {"type": "specified", "value": 100}
       },
       "visualType": "line"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "e3c0d5b7-92b9-4cc2-9500-f8054965b338",
-      "layout": {"height": 10, "width": 24, "x": 0, "y": 16},
-      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "AIQUnitsV1()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, FrameworkRunId, Region, CoverageStatus, ScoringPolicy, Agent, LogicalVersion, Kind, Scorable, CorrectIssues, ExpectedIssues, NoiseCards, DuplicateCards, ExclusionReasons, Summary\n| order by ReportDate desc, Agent asc, LogicalVersion asc",
-      "title": "Current units - wholly excluded units retain their identities and reasons",
-      "usedParamVariables": ["_startTime", "_endTime"],
-      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "9860f0cd-c6d1-453e-bceb-623af41b62ce",
-      "layout": {"height": 10, "width": 24, "x": 0, "y": 26},
-      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "AIQFindingsV1()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, FrameworkRunId, CoverageStatus, ScoringPolicy, Agent, LogicalVersion, Kind, Scorable, ExclusionReasons, CardAlias, RootCauseAlias, Core, Contribution, Classification, Scored, Summary\n| order by ReportDate desc, Agent asc, LogicalVersion asc",
-      "title": "Current findings - including unexpected real and unscored findings",
-      "usedParamVariables": ["_startTime", "_endTime"],
-      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "f03b7c4e-4ea3-43c8-a6ad-e7eb8aa70117",
-      "layout": {"height": 10, "width": 24, "x": 0, "y": 36},
-      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "AIQOperationsV1()\n| where Utc between (_startTime .. _endTime)\n| project Utc, FrameworkRunId, Profile, EventId, Kind, Stage, Code, Counters, Agent, LogicalVersion, Attempt, Turn\n| order by Utc desc",
-      "title": "Safe operations - separate from scores; staging allowed, test runs excluded",
-      "usedParamVariables": ["_startTime", "_endTime"],
-      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "2fc0d2e7-b820-499d-9cb4-c9514bbbc4c5",
-      "layout": {"height": 6, "width": 24, "x": 0, "y": 46},
-      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "AIQPublicationConflictsV1()\n| project Kind, FrameworkRunId, Identity\n| order by FrameworkRunId asc",
-      "title": "Identity conflicts - omitted from score and event views; all dates",
-      "usedParamVariables": [],
-      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false},
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "7bcd5bad-a4d1-40f8-8753-aaabf7cec17b",
-      "layout": {
-        "height": 4,
-        "width": 4,
-        "x": 0,
-        "y": 0
-      },
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| top 1 by ReportDate desc\n| project QualityScore",
-      "title": "Latest quality score",
-      "usedParamVariables": [
-        "_startTime",
-        "_endTime"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": false,
-        "hideTileTitle": false
-      },
-      "visualType": "card"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "9ed47f6f-a002-4d91-b45c-944b1fe01dbd",
-      "layout": {
-        "height": 8,
-        "width": 20,
-        "x": 4,
-        "y": 0
-      },
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, ['Quality score'] = QualityScore\n| order by ReportDate asc",
-      "title": "Quality improvement trend",
-      "usedParamVariables": [
-        "_startTime",
-        "_endTime"
-      ],
-      "visualOptions": {
-        "hideLegend": false,
-        "hideTileTitle": false,
-        "seriesColumns": {
-          "type": "infer"
-        },
-        "xColumn": {
-          "type": "specified",
-          "value": "ReportDate"
-        },
-        "yColumns": {
-          "type": "specified",
-          "value": [
-            "Quality score"
-          ]
-        }
-      },
-      "visualType": "line"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "4c93e27b-d563-450a-b861-307dfd10a82a",
-      "layout": {
-        "height": 4,
-        "width": 4,
-        "x": 0,
-        "y": 4
-      },
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| top 1 by ReportDate desc\n| project IssuesCorrect, IssuesExpected",
-      "title": "Latest correct issues",
-      "usedParamVariables": [
-        "_startTime",
-        "_endTime"
-      ],
-      "visualOptions": {
-        "hideLegend": false,
-        "hideTileTitle": false,
-        "pie__kind": "pie",
-        "pie__label": [
-          "name",
-          "percentage"
-        ]
-      },
-      "visualType": "pie"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "90cd8721-dffa-4b93-b658-40d812552322",
-      "layout": {
-        "height": 7,
-        "width": 12,
-        "x": 0,
-        "y": 8
-      },
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, Correct = IssuesCorrect, Incorrect = IssuesIncorrect, Missing = IssuesMissing, Noise = NoiseCards, Duplicate = DuplicateCards\n| order by ReportDate asc",
-      "title": "Score inputs",
-      "usedParamVariables": [
-        "_startTime",
-        "_endTime"
-      ],
-      "visualOptions": {
-        "hideLegend": false,
-        "hideTileTitle": false,
-        "xColumn": {
-          "type": "specified",
-          "value": "ReportDate"
-        },
-        "yColumns": {
-          "type": "specified",
-          "value": [
-            "Correct",
-            "Incorrect",
-            "Missing",
-            "Noise",
-            "Duplicate"
-          ]
-        }
-      },
-      "visualType": "line"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "78becf82-2a46-4a38-a749-3541e23322f1",
-      "layout": {
-        "height": 7,
-        "width": 12,
-        "x": 12,
-        "y": 8
-      },
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| extend IssueMatchRate = round(100.0 * IssuesCorrect / iff(IssuesExpected == 0, 1, IssuesExpected), 1), BaselineCleanRate = round(100.0 * BaselinePassed / 5.0, 1)\n| project ReportDate, ['Issue match rate'] = IssueMatchRate, ['Baseline clean rate'] = BaselineCleanRate\n| order by ReportDate asc",
-      "title": "Coverage and baseline health",
-      "usedParamVariables": [
-        "_startTime",
-        "_endTime"
-      ],
-      "visualOptions": {
-        "hideLegend": false,
-        "hideTileTitle": false,
-        "xColumn": {
-          "type": "specified",
-          "value": "ReportDate"
-        },
-        "yColumns": {
-          "type": "specified",
-          "value": [
-            "Issue match rate",
-            "Baseline clean rate"
-          ]
-        }
-      },
-      "visualType": "line"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "99853e21-8015-4b08-bdb7-ab8c2448a5ec",
-      "layout": {
-        "height": 7,
-        "width": 12,
-        "x": 0,
-        "y": 15
-      },
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (_startTime .. _endTime)\n| project ReportDate, NoiseCards, UnverifiedCards\n| order by ReportDate asc",
-      "title": "Noise and incomplete evaluations",
-      "usedParamVariables": [
-        "_startTime",
-        "_endTime"
-      ],
-      "visualOptions": {
-        "hideLegend": false,
-        "hideTileTitle": false
-      },
-      "visualType": "column"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "ee9c562a-caff-4fcd-8557-8cac8b5f1d73",
-      "layout": {
-        "height": 7,
-        "width": 12,
-        "x": 12,
-        "y": 15
-      },
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyAgents()\n| where ReportDate between (_startTime .. _endTime)\n| extend MatchRate = round(100.0 * IssuesCorrect / iff(IssuesExpected == 0, 1, IssuesExpected), 1)\n| project ReportDate, Agent, MatchRate\n| order by ReportDate asc",
-      "title": "Issue match rate by Agent",
-      "usedParamVariables": [
-        "_startTime",
-        "_endTime"
-      ],
-      "visualOptions": {
-        "hideLegend": false,
-        "hideTileTitle": false,
-        "seriesColumns": {
-          "type": "specified",
-          "value": [
-            "Agent"
-          ]
-        },
-        "xColumn": {
-          "type": "specified",
-          "value": "ReportDate"
-        },
-        "yColumns": {
-          "type": "specified",
-          "value": [
-            "MatchRate"
-          ]
-        }
-      },
-      "visualType": "line"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "489ab82d-abdc-4bec-b4e5-71b507991aa9",
-      "layout": {
-        "height": 7,
-        "width": 24,
-        "x": 0,
-        "y": 22
-      },
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyFields()\n| where ReportDate between (_startTime .. _endTime)\n| summarize PassRate = round(100.0 * countif(Passed) / count(), 1) by Field\n| order by PassRate asc",
-      "title": "Field pass rate",
-      "usedParamVariables": [
-        "_startTime",
-        "_endTime"
-      ],
-      "visualOptions": {
-        "hideLegend": true,
-        "hideTileTitle": false
-      },
-      "visualType": "bar"
     },
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "4c6e01f0-1019-443d-a026-2c70a250ed82",
-      "layout": {
-        "height": 5,
-        "width": 24,
-        "x": 0,
-        "y": 0
-      },
-      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQDailyRuns()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| top 1 by ReportDate desc\n| project ReportDate, QualityScore, BaselinePassed, IssuesCorrect, IssuesIncorrect, IssuesMissing, IssuesExpected, NoiseCards, DuplicateCards, ReportUrl",
-      "title": "Selected daily run",
-      "usedParamVariables": [
-        "_reportDate"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "hideTileTitle": false,
-        "table__enableRenderLinks": true,
-        "table__renderLinksForColumns": [
-          "ReportUrl"
-        ]
-      },
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "4355b85a-1f7d-43ca-b985-bddfa0d520d6",
-      "layout": {
-        "height": 8,
-        "width": 24,
-        "x": 0,
-        "y": 5
-      },
-      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQDailyBaselines()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| top 50 by ReportDate desc\n| project ReportDate, Agent, Owner, AgentType, Framework, Status, Verdict, Ownership, InsightCount, RuntimeEvidenceComplete, OwnershipReason, AgentReportUrl",
-      "title": "Healthy baseline results",
-      "usedParamVariables": [
-        "_reportDate",
-        "_agent"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "hideTileTitle": false,
-        "table__enableRenderLinks": true,
-        "table__renderLinksForColumns": [
-          "AgentReportUrl"
-        ]
-      },
+      "layout": {"height": 6, "width": 24, "x": 0, "y": 8},
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| project ReportDate, QualityScore, IssuesCorrect, IssuesExpected, IssuesMissing, NoiseCards, DuplicateCards, QualityScoreFormula\n| order by ReportDate desc",
+      "title": "Legacy daily counts — original meanings and stored score retained",
+      "usedParamVariables": ["_startTime", "_endTime", "_reportDate"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "8ec799b1-850f-4bed-954f-34820e7cf772",
-      "layout": {
-        "height": 14,
-        "width": 24,
-        "x": 0,
-        "y": 13
-      },
-      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Outcome == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 250 by ReportDate desc\n| project ReportDate, Agent, Owner, IssueId, IssueTitle, Category, Severity, Outcome, Detail, Ownership, FieldsPassed, FieldsExpected, CardCount, ObservedCount, RuntimeEvidenceComplete, FailingFields = tostring(FailingFields), IssueUrl, AgentReportUrl",
-      "title": "Tested issue results",
-      "usedParamVariables": [
-        "_reportDate",
-        "_agent",
-        "_issue",
-        "_result",
-        "_ownership"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "hideTileTitle": false,
-        "table__enableRenderLinks": true,
-        "table__renderLinksForColumns": [
-          "IssueUrl",
-          "AgentReportUrl"
-        ]
-      },
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "d14dc0df-95da-4d7f-b5db-f3d4177f917b",
-      "layout": {
-        "height": 8,
-        "width": 12,
-        "x": 0,
-        "y": 27
-      },
-      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQDailyHighlights()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where Section == 'What is working'\n| order by ReportDate desc, Ordinal asc\n| take 100\n| project ReportDate, HighlightTitle, WhatHappened",
-      "title": "What is working",
-      "usedParamVariables": [
-        "_reportDate"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "hideTileTitle": false,
-        "table__enableRenderLinks": false
-      },
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "cb971496-262f-4d5a-8dc5-cb231362d9ef",
-      "layout": {
-        "height": 8,
-        "width": 12,
-        "x": 12,
-        "y": 27
-      },
-      "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQDailyHighlights()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where Section == 'What needs improvement'\n| order by ReportDate desc, Ordinal asc\n| take 100\n| project ReportDate, HighlightTitle, WhatHappened, NeededBehavior",
-      "title": "What needs improvement",
-      "usedParamVariables": [
-        "_reportDate"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "hideTileTitle": false,
-        "table__enableRenderLinks": false
-      },
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "63528098-b0e5-4a4a-b324-40479ef8cde8",
-      "layout": {
-        "height": 6,
-        "width": 24,
-        "x": 0,
-        "y": 0
-      },
-      "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "query": "AIQDailyAgents()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| top 50 by ReportDate desc\n| project ReportDate, Agent, Owner, AgentType, Framework, BaselineVerdict, IssuesCorrect, IssuesIncorrect, IssuesMissing, IssuesExpected, NoiseCards, DuplicateCards, SelectedIssueIds = tostring(SelectedIssueIds), AgentReportUrl",
-      "title": "Test Agent context",
-      "usedParamVariables": [
-        "_reportDate",
-        "_agent"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "hideTileTitle": false,
-        "table__enableRenderLinks": true,
-        "table__renderLinksForColumns": [
-          "AgentReportUrl"
-        ]
-      },
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "581bdfe8-aa02-42e2-9e83-0203fb1f7a5c",
-      "layout": {
-        "height": 13,
-        "width": 24,
-        "x": 0,
-        "y": 6
-      },
-      "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "query": "AIQDailyIssues()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Outcome == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 100 by ReportDate desc\n| project ReportDate, Agent, IssueId, IssueTitle, Category, Severity, Outcome, Detail, Ownership, ExpectedRootCause, ExpectedFix, OwnershipReason, FailingFields = tostring(FailingFields), IssueUrl",
-      "title": "Expected issue and observed outcome",
-      "usedParamVariables": [
-        "_reportDate",
-        "_agent",
-        "_issue",
-        "_result",
-        "_ownership"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "hideTileTitle": false,
-        "table__enableRenderLinks": true,
-        "table__renderLinksForColumns": [
-          "IssueUrl"
-        ]
-      },
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "e31c1a94-f5ca-47e0-9491-69d5ab701cac",
-      "layout": {
-        "height": 15,
-        "width": 24,
-        "x": 0,
-        "y": 19
-      },
-      "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "query": "AIQDailyCards()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Outcome == _result\n| where isempty(_ownership) or Ownership == _ownership\n| top 250 by ReportDate desc\n| project ReportDate, TargetKind, Agent, IssueId, IssueTitle, CardIndex, CardTitle, Category, Severity, Outcome, Verdict, Evaluation, FindingType, Ownership, Confidence, OwnershipReason, Reasoning, PassingFields = tostring(PassingFields), FailingFields = tostring(FailingFields), AgentReportUrl",
-      "title": "Generated card assessment and reasoning",
-      "usedParamVariables": [
-        "_reportDate",
-        "_agent",
-        "_issue",
-        "_result",
-        "_ownership"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "hideTileTitle": false,
-        "table__enableRenderLinks": true,
-        "table__renderLinksForColumns": [
-          "AgentReportUrl"
-        ]
-      },
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "44934ee1-8895-422e-8f06-a842336b0fa5",
-      "layout": {
-        "height": 10,
-        "width": 24,
-        "x": 0,
-        "y": 34
-      },
-      "pageId": "36b3f7b6-d568-43cb-93ec-e4deab0d477a",
-      "query": "AIQDailyFields()\n| extend ReportDateKey = format_datetime(ReportDate, 'yyyy-MM-dd')\n| where isempty(_reportDate) or ReportDateKey == _reportDate\n| where isempty(_agent) or Agent == _agent\n| where isempty(_issue) or IssueId == _issue\n| where isempty(_result) or Outcome == _result\n| top 500 by ReportDate desc\n| project ReportDate, Agent, IssueId, IssueTitle, Outcome, Field, Passed",
-      "title": "Required field outcomes",
-      "usedParamVariables": [
-        "_reportDate",
-        "_agent",
-        "_issue",
-        "_result"
-      ],
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "hideTileTitle": false,
-        "table__enableRenderLinks": false
-      },
+      "layout": {"height": 10, "width": 24, "x": 0, "y": 14},
+      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
+      "query": "AIQDailyIssues()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| where isempty(_agent) or Agent == _agent\n| project ReportDate, Agent, IssueId, Outcome, CardCount, RuntimeEvidenceComplete\n| order by ReportDate desc, Agent asc, IssueId asc",
+      "title": "Legacy issue outcomes — read-only historical context",
+      "usedParamVariables": ["_startTime", "_endTime", "_reportDate", "_agent"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     }
   ],
-  "title": "Agent Insights Quality - Current and Historical"
+  "title": "Agent Insights Quality"
 }
