@@ -7,7 +7,7 @@ import subprocess
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field as dataclass_field, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -319,6 +319,15 @@ class _Work:
         return self.binding["work_key"]
 
 
+@dataclass
+class _PreparedAttempt:
+    attempt: Attempt
+    prepared: asyncio.Event = dataclass_field(default_factory=asyncio.Event)
+    execute: asyncio.Event = dataclass_field(default_factory=asyncio.Event)
+    finished: asyncio.Event = dataclass_field(default_factory=asyncio.Event)
+    session_ready: bool = False
+
+
 class Runner:
     """The caller holds environment ownership, including while awaiting providers.
 
@@ -454,6 +463,23 @@ class Runner:
             if not self.test_run and kind == "daily" and existing["source_revision"] != self.revision:
                 raise QualityError("official_resume_source_changed")
             self.reuse_run_id = existing.get("reuse_run_id")
+        if kind == "daily":
+            policy = self.run.read_completed("daily-session-lookahead", missing_ok=True)
+            if policy is None:
+                policy = {"travel_sessions_ahead": (
+                    0 if existing is not None else self.settings.daily_travel_session_lookahead
+                )}
+            if set(policy) != {"travel_sessions_ahead"} or (
+                type(policy["travel_sessions_ahead"]) is not int
+                or policy["travel_sessions_ahead"] not in (0, 1)
+            ):
+                raise StateError("session_lookahead_policy_invalid")
+            self._save(self.run, "completed", "daily-session-lookahead", policy)
+            self.settings = replace(
+                self.settings, daily_travel_session_lookahead=policy["travel_sessions_ahead"],
+            )
+            if self.metrics:
+                self.metrics.configuration = self.settings.to_dict()
         if self.reuse_run_id:
             previous = self.runtime.run(self.reuse_run_id).read_completed("run")
             if (
@@ -774,6 +800,38 @@ class Runner:
                         continue
                 raise
 
+    @staticmethod
+    def _session_affinity(deployment: Deployment) -> dict:
+        return {
+            "target_key": deployment.target_key, "agent_name": deployment.agent_name,
+            "provider_version": deployment.provider_version,
+            "deployment_source_revision": deployment.source_revision,
+        }
+
+    @measure("attempt_phase", "session_preparation")
+    async def _prepare_travel_session(
+        self, target: Target, work: _Work, deployment: Deployment, attempt: Attempt,
+    ) -> str:
+        key = work.key + f"/traffic/attempt-{attempt.index:02d}"
+        saved = work.records.read(key + "/session", missing_ok=True)
+        affinity = work.records.read_completed(key + "/session-affinity", missing_ok=True)
+        if saved is not None and affinity is None:
+            raise StateError("session_preparation_affinity_missing")
+        self._save(
+            work.records, "completed", key + "/session-affinity", self._session_affinity(deployment),
+        )
+        for step in attempt.steps:
+            receipt = work.records.read(key + "/" + step.step_id, missing_ok=True)
+            if receipt is not None and receipt["status"] != "blocked":
+                if saved is None or saved["status"] != "ready":
+                    raise StateError("session_checkpoint_missing")
+                if receipt["session_id"] != saved["session_id"]:
+                    raise StateError("session_checkpoint_mismatch")
+        session = await self._session(target, work, deployment, attempt.index)
+        if saved is not None and saved["status"] == "ready" and self.metrics:
+            self.metrics.reuse("attempt_phase", "session_preparation")
+        return session
+
     @measure("turn", "invoke")
     async def _invoke(
         self, target: Target, work: _Work, deployment: Deployment, attempt: Attempt,
@@ -877,50 +935,133 @@ class Runner:
                 self.metrics.reuse("stage", "traffic")
                 self._reused_traffic(target, attempts, invocations)
             return invocations
+        lookahead = (
+            self.runtime.environment == "daily" and target.unit_id.agent == "travel-agent"
+            and not target.is_prompt and self.settings.daily_travel_session_lookahead == 1
+            and work.binding["traffic_run_id"] == self.run_id
+        )
+        if lookahead:
+            for attempt in attempts:
+                affinity = work.records.read_completed(
+                    work.key + f"/traffic/attempt-{attempt.index:02d}/session-affinity", missing_ok=True,
+                )
+                if affinity is not None and affinity != self._session_affinity(deployment):
+                    raise StateError("session_preparation_affinity_mismatch")
         self._event("started", target, stage="traffic")
         self._check()
         await self.cloud.activate(deployment)
         invocations = {}
-        async def one(attempt: Attempt) -> None:
+        allow_ahead, stop_business = True, None
+        async def one(attempt: Attempt, prepared: _PreparedAttempt | None = None) -> None:
+            nonlocal allow_ahead, stop_business
             with binding(self.metrics, attempt=attempt.index), scope(self.metrics, "attempt", "traffic") as measured:
                 previous, session, blocked = None, None, None
                 try:
-                    session = await self._session(target, work, deployment, attempt.index)
+                    if prepared is not None:
+                        if stop_business:
+                            blocked = stop_business
+                            if self.metrics:
+                                self.metrics.reuse("attempt_phase", "session_preparation", skipped=True)
+                        else:
+                            session = await self._prepare_travel_session(target, work, deployment, attempt)
+                        for step in attempt.steps:
+                            saved = work.records.read(
+                                work.key + f"/traffic/attempt-{attempt.index:02d}/{step.step_id}",
+                                missing_ok=True,
+                            )
+                            if saved and (
+                                saved["status"] in {"submitting", "unknown"}
+                                or saved.get("error_code") == "invocation_response_pending"
+                            ):
+                                allow_ahead = False
+                    else:
+                        session = await self._session(target, work, deployment, attempt.index)
                 except QualityError as error:
                     self._fatal(error)
                     self._failure(target, error, "traffic")
                     if error.code in _INTEGRITY:
                         raise
                     blocked = error.code
-                for step in attempt.steps:
-                    if blocked:
-                        key = work.key + f"/traffic/attempt-{attempt.index:02d}/{step.step_id}"
-                        saved = work.records.read(key, missing_ok=True)
-                        receipt = Invocation(**saved) if saved else Invocation(
-                            uuid.uuid4().hex, None, session, self.now().isoformat(),
-                            self.now().isoformat(), "blocked", error_code=blocked,
-                        )
-                        self._save(work.records, "progress", key, asdict(receipt))
-                        if self.metrics:
-                            self.metrics.reuse(
-                                "turn", "invoke", skipped=True, turn=step.step_id, receipt_status=receipt.status,
+                    if prepared is not None:
+                        allow_ahead = False
+                if prepared is not None:
+                    prepared.session_ready = blocked is None
+                    prepared.prepared.set()
+                    with scope(self.metrics, "wait", "prepared_session"):
+                        await prepared.execute.wait()
+                    self._check()
+                    blocked = stop_business or blocked
+                with scope(
+                    self.metrics if prepared is not None else None, "attempt_phase", "business_execution",
+                ) as business:
+                    for step in attempt.steps:
+                        if blocked:
+                            key = work.key + f"/traffic/attempt-{attempt.index:02d}/{step.step_id}"
+                            saved = work.records.read(key, missing_ok=True)
+                            receipt = Invocation(**saved) if saved else Invocation(
+                                uuid.uuid4().hex, None, session, self.now().isoformat(),
+                                self.now().isoformat(), "blocked", error_code=blocked,
                             )
-                            self.metrics.increment_scope("attempt", "traffic", "skipped_turns")
-                    else:
-                        receipt = await self._invoke(target, work, deployment, attempt, step, session, previous)
-                    invocations[(attempt.index, step.step_id)] = receipt
-                    self._event("checkpoint", target, stage="traffic", attempt=attempt.index)
-                    if receipt.status != "completed":
-                        measured["status"] = receipt.status
-                    if receipt.response is None or target.is_prompt and not receipt.response_id:
-                        blocked = "conversation_continuation_unavailable"
-                    if receipt.error_code == "invocation_response_pending":
-                        blocked = "invocation_outcome_unresolved"
-                    previous = receipt.response_id
-                if self.metrics and not measured.get("fresh_turns"):
-                    measured["receipt_status"] = measured["status"]
-                    measured["status"] = "reused" if measured.get("reused_turns") else "skipped"
-        if self.runtime.environment == "daily":
+                            self._save(work.records, "progress", key, asdict(receipt))
+                            if self.metrics:
+                                self.metrics.reuse(
+                                    "turn", "invoke", skipped=True, turn=step.step_id, receipt_status=receipt.status,
+                                )
+                                self.metrics.increment_scope("attempt", "traffic", "skipped_turns")
+                        else:
+                            receipt = await self._invoke(target, work, deployment, attempt, step, session, previous)
+                        invocations[(attempt.index, step.step_id)] = receipt
+                        self._event("checkpoint", target, stage="traffic", attempt=attempt.index)
+                        if receipt.status != "completed":
+                            measured["status"] = receipt.status
+                            if prepared is not None:
+                                allow_ahead = False
+                        if receipt.response is None or target.is_prompt and not receipt.response_id:
+                            blocked = "conversation_continuation_unavailable"
+                        if receipt.error_code == "invocation_response_pending":
+                            blocked = "invocation_outcome_unresolved"
+                        if prepared is not None and (
+                            receipt.status == "unknown" or receipt.error_code == "invocation_response_pending"
+                        ):
+                            stop_business = "invocation_outcome_unresolved"
+                            blocked = stop_business
+                        previous = receipt.response_id
+                    if self.metrics and not measured.get("fresh_turns"):
+                        measured["receipt_status"] = measured["status"]
+                        measured["status"] = "reused" if measured.get("reused_turns") else "skipped"
+                    if prepared is not None and self.metrics:
+                        business["status"] = measured["status"]
+        if lookahead:
+            jobs = asyncio.Queue()
+            pending = iter(attempts)
+            def enqueue() -> _PreparedAttempt | None:
+                attempt = next(pending, None)
+                if attempt is None:
+                    return None
+                job = _PreparedAttempt(attempt)
+                jobs.put_nowait(job)
+                return job
+            async def prepare_worker() -> None:
+                while (job := await jobs.get()) is not None:
+                    with binding(self.metrics, attempt=job.attempt.index):
+                        async with limited(self.metrics, self.attempt_limit, "daily_attempt"):
+                            self._check()
+                            await one(job.attempt, job)
+                    job.finished.set()
+            async def ordered_business() -> None:
+                current = enqueue()
+                while current is not None:
+                    await current.prepared.wait()
+                    current.execute.set()
+                    following = enqueue() if allow_ahead and current.session_ready and not stop_business else None
+                    await current.finished.wait()
+                    current = following or enqueue()
+                jobs.put_nowait(None)
+                jobs.put_nowait(None)
+            # At most current + next own whole-attempt permits. With budget one,
+            # the next worker waits without blocking current business/release.
+            await self._gather([ordered_business(), prepare_worker(), prepare_worker()])
+        elif self.runtime.environment == "daily":
             # Travel's graph-wide BookingLedger mutates synthetic reservation state.
             # Keep its attempts serial even though native conversations are isolated.
             workers = 1 if target.unit_id.agent == "travel-agent" else self.settings.daily_attempt_workers

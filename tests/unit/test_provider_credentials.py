@@ -8,8 +8,8 @@ import pytest
 
 from agent_insights_quality.contracts import Environment
 from agent_insights_quality.errors import QualityError
-from agent_insights_quality.providers import AzureHttpTransport, AzureLogsReader, AzureSol, HttpRequest
-from agent_insights_quality.providers.transport import ARM_SCOPE, AZURE_DEVOPS_SCOPE, FOUNDRY_SCOPE
+from agent_insights_quality.providers import AzureHttpTransport, AzureLogsReader, AzureSol, HttpRequest, HttpResponse
+from agent_insights_quality.providers.transport import ARM_SCOPE, AZURE_DEVOPS_SCOPE, FOUNDRY_SCOPE, JsonClient
 from agent_insights_quality.registry import AzureRegistryBlob
 
 
@@ -145,6 +145,50 @@ def test_cli_http_auth_failure_has_no_fallback_or_request(environment, credentia
     assert error.value.__cause__ is None and error.value.__suppress_context__
     assert credentials.constructed == [credentials.cli]
     assert not http
+
+
+@pytest.mark.parametrize("method,outcome", [
+    ("POST", 201), ("POST", 202), ("POST", 429), ("GET", 429), ("POST", "no_response"),
+])
+def test_cancelled_http_send_drains_actual_thread_without_retry(environment, monkeypatch, method, outcome):
+    release, finished = threading.Event(), threading.Event()
+    calls, backoffs = [], []
+    transport = AzureHttpTransport()
+
+    async def exercise():
+        entered = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        def blocking(request):
+            calls.append(request)
+            loop.call_soon_threadsafe(entered.set)
+            try:
+                assert release.wait(timeout=5), "HTTP worker was not released"
+                if outcome == "no_response":
+                    raise OSError("Synthetic lost response")
+                return HttpResponse(outcome, {}, b"{}")
+            finally:
+                finished.set()
+        monkeypatch.setattr(transport, "_send", blocking)
+        async def backoff(delay):
+            backoffs.append(delay)
+            await asyncio.sleep(0)
+        client = JsonClient(environment.project_endpoint, transport, sleep=backoff)
+        task = asyncio.create_task(client.request(method, "/sessions"))
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            for _ in range(3):
+                task.cancel()
+                await asyncio.sleep(0)
+                assert not task.done() and not finished.is_set()
+                assert len(calls) == 1
+        finally:
+            release.set()
+            task.cancel()
+            settled = await asyncio.gather(task, return_exceptions=True)
+        assert isinstance(settled[0], asyncio.CancelledError)
+        assert finished.is_set() and len(calls) == 1 and not backoffs
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("injected", [False, True])

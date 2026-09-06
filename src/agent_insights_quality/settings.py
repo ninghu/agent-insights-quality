@@ -28,6 +28,7 @@ class RuntimeSettings:
     daily_lanes: int = 5
     daily_attempt_workers: int = 4
     daily_attempt_budget: int = 10
+    daily_travel_session_lookahead: int = 0
     daily_evidence_grace_seconds: int = 30
     staging_workers: int = 8
     deployment_workers: int = 4
@@ -51,6 +52,7 @@ class RuntimeSettings:
             "daily_lanes": (1, 5),
             "daily_attempt_workers": (1, 4),
             "daily_attempt_budget": (1, 10),
+            "daily_travel_session_lookahead": (0, 1),
             "daily_evidence_grace_seconds": (0, 120),
             "staging_workers": (1, 8),
             "deployment_workers": (1, 8),

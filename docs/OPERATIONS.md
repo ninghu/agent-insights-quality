@@ -166,10 +166,35 @@ Integrate repairs after the active run ends, then let incremental selection choo
 
 Daily keeps five Agent lanes and sequential versions within each lane. Independent attempts
 use up to `daily_attempt_workers` (default 4), under the shared `daily_attempt_budget` (default 10).
-Each attempt's setup and verification turns remain ordered. Travel is currently limited to one
-attempt at a time because its graph-wide booking ledger is shared; staging remains serial per target.
+Each attempt's setup and verification turns remain ordered. Travel business attempts remain
+serial because its graph-wide booking ledger is shared; staging remains serial per target.
 Completed immutable evidence/card snapshots enter the four-worker assessment pipeline immediately,
 while other safe lane work continues. Final aggregation waits for both execution and assessment.
+
+`daily_travel_session_lookahead` is an opt-in integer setting: **0 (default, off)** or **1**.
+It is not enabled by the four-attempt setting. For a new Daily run, 1 permits preparation of
+only the next native session within the already activated Travel version while the current
+attempt executes. Travel business requests remain strictly serial; no booking fixture, Agent
+source, request body, attempt count or staging behavior changes. Retained traffic owned by
+another run keeps the existing serial path. The option is frozen per run; resume restores it
+even if configuration defaults change, and legacy runs remain off.
+
+The adapter sends only a version-bound session-creation request, not an Agent invocation.
+Existing fake-wire and local Hosted response tests do **not** establish that the platform's
+session creation cannot restart or alter another active session's host/ledger. Keep this option
+off until that contract is established by controlled acceptance. No additional traffic, test
+run or warmup is implied by adding the option.
+
+Current and prepared attempts both hold the global attempt permit through completion.
+At most one session is ahead; budget 1 degenerates to serial preparation without deadlock.
+An uncertain business response stops further Travel business calls in that version, while
+already submitted preparation is drained and checkpointed. Unknown session POSTs are never
+repeated blindly. Fatal checkpoint failures cancel and drain both workers before ownership
+is released, including already-started threaded HTTP sends through repeated cancellation.
+An unpersisted session response remains unresolved rather than authorizing a retry.
+Private `attempt_phase` measurements separate `session_preparation` and
+`business_execution`; `wait:prepared_session` records waiting for the preceding attempt.
+Whole-attempt time includes those intervals and is not pure service time or additive wall time.
 
 After six attributable verification attempts, Daily can continue batched evidence collection for
 `daily_evidence_grace_seconds` (default 30), within the existing hydration deadline, to allow late

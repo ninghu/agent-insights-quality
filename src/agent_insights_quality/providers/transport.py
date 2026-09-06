@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from agent_insights_quality.contracts import JsonObject
 from agent_insights_quality.errors import QualityError
+from agent_insights_quality.providers.cancellation import drain_on_cancel
 
 FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 ARM_SCOPE = "https://management.azure.com/.default"
@@ -80,7 +81,7 @@ class AzureHttpTransport:
         self._credential_lock = threading.Lock()
 
     async def send(self, request: HttpRequest) -> HttpResponse:
-        return await asyncio.to_thread(self._send, request)
+        return await drain_on_cancel(asyncio.to_thread(self._send, request))
 
     def _send(self, request: HttpRequest) -> HttpResponse:
         validate_url(request.url)

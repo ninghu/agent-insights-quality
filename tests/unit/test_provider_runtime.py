@@ -476,11 +476,29 @@ def test_actual_hosted_session_is_persisted(environment, target, field):
         )
     )
     assert result == "actual-session" and saved == [result]
+    assert len(transport.requests) == 1
     wire = transport.requests[0]
     assert json.loads(wire.body) == {
         "version_indicator": {"type": "version_ref", "agent_version": "42"}
     }
     assert "/endpoint/sessions?api-version=v1" in wire.url
+    assert wire.headers["x-ms-client-request-id"] == "client-request"
+
+
+def test_session_202_preserves_identity_without_invoking_business(environment, target):
+    target = replace(target, agent_type="hosted_code")
+    transport = FakeTransport(response({
+        "id": "pending-session",
+        "version_indicator": {"type": "version_ref", "agent_version": "42"},
+    }, 202))
+    saved = []
+    with pytest.raises(QualityError, match="session_pending") as error:
+        run(runtime(environment, transport).create_session(deployed(target), "stable-request", saved.append))
+    assert saved == ["pending-session"] and error.value.request_accepted is True
+    assert len(transport.requests) == 1
+    assert json.loads(transport.requests[0].body) == {
+        "version_indicator": {"type": "version_ref", "agent_version": "42"},
+    }
 
 
 def test_session_binding_error_still_preserves_actual_identity(environment, target):

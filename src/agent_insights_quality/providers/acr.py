@@ -7,34 +7,17 @@ import json
 import re
 import subprocess
 import tempfile
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, TypeVar
+from typing import Protocol
 
 from agent_insights_quality.azure_cli import azure_cli
 from agent_insights_quality.contracts import JsonObject, Target
 from agent_insights_quality.errors import QualityError
 from agent_insights_quality.providers.artifacts import source_zip
 from agent_insights_quality.providers.callbacks import safe_persist
-
-T = TypeVar("T")
-
-
-async def _drain_on_cancel(operation: Coroutine[Any, Any, T]) -> T:
-    task = asyncio.create_task(operation)
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        # A cancelled waiter does not stop a subprocess or its source upload.
-        # Let its owner persist the native outcome before releasing runtime ownership.
-        drained = asyncio.gather(task, return_exceptions=True)
-        while not drained.done():
-            try:
-                await asyncio.shield(drained)
-            except asyncio.CancelledError:
-                continue
-        raise
+from agent_insights_quality.providers.cancellation import drain_on_cancel
 
 
 @dataclass(frozen=True)
@@ -53,7 +36,7 @@ class AzureCommandRunner:
     async def run(
         self, arguments: Sequence[str], *, cwd: Path | None = None
     ) -> CommandResult:
-        return await _drain_on_cancel(asyncio.to_thread(self._run, arguments, cwd))
+        return await drain_on_cancel(asyncio.to_thread(self._run, arguments, cwd))
 
     def _run(self, arguments: Sequence[str], cwd: Path | None) -> CommandResult:
         try:
@@ -203,7 +186,7 @@ class AcrImageBuilder:
             ) from None
         record["context_path"] = str(root)
         self._save(record)
-        saved = await _drain_on_cancel(self._submit(record, root))
+        saved = await drain_on_cancel(self._submit(record, root))
         return await self._poll(saved, tag)
 
     async def _submit(self, record: JsonObject, root: Path) -> JsonObject:

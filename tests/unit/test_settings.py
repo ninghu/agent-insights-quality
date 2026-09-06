@@ -23,6 +23,7 @@ def test_code_defaults_are_offline_and_bounded(monkeypatch):
     assert settings.daily_lanes == 5
     assert settings.daily_attempt_workers == 4
     assert settings.daily_attempt_budget == 10
+    assert settings.daily_travel_session_lookahead == 0
     assert settings.daily_evidence_grace_seconds == 30
     assert settings.assessment_workers == 4
     assert settings.staging_workers == 8
@@ -47,6 +48,8 @@ def test_code_defaults_are_offline_and_bounded(monkeypatch):
         {"daily_lanes": True}, {"daily_lanes": 0}, {"daily_lanes": 6},
         {"daily_attempt_workers": True}, {"daily_attempt_workers": 0}, {"daily_attempt_workers": 5},
         {"daily_attempt_budget": True}, {"daily_attempt_budget": 0}, {"daily_attempt_budget": 11},
+        {"daily_travel_session_lookahead": True}, {"daily_travel_session_lookahead": -1},
+        {"daily_travel_session_lookahead": 2}, {"daily_travel_session_lookahead": "1"},
         {"daily_evidence_grace_seconds": True}, {"daily_evidence_grace_seconds": -1},
         {"daily_evidence_grace_seconds": 121},
         {"staging_workers": 9}, {"staging_workers": "8"}, {"attempts": 11},
@@ -86,6 +89,17 @@ def test_daily_scheduling_setting_bounds_load_through_strict_json(tmp_path, work
     path = tmp_path / "runtime.json"
     path.write_text(json.dumps(values))
     assert {key: load_settings(path).to_dict()[key] for key in values} == values
+
+
+@pytest.mark.parametrize("ahead", [0, 1])
+def test_session_lookahead_is_explicit_small_json_option(tmp_path, ahead):
+    path = tmp_path / "runtime.json"
+    path.write_text(json.dumps({"daily_travel_session_lookahead": ahead}))
+    settings = load_settings(path)
+    assert settings.daily_travel_session_lookahead == ahead
+    assert settings.to_dict()["daily_travel_session_lookahead"] == ahead
+    path.write_text("{}")
+    assert load_settings(path).daily_travel_session_lookahead == 0
 
 
 @pytest.mark.parametrize("content", ['[]', '{', '{"daily_lanes":1,"daily_lanes":2}',

@@ -246,6 +246,7 @@ class RunMetrics:
                 "reuse": "No fresh call measured; elapsed_seconds is null, never a zero-latency success.",
                 "tokens": "Observed Sol response usage only; absent or invalid fields remain unknown.",
                 "unit": "daily_lane covers that version's lane interval; assessment is a separately bound unit stage overlapping later lane work.",
+                "session_lookahead": "Opt-in Travel attempt traffic includes session preparation, prepared-slot wait, and serial business. attempt_phase separates preparation/business; reused phases have null latency. These intervals overlap and are not additive wall time.",
                 "start": "CLI segment begins after source/plan resolves the run ID; earlier startup is in command-status logs.",
             },
             "totals": {
