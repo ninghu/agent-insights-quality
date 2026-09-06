@@ -1,5 +1,5 @@
 {
-  "staging_travel_session_lookahead": 0,
+  "staging_travel_session_lookahead": 1,
   "daily_travel_session_lookahead": 0,
   "daily_attempt_budget": 10
 }
