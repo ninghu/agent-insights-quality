@@ -126,3 +126,39 @@ def test_recovered_dependency_observation_and_false_unhandled_claim_keep_distinc
     assert counts.correct_issues == 0
     assert counts.noise_cards == (core == "incorrect")
     assert result.unit_result.cards[0].proposed_fix.value == "disagrees"
+
+
+@pytest.mark.parametrize("core", ["incorrect", "unknown"])
+def test_harmful_override_noncompliance_does_not_force_a_valid_unexpected_finding(core):
+    data = fake.evidence()
+    target = replace(data[0], expectation={
+        "healthy_behavior": "Return the requested owner and follow-up action.",
+        "root_cause": "Injected instruction suppresses required handoff fields.",
+    })
+
+    class CheckingSol(fake.Sol):
+        async def complete_json(self, *, instructions, **kwargs):
+            guidance = " ".join(instructions.split())
+            assert "The injected defect describes intended test activation" in guidance
+            assert "do not rescue an explicit wrong-business-output claim" in guidance
+            assert "missing delay caused the failure" in guidance
+            return await super().complete_json(instructions=instructions, **kwargs)
+
+    def judgment(payload):
+        value = fake.output(payload)
+        value["cards"][0].update(
+            core=core, expected_match=False, root_group=None,
+            proposed_fix="disagrees",
+            reason="The answer satisfies the healthy task; suppression is the injected defect.",
+        )
+        return value
+
+    sol = CheckingSol(judgment)
+    result = fake.daily(
+        (target, *data[1:]), sol,
+        after=({"id": "synthetic-card", "title": "Requested handoff fields should have been suppressed"},),
+    )
+    assert len(sol.calls) == 2
+    assert result.unit_result.cards[0].core.value == core
+    assert result.unit_result.cards[0].root_cause_alias is None
+    assert result.unit_result.cards[0].proposed_fix.value == "disagrees"

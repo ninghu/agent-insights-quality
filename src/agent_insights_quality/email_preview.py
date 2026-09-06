@@ -423,6 +423,10 @@ def export_email_preview(
         scoring_link = VerifiedScoringLink(root, scoring_revision)
     if restored is not None:
         frozen, plan, result, metadata = restored
+        from .scoring import SCORING_POLICY
+
+        if restyle and not rescore and result.scoring_policy != SCORING_POLICY and scoring_link is not None:
+            raise PreviewError("email_preview_scoring_link_policy_mismatch")
         if rescore:
             from .results import rescore_result
 
@@ -454,7 +458,7 @@ def export_email_preview(
                 retained = None if rescore else frozen.get("presentation", {}).get("scoring_link")
                 if retained:
                     scoring_link = VerifiedScoringLink.from_retained(root, retained)
-                else:
+                elif result.scoring_policy == SCORING_POLICY:
                     try:
                         scoring_link = configured_scoring_link(runtime, root)
                     except (QualityError, OSError):

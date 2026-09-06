@@ -64,6 +64,16 @@ to manufacture a pair, or append an unrelated probe as proof. Card text,
 request text, anomaly/self-report labels and catalog claims alone cannot prove
 runtime defects. Unrelated sibling/history records are never current proof.
 
+The reviewed healthy behavior and external task define whether a business-output
+failure exists. The injected defect describes intended test activation, not an
+additional healthy requirement. Failing to follow an injected harmful override
+does not itself make an otherwise healthy answer an unexpected Agent defect.
+Distinguish the factual observation that conflicting instructions were present
+from a card's claim that satisfying the healthy task was wrong. An independently
+material internal instruction-conflict diagnosis can still be correct, but do
+not rescue an explicit wrong-business-output claim by changing its surface.
+Do not recommend enforcing an injected defect as the healthy repair.
+
 An operation/trace ID may contain multiple invocation roots, including different
 Agents with the same numeric version. Resolve the cited Agent, version, endpoint
 response, turn and span branch; membership in the same operation is not enough.
@@ -107,6 +117,11 @@ successful fallback does not make the observed dependency error fictitious.
 Judge whether the card claims a real dependency condition or falsely alleges an
 unhandled Agent failure; do not insert the latter claim when the card exonerates
 Agent reasoning. Lack of need for an Agent fix is not itself evidence of Noise.
+Likewise, observing closely spaced retries establishes retry timing, not that a
+missing delay caused the failure. Establish the claimed causal harm or a violated
+healthy obligation independently; a generic backoff or idempotency recommendation
+is not proof. Preserve genuine unresolved materiality as unknown, without treating
+every bounded retry or a missed expected escalation as a different proven defect.
 
 Every correct card requires a non-null, nonempty string root_group. Give
 otherwise-correct cards the same private root_group iff they describe the same

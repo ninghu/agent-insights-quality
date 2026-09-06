@@ -251,6 +251,35 @@ def test_cli_rescoring_returns_the_derived_email_and_result_paths(runtime, monke
     assert originals(runtime) == before
 
 
+def test_legacy_restyle_without_receipt_never_substitutes_current_policy_guide(runtime, monkeypatch):
+    from agent_insights_quality.scoring import LEGACY_SCORING_POLICY
+
+    request, original, _ = seed(runtime, scoring_policy=LEGACY_SCORING_POLICY)
+    before = originals(runtime)
+    monkeypatch.setattr(
+        email_preview, "configured_scoring_link",
+        lambda *args: pytest.fail("Legacy restyle requested current policy guide"),
+    )
+    preview = exported(runtime, request, restyle=True)
+    assert "scoring_link_publication_required" in preview.blockers
+    manifest = json.loads((preview.directory / "manifest.json").read_text())
+    assert manifest["links"]["scoring"] is None
+    assert f"{original.score:.1f}" in (preview.directory / "email.html").read_text()
+    assert originals(runtime) == before
+
+
+def test_explicit_current_guide_cannot_relabel_a_legacy_restyle(runtime, monkeypatch):
+    from agent_insights_quality.scoring import LEGACY_SCORING_POLICY
+    from agent_insights_quality.report_links import VerifiedScoringLink
+
+    request, _, _ = seed(runtime, scoring_policy=LEGACY_SCORING_POLICY)
+    content = (ROOT / "docs" / "QUALITY_BAR.md").read_bytes()
+    link = VerifiedScoringLink(ROOT, RENDERER, fetch=lambda _: content)
+    monkeypatch.setattr(email_preview, "VerifiedScoringLink", lambda *args: link)
+    with pytest.raises(PreviewError, match="scoring_link_policy_mismatch"):
+        exported(runtime, request, restyle=True, scoring_revision=RENDERER)
+
+
 @pytest.mark.parametrize("mode", ["official", "test", "failure", "failed-test"])
 def test_restyle_never_changes_original_private_test_or_failure_routing(runtime, mode):
     request, result, _ = seed(runtime, mode=mode)
