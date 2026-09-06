@@ -104,12 +104,12 @@ def _file_types(plan, *, legacy=False):
 
 
 def _account_public_access(account: str, timeout: float) -> bool:
-    from .bootstrap import azure_cli
+    from .bootstrap import RESOURCE_GROUP, azure_cli
 
     # Management-plane read only; never account keys, roles or account changes.
     try:
         result = subprocess.run(
-            [azure_cli(), "storage", "account", "list", "--query",
+            [azure_cli(), "storage", "account", "list", "--resource-group", RESOURCE_GROUP, "--query",
              f"[?name=='{_account(account)}'].allowBlobPublicAccess",
              "--output", "json", "--only-show-errors"],
             capture_output=True, timeout=timeout,
@@ -203,7 +203,7 @@ class AzurePrivateReportBlob:
 
         try:
             download = self._client().get_blob_client(_key(key)).download_blob(
-                length=MAX_BYTES + 1, max_concurrency=1, **self._options(timeout),
+                offset=0, length=MAX_BYTES + 1, max_concurrency=1, **self._options(timeout),
             )
             data = download.readall()
             etag = download.properties.etag

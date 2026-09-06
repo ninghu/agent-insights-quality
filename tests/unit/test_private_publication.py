@@ -360,6 +360,8 @@ def test_provider_metadata_capture_is_bounded_and_never_prints_credentials(monke
         module._account_public_access("syntheticstore", 3)
     assert calls[0][1]["capture_output"] and calls[0][1]["timeout"] == 3
     assert calls[0][0][1:4] == ["storage", "account", "list"]
+    from agent_insights_quality.bootstrap import RESOURCE_GROUP
+    assert calls[0][0][4:6] == ["--resource-group", RESOURCE_GROUP]
     assert not capsys.readouterr().out
 
 
@@ -432,8 +434,8 @@ def sdk(monkeypatch):
         def close(self):
             captured.append(("credential_close", {}))
     class Blob:
-        def download_blob(self, **kwargs):
-            captured.append(("download", kwargs))
+        def download_blob(self, *, offset, length, **kwargs):
+            captured.append(("download", {"offset": offset, "length": length, **kwargs}))
             return SimpleNamespace(readall=lambda: b"content", properties=SimpleNamespace(etag="etag-1"))
         def upload_blob(self, data, **kwargs):
             captured.append(("upload", kwargs))
@@ -481,6 +483,7 @@ def test_sdk_conditional_writes_bounded_reads_and_identity_only(sdk):
     assert uploads[1]["etag"] == "saved-etag" and uploads[1]["match_condition"] == "IfNotModified"
     assert all(options["retry_total"] == 0 and options["logging_enable"] is False for options in uploads)
     download = next(args for name, args in sdk.captured if name == "download")
+    assert download["offset"] == 0
     assert download["length"] == module.MAX_BYTES + 1 and download["max_concurrency"] == 1
     assert ("service_close", {}) in sdk.captured and ("credential_close", {}) in sdk.captured
 
