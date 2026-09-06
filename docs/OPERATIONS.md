@@ -46,6 +46,43 @@ uncertain window coverage is excluded from Engine scoring, not counted as a miss
 A new email delivery test uses an explicit nonzero rerun identity; an
 ambiguous previous send is reconciled, never sent again blindly.
 
+## Email presentation and local review
+
+Email shows numeric issue/baseline coverage and every excluded unit, without visible Full/Partial
+labels or a quality PASS/FAIL threshold. The internal eligibility policy is unchanged: an eligible
+result may be a team report; an invalid measurement has no score and is addressed only to the
+configured personal recipient. TEST is always private. A measured zero remains a real zero score.
+
+The Outlook-compatible brief presents Summary, What needs improvement, What is working, and a
+five-Agent overview before optional private work items. Engine gaps require independent current
+evidence; exclusions and unexpected real Agent findings remain separate. No day-to-day improvement
+is implied when a comparable prior measurement is unavailable. Detailed unit reasoning is separate
+from the brief and uses the same result, not another assessment.
+
+```powershell
+python -m agent_insights_quality email-preview --delivery-id <existing-delivery-id>
+python -m agent_insights_quality email-preview --delivery-id <existing-delivery-id> --restyle
+```
+
+The first command preserves the exact prepared recipient, subject and HTML. Explicit `--restyle`
+creates a clearly labelled local presentation preview from that delivery's frozen result, only
+when the reviewed unit context still matches. Both export `email.html`, `email.eml`, `report.html`
+and a provenance manifest to a content-addressed directory under the private Daily `previews/`
+folder. The restyled EML attaches the detailed report; browser HTML links to its adjacent file.
+Neither command claims, sends, changes the original request, invokes providers or publishes data.
+EML is marked unsent, not delivered. Normal runtime ownership applies; do not bypass an active
+runner's lock to export a preview.
+
+New work-item tables include Type and use a frozen provider-as-of snapshot. Closed items cover
+the interval since the previous successfully submitted eligible official report's snapshot;
+TEST, failure notices, unsent requests and ambiguous sends do not advance that boundary. With
+no prior boundary, an explicitly labelled initial seven-day view is used. The configured Quality
+query still defines scope. An unavailable optional query is not an empty result and never blocks
+an otherwise eligible email. Legacy local previews retain their original recorded day and display
+unrecorded Type/cutoff fields honestly; they do not refetch or invent a newer reporting window.
+
+## Provider and checkpoint recovery
+
 New Insights polling has a separate `insights_poll_timeout_seconds` budget (default 1200).
 Deployment polling retains `poll_timeout_seconds` (default 600); trace hydration is separate.
 A local wait timeout is not a native failed run. Resume queries the original accepted operation

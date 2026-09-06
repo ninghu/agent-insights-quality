@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 from .errors import QualityError
 from .report_context import ReportMetadata, ReviewedReportContext
-from .reporting import render_html
+from .reporting import html_section, render_email_html
 from .results import PlannedUnit, QualityResult
 from .state import RecordStore, StateConflict
 
@@ -138,12 +138,68 @@ def _validate_request(request: EmailRequest) -> None:
         raise EmailError("email_request_invalid")
 
 
+def render_email_content(
+    result: QualityResult, *, allowed_units: Iterable[PlannedUnit], report_date: str,
+    test_run: bool = False, private_context: str | None = None,
+    work_item_context: dict | None = None, warnings: tuple[str, ...] = (),
+    report_context: ReviewedReportContext | None = None,
+    region_display: str | None = None, source_revision: str | None = None,
+    details_href: str | None = None, delivery_id: str | None = None,
+) -> tuple[str, str]:
+    """Render only: no recipients, claims, delivery records or provider calls."""
+    try:
+        if date.fromisoformat(report_date).isoformat() != report_date:
+            raise ValueError("Date must be canonical")
+    except (TypeError, ValueError) as error:
+        raise EmailError("email_date_invalid") from error
+    if type(test_run) is not bool:
+        raise EmailError("email_request_invalid")
+    if (region_display is None) != (source_revision is None):
+        raise EmailError("email_metadata_incomplete")
+    metadata = (
+        ReportMetadata(report_date, region_display, source_revision)
+        if region_display is not None else None
+    )
+    html = render_email_html(
+        result, allowed_units=allowed_units, warnings=warnings, report_context=report_context,
+        metadata=metadata, test_run=test_run, details_href=details_href, delivery_id=delivery_id,
+    )
+    prefix = "[TEST] " if test_run else ""
+    summary = (
+        f"{result.score:.1f}/100 - {report_date} - "
+        f"{result.counts.correct_issues}/{result.counts.expected_issues} issues"
+        if result.team_report_eligible else f"Measurement unavailable - {report_date}"
+    )
+    subject = f"{prefix}[Agent Insights Quality] {summary}"
+    if region_display:
+        subject += " - " + region_display
+    private_sections = []
+    if work_item_context is not None:
+        from .work_items import render_work_item_html
+        fragment = render_work_item_html(work_item_context)
+        private_sections.append(
+            '<tr><td style="padding:22px 28px 4px;font-family:Segoe UI,Arial,sans-serif;'
+            f'font-size:14px;line-height:21px;">{fragment}</td></tr>'
+        )
+    if private_context is not None:
+        if not isinstance(private_context, str):
+            raise EmailError("email_private_context_invalid")
+        notes = "".join(
+            '<p style="margin:8px 0;color:#475569;">'
+            + "<br>".join(escape(line) for line in paragraph.splitlines()) + "</p>"
+            for paragraph in private_context.split("\n\n") if paragraph
+        )
+        private_sections.append(html_section("Run notes", notes))
+    return subject, html.replace("<!--private-context-->", "".join(private_sections))
+
+
 def prepare_email(
     outbox: RecordStore, delivery_id: str, result: QualityResult, *,
     allowed_units: Iterable[PlannedUnit], report_date: str,
     test_run: bool = False, rerun: int = 0,
     test_recipient: str | None = None, failure_recipient: str | None = None,
     team_recipient: str = TEAM_RECIPIENT, private_context: str | None = None,
+    work_item_context: dict | None = None,
     warnings: tuple[str, ...] = (),
     report_context: ReviewedReportContext | None = None,
     region_display: str | None = None, source_revision: str | None = None,
@@ -161,27 +217,12 @@ def prepare_email(
     )
     if mode != "official" and recipient.casefold() in {team.casefold(), TEAM_RECIPIENT}:
         raise EmailError("email_recipient_isolation")
-    prefix = "TEST " if test_run else ""
-    title = "Agent Insights quality" if result.team_report_eligible else "Agent Insights failure"
-    subject = f"[{prefix}{result.status.value}] {title} - {report_date}"
-    if (region_display is None) != (source_revision is None):
-        raise EmailError("email_metadata_incomplete")
-    metadata = (
-        ReportMetadata(report_date, region_display, source_revision)
-        if region_display is not None else None
+    subject, html = render_email_content(
+        result, allowed_units=allowed_units, report_date=report_date, test_run=test_run,
+        private_context=private_context, work_item_context=work_item_context, warnings=warnings,
+        report_context=report_context, region_display=region_display, source_revision=source_revision,
+        delivery_id=delivery_id,
     )
-    html = render_html(
-        result, allowed_units=allowed_units, warnings=warnings,
-        report_context=report_context, metadata=metadata,
-    )
-    if private_context is not None:
-        if not isinstance(private_context, str):
-            raise EmailError("email_private_context_invalid")
-        html = html.replace(
-            "</body></html>",
-            "<h2>Private optional context</h2><pre>"
-            + escape(private_context) + "</pre></body></html>",
-        )
     request = EmailRequest(
         delivery_id, recipient, subject, html, mode, report_date, test_run, rerun,
     )

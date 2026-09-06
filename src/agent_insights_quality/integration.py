@@ -6,6 +6,7 @@ import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import date
 import json
 from pathlib import Path
@@ -20,7 +21,9 @@ from .publication import AzureCliAdxClient, PublicationOutbox, build_public_repo
 from .results import PlannedUnit, QualityResult
 from .settings import AssessmentSettings
 from .state import RuntimeStore, StateError
-from .work_items import fetch_quality_context, render_private_context
+from .work_items import (
+    fetch_quality_context, unavailable_context, validate_work_item_context,
+)
 
 
 def private_path(runtime: RuntimeStore, path: Path) -> Path:
@@ -130,9 +133,90 @@ async def _tick(stop: asyncio.Event) -> bool:
         return False
 
 
-async def _context(query_url: str, report_date: date) -> dict:
+async def _context(
+    query_url: str, report_date: date, *, previous_snapshot: dict | None = None,
+) -> dict:
     from .providers import AzureHttpTransport
-    return await fetch_quality_context(query_url, report_date, AzureHttpTransport())
+    return await fetch_quality_context(
+        query_url, report_date, AzureHttpTransport(), previous_snapshot=previous_snapshot,
+    )
+
+
+def _previous_official_snapshot(runtime: RuntimeStore, run_id: str) -> dict | None:
+    """Read only durable email handoffs and their immutable delivery inputs.
+
+    Accepted means successfully submitted, not confirmed inbox delivery. The
+    latest acknowledged snapshot cutoff is the reporting high-water mark; file
+    timestamps, report-date midnights, TEST and uncertain sends are never anchors.
+    No history is rewritten and no raw run evidence is inspected.
+    """
+    outbox = runtime.outbox("email")
+    identifiers = set()
+    for collection in ("completed", "progress"):
+        directory = private_path(runtime, outbox.directory / collection)
+        for path in directory.glob("*.json"):
+            identifiers.add(path.stem)
+            if len(identifiers) > 10_000:
+                raise QualityError("work_item_anchor_history_limit")
+    latest = None
+    for identifier in sorted(identifiers - {run_id}):
+        try:
+            record = read_email(outbox, identifier)
+        except QualityError as error:
+            raise QualityError("work_item_anchor_metadata_invalid") from error
+        if (
+            record.status not in {"accepted", "delivered"}
+            or record.request.mode != "official" or record.request.test_run
+        ):
+            continue
+        try:
+            frozen = runtime.run(identifier).read_completed("delivery-inputs", missing_ok=True)
+        except StateError as error:
+            raise QualityError("work_item_anchor_metadata_invalid") from error
+        if frozen is None:
+            raise QualityError("work_item_anchor_metadata_missing")
+        if (
+            frozen.get("test_run") is not False or type(frozen.get("rerun")) is not int
+            or frozen["rerun"] != 0 or frozen.get("report_date") != record.request.report_date
+            or not isinstance(frozen.get("report"), dict)
+            or frozen["report"].get("team_report_eligible") is not True
+        ):
+            raise QualityError("work_item_anchor_metadata_invalid")
+        if "work_item_context" not in frozen:
+            raise QualityError("work_item_anchor_legacy")
+        try:
+            context = validate_work_item_context(frozen["work_item_context"])
+        except QualityError as error:
+            raise QualityError("work_item_anchor_metadata_invalid") from error
+        if context["status"] == "unavailable":
+            continue
+        if context["schema_version"] != "1.0":
+            raise QualityError("work_item_anchor_legacy")
+        snapshot = context["snapshot"]
+        if snapshot["report_date"] != record.request.report_date:
+            raise QualityError("work_item_anchor_metadata_invalid")
+        cutoff = snapshot["window"]["end"]
+        if latest is None or cutoff > latest["cutoff"]:
+            latest = {"delivery_id": identifier, "cutoff": cutoff}
+    return latest
+
+
+def _retained_context(value: dict) -> tuple[dict, str | None]:
+    """Read legacy text without inventing Type/window fields or replacing it."""
+    if "schema_version" in value:
+        return deepcopy(validate_work_item_context(value)), None
+    if not isinstance(value.get("status"), str) or value["status"] not in {"available", "unavailable"}:
+        raise StateError("work_item_checkpoint_invalid")
+    if value["status"] == "unavailable":
+        if set(value) != {"status", "code", "text"} or value["text"] is not None:
+            raise StateError("work_item_checkpoint_invalid")
+        return unavailable_context(value["code"]), None
+    if (
+        set(value) != {"status", "snapshot", "text"} or not isinstance(value["snapshot"], dict)
+        or not isinstance(value["text"], str)
+    ):
+        raise StateError("work_item_checkpoint_invalid")
+    return unavailable_context("work_item_legacy_snapshot"), value["text"]
 
 
 def _generated_paths(report_date: str) -> tuple[str, ...]:
@@ -160,7 +244,7 @@ class RunIntegration:
     def __init__(
         self, root: Path, runtime: RuntimeStore, run_id: str, *,
         allowed_units: tuple[PlannedUnit, ...], report_date: date, test_run: bool,
-        fetch_context: Callable[[str, date], Awaitable[dict]] = _context,
+        fetch_context: Callable[..., Awaitable[dict]] = _context,
         adx_factory=AzureCliAdxClient, outbox_factory=PublicationOutbox,
         tick: Callable[[asyncio.Event], Awaitable[bool]] = _tick,
         write_report: Callable = _write_report,
@@ -172,6 +256,7 @@ class RunIntegration:
         self.tick, self.write_report = tick, write_report
         self.warnings: set[str] = set()
         self.context: str | None = None
+        self.work_item_context: dict | None = None
         self.logger: RunLogger | None = None
         self.outbox = self.client = self.worker = None
         self.stop = asyncio.Event()
@@ -194,6 +279,10 @@ class RunIntegration:
         frozen = self.records.read_completed("delivery-inputs", missing_ok=True)
         if frozen is not None:
             self.context = frozen["private_context"]
+            self.work_item_context = (
+                validate_work_item_context(frozen["work_item_context"])
+                if "work_item_context" in frozen else unavailable_context("work_item_legacy_snapshot")
+            )
             if "work_item_unavailable" in frozen["warnings"]:
                 self.warn("work_item_unavailable")
             return
@@ -201,11 +290,12 @@ class RunIntegration:
         if value is None:
             pending = self.records.read("work-item-context", missing_ok=True)
             if pending:
-                value = {"status": "unavailable", "code": "work_item_context_interrupted", "text": None}
+                value = unavailable_context("work_item_context_interrupted")
             else:
                 # A partial fetch is not repeated under a different email snapshot.
                 self.records.save_progress("work-item-context", {"status": "fetching"})
                 try:
+                    previous = _previous_official_snapshot(self.runtime, self.run_id)
                     path = private_path(
                         self.runtime, self.runtime.root / "config" / "quality-work-items-query-url.txt",
                     )
@@ -214,22 +304,33 @@ class RunIntegration:
                     if not query.strip() or len(query) > 8192:
                         raise QualityError("work_item_query_invalid")
                     snapshot = await asyncio.wait_for(
-                        self.fetch_context(query.strip(), self.report_date), timeout=60,
+                        self.fetch_context(
+                            query.strip(), self.report_date, previous_snapshot=previous,
+                        ), timeout=60,
                     )
-                    value = {"status": "available", "snapshot": snapshot, "text": render_private_context(snapshot)}
+                    value = validate_work_item_context({
+                        "schema_version": "1.0", "status": "available", "snapshot": snapshot,
+                    })
+                    if snapshot["report_date"] != self.report_date.isoformat():
+                        raise QualityError("work_item_snapshot_identity_invalid")
+                    window = snapshot["window"]
+                    if (
+                        snapshot["query_url"] != query.strip()
+                        or previous is None and window["basis"] != "initial_lookback"
+                        or previous is not None and (
+                            window["basis"] != "previous_official_report"
+                            or window["start"] != previous["cutoff"]
+                            or window["previous_delivery_id"] != previous["delivery_id"]
+                        )
+                    ):
+                        raise QualityError("work_item_snapshot_identity_invalid")
                 except (QualityError, OSError, UnicodeError) as error:
-                    value = {
-                        "status": "unavailable",
-                        "code": error.code if isinstance(error, QualityError) else "work_item_unavailable",
-                        "text": None,
-                    }
+                    value = unavailable_context(
+                        error.code if isinstance(error, QualityError) else "work_item_unavailable",
+                    )
             self.records.save_completed("work-item-context", value)
-        if value.get("status") not in {"available", "unavailable"} or (
-            value["status"] == "available" and not isinstance(value.get("text"), str)
-        ):
-            raise StateError("work_item_checkpoint_invalid")
-        self.context = value["text"]
-        if value["status"] == "unavailable":
+        self.work_item_context, self.context = _retained_context(value)
+        if self.work_item_context["status"] == "unavailable":
             self.warn("work_item_unavailable")
 
     async def __aenter__(self):
@@ -393,6 +494,8 @@ class RunIntegration:
                 "report": result.to_dict(), "test_run": self.test_run, "rerun": rerun,
                 "report_date": self.report_date.isoformat(), "region_display": environment.region_display,
                 "source_revision": source_revision, "private_context": private_context,
+                "work_item_context": deepcopy(self.work_item_context) if self.work_item_context is not None
+                else unavailable_context("work_item_context_missing"),
                 "warnings": sorted(warnings), "recipient": recipient(),
                 "report_context": context.to_private_dict(),
                 "configured_assessor": configured,
@@ -406,6 +509,7 @@ class RunIntegration:
             report_date=frozen["report_date"], test_run=frozen["test_run"], rerun=frozen["rerun"],
             test_recipient=frozen["recipient"], failure_recipient=frozen["recipient"],
             private_context=frozen["private_context"], warnings=tuple(frozen["warnings"]),
+            work_item_context=frozen.get("work_item_context", unavailable_context("work_item_legacy_snapshot")),
             region_display=frozen["region_display"], source_revision=frozen["source_revision"],
             report_context=context,
         )

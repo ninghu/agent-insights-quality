@@ -10,7 +10,9 @@ from agent_insights_quality.email import (
     read_email,
     record_email_outcome,
 )
-from agent_insights_quality.results import PlannedUnit, UnitId, UnitResult, aggregate_results
+from agent_insights_quality.results import (
+    ExclusionReason, PlannedUnit, UnitId, UnitResult, aggregate_results,
+)
 from agent_insights_quality.report_context import ReportContextError, load_report_context
 from agent_insights_quality.state import RuntimeStore, StateConflict, StateError
 
@@ -189,9 +191,9 @@ def test_email_uses_reviewed_context_and_exact_metadata_including_private_failur
         )
         assert claim_email(box, request.delivery_id, claim_id="native-app") == request
     assert "Unsupported factual answer" in request.html
-    assert "no supporting value" in request.html
-    assert "Require grounded evidence" in request.html
-    assert "agents/weather-agent/issues/issue-001/traffic.json" in request.html
+    assert "agents/weather-agent/issues/issue-001/traffic.json" not in request.html
+    assert "What needs improvement" in request.html
+    assert "TEST RUN" in request.html
     assert "Report date: 2026-09-04" in request.html and "2026-09-04" in request.subject
     assert "Region: Sweden Central" in request.html
     assert "Source commit: " + "a" * 40 in request.html
@@ -228,3 +230,35 @@ def test_metadata_changes_cannot_rewrite_prepared_or_claimed_email(tmp_path):
         with pytest.raises(StateConflict):
             prepare(box, **{**metadata, "source_revision": "b" * 40})
     assert read_email(box, original.delivery_id).request == original
+
+
+@pytest.mark.parametrize("excluded", [0, 1, 2, 3])
+def test_coverage_labels_are_hidden_without_changing_private_failure_routing(tmp_path, excluded):
+    plan = (PlannedUnit(UnitId("weather-agent", "v0")),) + tuple(
+        PlannedUnit(UnitId("weather-agent", f"issue-{index:03d}"), f"issue-{index:03d}")
+        for index in range(1, 4)
+    )
+    quality = aggregate_results(plan, tuple(
+        UnitResult(unit.unit_id, exclusion_reasons=(ExclusionReason.INCOMPLETE_EVIDENCE,)
+                   if index < excluded else ())
+        for index, unit in enumerate(plan)
+    ))
+    runtime = RuntimeStore("daily", root=tmp_path)
+    with runtime.ownership():
+        request = prepare_email(
+            runtime.outbox("email"), "coverage-email", quality, allowed_units=plan,
+            report_date="2026-09-05", failure_recipient="personal@example.test",
+        )
+    assert "Full" not in request.subject + request.html
+    assert "Partial" not in request.subject + request.html
+    if excluded > 2:
+        assert request.mode == "failure"
+        assert request.recipient == "personal@example.test"
+        assert "Measurement unavailable" in request.subject
+        assert "/100" not in request.subject
+    else:
+        assert request.mode == "official"
+        assert request.recipient == TEAM_RECIPIENT
+        assert "0.0/100" in request.subject
+    assert f"excluded whole units: {excluded}" in request.html
+    assert read_email(runtime.outbox("email"), "coverage-email").status == "prepared"

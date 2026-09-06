@@ -14,7 +14,7 @@ from agent_insights_quality.privacy import PrivacyError
 from agent_insights_quality.report_context import (
     ReportContextError, ReportMetadata, ReviewedReportContext, load_report_context,
 )
-from agent_insights_quality.reporting import render_html, render_json, render_markdown
+from agent_insights_quality.reporting import render_email_html, render_html, render_json, render_markdown
 from agent_insights_quality.results import (
     CardVerdict,
     CoreVerdict,
@@ -63,7 +63,9 @@ def test_counts_coverage_and_exclusions_agree_across_every_renderer(excluded, st
     assert public == result.to_dict()
     assert public["status"] == status
     for rendered in (markdown, html):
-        assert f"{status} - Quality score:" in rendered
+        assert not re.search(r"\b(Full|Partial)\b", rendered)
+        if rendered == markdown:
+            assert "Quality score:" in rendered
         assert f"C={result.counts.correct_issues}; E_scored={result.counts.expected_issues}" in rendered
         assert f"N_scored={result.counts.noise_cards}; D_scored={result.counts.duplicate_cards}" in rendered
         assert f"{result.coverage.scored_issues}/20 planned" in rendered
@@ -317,3 +319,72 @@ def test_omitted_metadata_has_no_default_region_or_source():
     assert metadata.to_private_dict() == {
         "report_date": "2026-09-04", "region_display": "SwedenCentral", "source_revision": "a" * 40,
     }
+
+
+@pytest.mark.parametrize("excluded", [0, 1, 2, 3])
+def test_email_brief_preserves_counts_and_numeric_coverage_without_verdict_labels(excluded):
+    result, plan = report(excluded)
+    html = render_email_html(result, allowed_units=plan, test_run=True)
+    plain = unescape(re.sub("<[^>]+>", "", html))
+    assert not re.search(r"\b(Full|Partial|PASS|FAIL)\b", plain)
+    assert "max-width:960px" in html and "font-size:14px" in html
+    assert "<!--[if mso]>" in html and 'role="presentation"' in html
+    assert "TEST RUN" in plain
+    assert f"{result.coverage.scored_issues}/20 planned" in plain
+    assert f"{result.coverage.scored_baselines}/5 planned" in plain
+    assert f"excluded whole units: {excluded}" in plain
+    assert f"C={result.counts.correct_issues}; E_scored={result.counts.expected_issues}" in plain
+    assert f"N_scored={result.counts.noise_cards}; D_scored={result.counts.duplicate_cards}" in plain
+    assert ("PERSONAL NOTICE" in plain) == (excluded > 2)
+    assert "Score change: not compared" in plain
+    assert "Extra cards" not in plain
+    assert "framework/infrastructure" in plain
+    assert html.index(">Summary<") < html.index(">What needs improvement<")
+    assert html.index(">What needs improvement<") < html.index(">What is working<")
+    assert html.index(">What is working<") < html.index(">Test Agents<")
+    assert html.count("<small>") == 0  # No inferred catalog type for synthetic identities.
+    if excluded:
+        assert "not a confirmed Engine miss" in plain
+        assert "unscored" in plain and "incomplete_evidence" in plain
+
+
+def test_email_brief_has_five_agent_rows_and_complete_detail_targets():
+    result, plan = report()
+    html = render_email_html(result, allowed_units=plan, details_href="report.html")
+    agent_section = html.split(">Test Agents</h2>", 1)[1].split("</tbody>", 1)[0]
+    assert agent_section.count('<tr bgcolor="#ffffff">') == 3
+    assert agent_section.count('<tr bgcolor="#f8fafc">') == 2
+    details = render_html(result, allowed_units=plan)
+    links = re.findall(r'href="report\.html#([^"]+)"', html)
+    assert len(set(links)) == 25
+    for anchor in links:
+        assert f'id="{anchor}"' in details
+    assert "Reviewed contracts and follow-up" not in html
+    assert "Noise weight 1; Duplicate weight 0.25" in html
+
+
+def test_real_baseline_findings_are_not_automatically_noise_or_health_failures():
+    baseline = PlannedUnit(UnitId("weather-agent", "v0"))
+    issue = PlannedUnit(UnitId("weather-agent", "issue-001"), "issue-001")
+    plan = (baseline, issue)
+    result = aggregate_results(plan, (
+        UnitResult(baseline.unit_id, (CardVerdict("card-0001", CoreVerdict.CORRECT, "root-0001"),)),
+        UnitResult(issue.unit_id, (CardVerdict("card-0002", CoreVerdict.CORRECT, "issue-001"),)),
+    ))
+    html = render_email_html(result, allowed_units=plan)
+    assert "1 of 1 scorable baselines had no confirmed Noise" in html
+    assert "not a claim of perfect Agent health" in html
+    assert "Independently supported Agent problem outside the expected defect" in html
+    assert "not Noise and no additional expected-issue credit" in html
+    assert "Healthy Agent versions should produce zero findings" not in html
+    assert "Incorrect findings (Noise)</td>" not in html
+
+
+@pytest.mark.parametrize("href", [
+    "javascript:alert(1)", "https://example.test/private", "file:///private.html",
+    "../report.html", 'report.html" onclick="x', "",
+])
+def test_brief_cannot_introduce_unvalidated_report_links(href):
+    result, plan = report()
+    with pytest.raises(ReportContextError, match="detail_link_invalid"):
+        render_email_html(result, allowed_units=plan, details_href=href)

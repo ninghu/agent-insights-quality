@@ -40,6 +40,12 @@ def parser() -> argparse.ArgumentParser:
     )
     status = commands.add_parser("status", help="Show safe local run status")
     status.add_argument("--profile", choices=("daily", "staging"), default="daily")
+    preview = commands.add_parser("email-preview", help="Export private local HTML/EML; never claim or send")
+    preview.add_argument("--delivery-id", required=True)
+    preview.add_argument(
+        "--restyle", action="store_true",
+        help="Render current presentation from this delivery's frozen result; no remeasurement",
+    )
     for command in ("email-claim", "email-result"):
         child = commands.add_parser(command, help="Claim app-native send" if command == "email-claim"
                                     else "Record actual app-native send evidence")
@@ -430,6 +436,12 @@ def main(
                             value["performance_path"] = performance[0].artifact_path
                         if performance[0].health_warnings:
                             value["warnings"] = sorted({*value.get("warnings", []), "logging_failed"})
+            elif args.command == "email-preview":
+                from .email_preview import export_email_preview
+                preview = export_email_preview(
+                    runtime, args.delivery_id, root=root, restyle=args.restyle,
+                )
+                value, code = preview.to_dict(), 0
             elif args.command == "email-claim":
                 outbox = runtime.outbox("email")
                 request = claim_email(outbox, args.delivery_id, claim_id=args.claim_id)

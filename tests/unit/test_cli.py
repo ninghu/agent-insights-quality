@@ -92,7 +92,7 @@ def test_cli_test_pipeline_and_claim_actual_outcome_no_raw_stdout(app, capsys):
     packet = json.loads(Path(claim["request_path"]).read_text())
     assert packet["recipient"] == "synthetic@example.invalid"
     assert packet["test_run"] and packet["rerun"] == 1
-    assert "100.0" in packet["html"] and "TEST " in packet["subject"]
+    assert "100.0" in packet["html"] and "[TEST]" in packet["subject"]
     assert "<html" not in json.dumps(claim)
     assert app.cli("email-claim", "--delivery-id", delivery, "--claim-id", "app-claim") == 2
     assert "email_reconciliation_required" in capsys.readouterr().err
@@ -434,7 +434,7 @@ def test_partial_and_failure_email_routing_comes_from_actual_result(app, monkeyp
     second, _ = last_json(capsys)
     assert second["status"] == "Failed" and second["score"] is None
     email = read_email(app.store.outbox("email"), second["delivery_id"])
-    assert email.request.mode == "test" and "failure" in email.request.subject
+    assert email.request.mode == "test" and "Measurement unavailable" in email.request.subject
 
 
 def test_prepared_email_resume_skips_ports_and_retains_frozen_metadata_context_and_warnings(app, monkeypatch, capsys):
@@ -442,7 +442,7 @@ def test_prepared_email_resume_skips_ports_and_retains_frozen_metadata_context_a
     value, _ = last_json(capsys)
     record = read_email(app.store.outbox("email"), value["delivery_id"])
     assert "Sweden Central" in record.request.html and "a" * 40 in record.request.html
-    assert "2026-09-04" in record.request.html and "Synthetic reviewed defect" in record.request.html
+    assert "2026-09-04" in record.request.html and "Test Agents" in record.request.html
     calls = len(app.port_calls), len(app.sol.calls), len(app.cloud.invocations)
     (app.store.root / "config" / "email-recipient.json").write_text("{broken")
     (app.store.root / "config" / "assessment.json").write_text("{broken")
@@ -502,7 +502,7 @@ def test_cli_official_flushes_logger_events_during_traffic_and_keeps_work_items_
     writes = []
     monkeypatch.setattr(cli, "_official_source", lambda _: None)
     monkeypatch.setattr(runner, "RunLogger", events.RunLogger)
-    async def fetch(*args):
+    async def fetch(*args, **kwargs):
         return integrations.snapshot()
     def auxiliary(*args, **kwargs):
         loop = asyncio.get_running_loop()
