@@ -92,13 +92,22 @@ Disagreement found during report review is documented for review, not silently r
 
 ## Score and coverage
 
+New measurements use precision-first scoring v2:
+
 ```text
-score = 100 * C / (E_scored + N_scored + 0.25 * D_scored)
+M = E_scored - C
+score = 100 * C / (C + N_scored + 0.5 * D_scored + 0.25 * M)
 ```
 
-`C` is the number of distinct correctly detected scored issues. Noise and Duplicate include
-scorable baselines as well as issues; baselines add no healthy bonus. There is no overall
-quality PASS/FAIL threshold. A fully measured zero is valid; an unmeasured run is not zero.
+`C` is the number of distinct correctly detected scored issues. `M` is the number of missed
+scored issues, not excluded units. Noise weighs 1, Duplicate 0.5 and Miss 0.25. Noise and
+Duplicate include scorable baselines as well as issues; baselines add no healthy bonus.
+Display one decimal using half-up rounding. There is no overall quality PASS/FAIL threshold.
+A fully measured zero is valid; an unmeasured run is not zero.
+
+For an illustrative arithmetic example with `C=8`, `E_scored=10`, `N_scored=1` and
+`D_scored=1`, there are two misses and the v2 score is `100*8/(8+1+0.5+0.5) = 80.0`.
+This is an example, not a published measurement.
 
 Full covers all 25 units. Partial permits at most two unscorable baseline/issue units and at
 least one scorable issue. Exclude each entire unit from all score counts, not just unfavorable
@@ -108,3 +117,20 @@ units remain visible as unscored diagnostics.
 More than two unscorable units, no scorable issue or systemic integrity failure produces no team
 score/report and only a private failure notice. Compare trends with scoring policy and coverage
 visible; Partial is not interchangeable with Full.
+
+### Historical scoring policies
+
+Version 1 remains valid for its recorded results:
+
+```text
+score_v1 = 100 * C / (E_scored + N_scored + 0.25 * D_scored)
+```
+
+Since `E_scored = C + M`, v1 implicitly weights a miss at 1 and a duplicate at 0.25.
+Do not relabel v1 output as v2 or compare scores across policies as if the weights were
+unchanged. Restoring an old result uses its recorded policy, not the current default.
+
+An explicitly requested scoring preview may derive a new score from the same saved
+classifications, counts and coverage. Preserve the original result, evidence and prepared
+email; record both policies and result hashes with the derived preview. A weight change is
+not a new measurement, reassessment, publication or email-send authorization.
