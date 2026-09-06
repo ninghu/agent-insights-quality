@@ -43,7 +43,7 @@ _INTEGRITY = {
 }
 _EVALUATION = (
     "src/agent_insights_quality/assessment.py", "src/agent_insights_quality/telemetry.py",
-    "src/agent_insights_quality/prompts", "src/agent_insights_quality/runner.py",
+    "src/agent_insights_quality/prompts",
 )
 
 

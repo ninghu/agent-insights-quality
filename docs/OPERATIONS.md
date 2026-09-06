@@ -47,6 +47,9 @@ exists. At the deadline, the saved evidence is assessed as available under the u
 eight-observation policy; gaps remain explicit. Snapshot visibility is recorded after queries finish.
 Evidence-only recovery preserves completed calls, the original deadline and earlier snapshots;
 a later snapshot never proves that those records were visible earlier.
+Orchestration/recovery changes alone do not request new judgments for completed PASS or FAIL
+measurements. They retain their actual source/date. Changes to explicit assessment, expectation,
+policy and evidence dependencies still select the corresponding reviewed reassessment work.
 
 Use the [trace-context audit](#caller-invocation-context) on retained results for propagation
 diagnostics. An explicitly authorized [session preparation trial](STAGING_PREPARATION_TRIAL.md)

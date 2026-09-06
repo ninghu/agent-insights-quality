@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from agent_insights_quality.runner import _EVALUATION
+from agent_insights_quality.selection import LastTest, select_staging
 from agent_insights_quality.telemetry import Snapshot
 import test_runner as fake
 
@@ -126,3 +128,38 @@ def test_staging_snapshot_visibility_is_recorded_after_raw_queries_finish(tmp_pa
     snapshot = saved_snapshot(h, result)
     assert datetime.fromisoformat(snapshot.observed_at) == h.query_finished[-1]
     assert len(h.cloud.invocations) == 20 and len(h.sol.calls) == 1
+
+
+@pytest.mark.parametrize("status", ["PASS", "FAIL", "INCOMPLETE"])
+def test_runner_recovery_changes_do_not_rejudge_completed_measurements(tmp_path, status):
+    h = fake.Harness(tmp_path, profile="staging", issues=0)
+    target = h.catalog.targets[0]
+    history = {target.key: LastTest("original-source", status, "2026-09-04T12:00:00Z")}
+    selected = select_staging(
+        h.catalog, last_tests=history,
+        changed_paths=["src/agent_insights_quality/runner.py"],
+        evaluation_paths=_EVALUATION,
+    )
+    if status == "INCOMPLETE":
+        assert [(item.target.key, item.action, item.reasons) for item in selected] == [
+            (target.key, "traffic", ("incomplete",)),
+        ]
+    else:
+        assert selected == ()
+
+
+@pytest.mark.parametrize("path", [
+    "src/agent_insights_quality/assessment.py",
+    "src/agent_insights_quality/staging_policy.py",
+    "src/agent_insights_quality/telemetry.py",
+    "src/agent_insights_quality/prompts/staging.md",
+])
+def test_explicit_judgment_and_evidence_dependencies_still_select_reassessment(tmp_path, path):
+    h = fake.Harness(tmp_path, profile="staging", issues=0)
+    target = h.catalog.targets[0]
+    selected = select_staging(
+        h.catalog,
+        last_tests={target.key: LastTest("original-source", "PASS", "2026-09-04T12:00:00Z")},
+        changed_paths=[path], evaluation_paths=_EVALUATION,
+    )
+    assert [(item.target.key, item.action) for item in selected] == [(target.key, "reassess")]
