@@ -188,7 +188,7 @@ def test_all_authorities_run_real_graph_and_model_instrumentation(runtime):
     chat = next(
         span
         for span in runtime.exporter.get_finished_spans()
-        if span.name == "travel.model.respond"
+        if span.name == "travel.model.review"
     )
     assert (
         json.loads(chat.attributes["gen_ai.input.messages"])[0]["parts"][0]["content"]
@@ -199,6 +199,12 @@ def test_all_authorities_run_real_graph_and_model_instrumentation(runtime):
     assert chat.attributes["gen_ai.usage.input_tokens"] == 321
     assert chat.attributes["gen_ai.usage.output_tokens"] == 5
     assert "Concise synthetic review." in chat.attributes["gen_ai.output.messages"]
+    assert chat.attributes["travel.review.internal"] is True
+    assert chat.attributes["travel.review.output_delivered"] is False
+    assert "External user request: Find a flight for trip-beta." in runtime.calls[0]["input"]
+    assert "Candidate user-facing response: " + answer(state) in runtime.calls[0]["input"]
+    assert "not a user-facing answer" in runtime.calls[0]["input"]
+    assert "Concise synthetic review." not in answer(state)
     assert all(
         span.attributes["gen_ai.agent.name"] == "synthetic-travel"
         for span in tools(runtime)
@@ -509,9 +515,9 @@ def test_actual_responses_host_returns_grounded_message_and_continues_conversati
                     return False
 
                 children = [span for span in spans if descendant(span)]
-                assert any(span.name == "travel.model.respond" for span in children)
+                assert any(span.name == "travel.model.review" for span in children)
                 chat = next(
-                    span for span in children if span.name == "travel.model.respond"
+                    span for span in children if span.name == "travel.model.review"
                 )
                 assert chat.context.trace_id == invocation.context.trace_id
                 assert (
@@ -548,7 +554,7 @@ def test_model_failure_is_visible_and_resources_are_closed(runtime):
     chat = next(
         span
         for span in runtime.exporter.get_finished_spans()
-        if span.name == "travel.model.respond"
+        if span.name == "travel.model.review"
     )
     assert chat.status.is_ok is False
 

@@ -64,6 +64,24 @@ to manufacture a pair, or append an unrelated probe as proof. Card text,
 request text, anomaly/self-report labels and catalog claims alone cannot prove
 runtime defects. Unrelated sibling/history records are never current proof.
 
+An operation/trace ID may contain multiple invocation roots, including different
+Agents with the same numeric version. Resolve the cited Agent, version, endpoint
+response, turn and span branch; membership in the same operation is not enough.
+A fact true for another Agent does not establish this target's diagnosis.
+Preserve the distinction between the external user's request, native conversation
+history, delivered endpoint answer, tool results and internal model prompts or
+outputs. An internal review request is not the external user's task, and its
+output is not automatically the delivered answer. Conversely, a genuinely
+supported internal cost, latency or output defect is not Noise merely because
+the final answer differs. Judge the surface the card actually claims and state
+that scope in the reason; use unknown rather than guessing an essential boundary.
+
+Expected successful recovery can include a failed optional dependency. A factual
+description of successful fallback is not proof of an unresolved Agent defect.
+Do not turn an unnecessary suggested fix into a core error when the diagnosis
+itself is supported. State when the recommended behavior already occurs; do not
+invent an Agent remediation requirement from the card's existence.
+
 Every correct card requires a non-null, nonempty string root_group. Give
 otherwise-correct cards the same private root_group iff they describe the same
 root cause. expected_match requires an independently established expected

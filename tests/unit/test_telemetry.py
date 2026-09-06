@@ -59,6 +59,38 @@ def test_six_responses_can_share_one_operation():
     assert {scope.operation_ids for scope in result.scopes} == {("op-1",)}
 
 
+def test_shared_operation_does_not_make_other_agent_root_or_child_current_evidence():
+    rows = [
+        span("weather-response", span_id="weather-root"),
+        span("healthcare-response", span_id="healthcare-root",
+             **{"gen_ai.agent.name": "healthcare-agent"}),
+        span("weather-model", span_id="weather-model", parent="weather-root", kind="chat"),
+        span("healthcare-model", span_id="healthcare-model", parent="healthcare-root", kind="chat",
+             **{"gen_ai.agent.name": "healthcare-agent"}),
+    ]
+    result = snapshot(rows, ["weather-response"])
+    assert result.attributable_responses == {"weather-response"}
+    assert result.scopes[0].anchor_refs == ("row-000001",)
+    assert set(result.scopes[0].evidence_refs) == {"row-000001", "row-000003"}
+    assert len(result.records) == 4
+    assert result.records[1]["raw"] == rows[1]
+    assert result.records[3]["raw"] == rows[3]
+
+
+def test_internal_model_output_remains_visible_without_replacing_endpoint_anchor():
+    rows = [
+        span("endpoint-response", span_id="root",
+             **{"gen_ai.output.messages": "Delivered itinerary response."}),
+        span("review-response", span_id="review", parent="root", kind="chat",
+             **{"travel.review.internal": True, "travel.review.output_delivered": False,
+                "gen_ai.output.messages": "Actual internal review text."}),
+    ]
+    result = snapshot(rows, ["endpoint-response"])
+    assert result.scopes[0].anchor_refs == ("row-000001",)
+    assert result.scopes[0].evidence_refs == ("row-000001", "row-000002")
+    assert result.records[1]["raw"]["customDimensions"]["gen_ai.output.messages"] == "Actual internal review text."
+
+
 def test_nested_host_anchors_and_raw_payloads_are_preserved():
     rows = [
         span("response-a", span_id="host"),

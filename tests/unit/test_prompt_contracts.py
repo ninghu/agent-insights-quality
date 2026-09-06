@@ -231,6 +231,20 @@ def test_baseline_inputs_do_not_supply_completed_answers(agent):
             assert expected_text not in prompt
 
 
+@pytest.mark.parametrize("directory", [
+    path.parent for path in sorted((ROOT / "agents" / "healthcare-agent").rglob("definition.json"))
+])
+def test_healthcare_listing_guidance_preserves_record_identity_without_open_slot_claim(directory):
+    instructions = read_json(directory / "definition.json")["definition"]["instructions"]
+    assert "label them as existing appointment records" in instructions
+    assert "retain their supplied in-scope record identifiers" in instructions
+    assert "An existing record does not by itself prove that a slot is open or bookable" in instructions
+    assert "Continue honoring any explicitly requested JSON field set" in instructions
+    case = healthcare_baseline_cases()["scope"]
+    assert "record-a-801" in assertions(case)["required_terms_all"]
+    assert "existing appointment records" not in text(case)
+
+
 def test_healthcare_memory_probes_require_previous_context():
     requests = healthcare_baseline_cases()
     for suffix, values in (

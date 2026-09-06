@@ -38,5 +38,13 @@ from actual endpoint response identities, fetches matching operations, and prese
 with an invocation membership index. Unexpected records, query gaps and cumulative card links are
 not silently discarded.
 
+Travel's `travel.model.review` span is an internal concision review, not the delivered response.
+Its model request includes the external user request and the candidate response; the actual
+review output remains in telemetry with `travel.review.output_delivered=false`. The hosting
+invocation records the real endpoint output. Neither the collector nor assessment should
+replace one surface with the other or discard a genuine internal cost/latency observation.
+Healthcare appointment listings distinguish existing records from evidence of open availability
+and retain the supplied in-scope record identifiers.
+
 Private runtime records and public result models are different objects. No raw provider payload,
 trace, credential, work item or private identifier belongs in the public model.
