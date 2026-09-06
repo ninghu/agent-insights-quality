@@ -129,11 +129,18 @@ def _assessment_details(entries: list[tuple[int, dict]]) -> str:
     return "<details><summary>Assessment details</summary>" + "".join(body) + "</details>"
 
 
+_EXCLUSION_LABELS = {
+    "missing_result": "Result unavailable",
+    "incomplete_execution": "Execution incomplete",
+    "incomplete_evidence": "Evidence incomplete",
+    "incomplete_assessment": "Assessment incomplete",
+    "unknown_core": "Finding unconfirmed",
+}
 _FINDING_LABELS = {
-    "expected_detection": "Correct",
+    "expected_detection": "Matched",
     "noise": "Noise",
     "duplicate": "Duplicate",
-    "unexpected_real": "Unexpected finding",
+    "unexpected_real": "Unexpected",
     "unknown": "Unconfirmed",
 }
 
@@ -152,26 +159,23 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
     current = [finding for finding in unit["findings"] if finding["contribution"] == "current"]
     titles, verdicts, notes, details = [], [], [], []
     missed = unit["scorable"] and unit["kind"] == "issue" and not unit["counts"]["correct_issues"]
-    if unit["kind"] == "issue":
-        outcome = "Not scored" if not unit["scorable"] else "Not detected" if missed else "Detected"
-        verdicts.append("Expected issue: " + outcome)
+    if not unit["scorable"]:
+        if not current or any(finding["classification"] != "unknown" for finding in current):
+            verdicts.append("Unconfirmed")
+    elif missed:
+        verdicts.append("Missed")
     if not unit["scorable"]:
         if any(
             detail.get("cards", {}).get(finding["card_alias"], {}).get("disagreement")
             for finding in current
         ):
-            notes.append("Assessment disagreement; unit not scored.")
+            notes.append("Review disagreement.")
         else:
-            reasons = ", ".join(unit["exclusion_reasons"])
-            notes.append("Not scored: " + reasons + ". Not counted as a miss.")
-        if detail.get("failure_code"):
-            notes.append("Reason: " + detail["failure_code"] + ".")
+            notes.append("; ".join(_EXCLUSION_LABELS[reason] for reason in unit["exclusion_reasons"]) + ".")
     elif missed and private:
         observations = len(detail.get("observations", ()))
         if observations:
             notes.append(f"Observed {observations}/10.")
-    if missed and any(finding["classification"] == "unexpected_real" for finding in current):
-        notes.append("Generated finding concerns a different claim.")
     roots = {}
     for index, finding in enumerate(current, 1):
         if finding["classification"] in {"expected_detection", "unexpected_real"}:
@@ -179,12 +183,9 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
     for index, finding in enumerate(current, 1):
         alias = finding["card_alias"]
         card = detail.get("cards", {}).get(alias, {})
-        label = _FINDING_LABELS[finding["classification"]]
-        if not finding["scored"]:
-            label += " (unscored)"
         title = card.get("title") or alias
         titles.append(f"{index}. {title}")
-        verdicts.append(f"{index}. {label}")
+        verdicts.append(f"{index}. {_FINDING_LABELS[finding['classification']]}")
         root = finding["root_cause_alias"]
         if finding["classification"] == "duplicate":
             notes.append(f"{index}: Same root as finding {roots[root]}.")
@@ -196,10 +197,10 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
             if detail.get("failure_code") == "trace_readiness_insufficient" else
             "Unavailable" if not unit["scorable"] else "None"
         )
-        if unit["kind"] == "baseline":
-            verdicts.append("Unscored" if not unit["scorable"] else "-")
+        if not verdicts:
+            verdicts.append("No findings")
     if private and detail.get("unavailable"):
-        notes.append("Assessment details unavailable.")
+        notes.append("Details unavailable.")
     rendered_notes = [_markdown_text(note) for note in notes]
     if details:
         rendered_notes.append(_assessment_details(details))
@@ -222,18 +223,17 @@ def _render_markdown(
     score = f"{value['score']:.1f}/100" if value["score"] is not None else "Unmeasured (no quality score)"
     lines = [
         "# Agent Insights quality", "",
-        f"Quality score: {score}. Detected: {counts['correct_issues']}/{counts['expected_issues']} scored issues; "
+        f"- Quality score: {score}. Matched: {counts['correct_issues']}/{counts['expected_issues']} scored issues; "
         f"Noise: {counts['noise_cards']}; Duplicate: {counts['duplicate_cards']}.",
-        "", f"Coverage: {coverage['scored_issues']}/{coverage['planned_issues']} expected issues; "
+        "", f"- Coverage: {coverage['scored_issues']}/{coverage['planned_issues']} expected issues; "
         f"{coverage['scored_baselines']}/{coverage['planned_baselines']} expected baselines; "
         f"{coverage['excluded_units']} excluded units.",
-        "", "Each row is one version run (10 attempts), not one attempt. "
-        "Generated insights are new or updated findings from that run; unchanged historical cards are omitted.",
-        "", "Expected issue: Not detected means Insights did not diagnose the expected defect. "
-        "Unexpected finding means a correct non-target finding; it earns no expected-detection credit.",
+        "", "- Each row is one version run (10 attempts). Only new or updated findings are shown.",
+        "", "- Matched / Missed refers to the expected defect. Unexpected is a saved valid non-target finding, "
+        "not a match. Unconfirmed rows are excluded from the score, not counted as misses.",
     ]
     if not value["team_report_eligible"]:
-        lines += ["", "Personal notice: no valid overall measurement. Counts describe the scored subset only."]
+        lines += ["", "- Personal notice: no valid overall measurement. Counts describe the scored subset only."]
     agents = dict.fromkeys(unit["unit_id"]["agent"] for unit in value["units"])
     if agent is not None:
         if agent not in agents or private is None:
@@ -241,10 +241,10 @@ def _render_markdown(
         units = [unit for unit in value["units"] if unit["unit_id"]["agent"] == agent]
         scored = [unit for unit in units if unit["scorable"]]
         lines[0] += " - " + _agent_name(agent)
-        lines[2] = "Overall Daily " + lines[2][0].lower() + lines[2][1:]
-        lines[4] = "Overall Daily " + lines[4][0].lower() + lines[4][1:]
+        lines[2] = "- Overall Daily " + lines[2][2].lower() + lines[2][3:]
+        lines[4] = "- Overall Daily " + lines[4][2].lower() + lines[4][3:]
         lines += [
-            "", "This Agent (no separate score): "
+            "", "- This Agent (no separate score): "
             f"{sum(unit['counts']['correct_issues'] for unit in scored)}/"
             f"{sum(unit['counts']['expected_issues'] for unit in scored)} scored issues detected; "
             f"{sum(unit['counts']['noise_cards'] for unit in scored)} Noise; "
@@ -254,7 +254,16 @@ def _render_markdown(
         agents = (agent,)
     for agent in agents:
         units = [unit for unit in value["units"] if unit["unit_id"]["agent"] == agent]
-        lines += ["", f'<a id="{agent}"></a>', f"## {_agent_name(agent)}"]
+        links = {
+            private.get(_identity(unit), {}).get("agent_href")
+            for unit in units
+        } - {None} if private is not None else set()
+        if len(links) > 1:
+            raise ReportContextError("report_foundry_link_invalid")
+        title = _agent_name(agent)
+        if links:
+            title = f"[{title}]({validate_foundry_link(links.pop())})"
+        lines += ["", f'<a id="{agent}"></a>', f"## {title}"]
         if report_context:
             lines += ["", "**Assigned To:** " + _markdown_text(report_context.assignments[agent])]
         lines += [
@@ -323,6 +332,7 @@ def markdown_view(markdown: str) -> str:
         return [*result, line[start:].strip()]
 
     parts, table_rows = [], []
+    in_list = False
     def flush_table():
         if table_rows:
             widths = (6, 12, 18, 25, 12, 27) if len(table_rows[0]) == 6 else None
@@ -338,19 +348,38 @@ def markdown_view(markdown: str) -> str:
         anchor = re.fullmatch(r'<a id="([a-z][a-z0-9-]*)"></a>', line)
         heading = re.fullmatch(r"(#{1,4}) (.*)", line)
         if line.startswith("| ") and line.endswith(" |"):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
             row = cells(line[1:-1])
             if not all(re.fullmatch(r":?-{3,}:?", cell) for cell in row):
                 table_rows.append([inline(cell) for cell in row])
             continue
         flush_table()
+        if line.startswith("- "):
+            if not in_list:
+                parts.append("<ul>")
+                in_list = True
+            parts.append(f"<li>{inline(line[2:])}</li>")
+            continue
+        if in_list and line.strip():
+            parts.append("</ul>")
+            in_list = False
         if anchor:
             parts.append(f'<a id="{anchor[1]}"></a>')
         elif heading:
             level = len(heading[1])
-            parts.append(f"<h{level}>{inline(heading[2])}</h{level}>")
+            linked = re.fullmatch(r"\[([A-Za-z ]+)\]\((https://ai\.azure\.com/[^)\s]+)\)", heading[2])
+            title = inline(heading[2])
+            if linked:
+                href = validate_foundry_link(linked[2])
+                title = f'<a href="{escape(href, quote=True)}">{escape(linked[1])}</a>'
+            parts.append(f"<h{level}>{title}</h{level}>")
         elif line.strip():
             parts.append(f"<p>{inline(line)}</p>")
     flush_table()
+    if in_list:
+        parts.append("</ul>")
     body = (
         f'<tr><td style="padding:24px 28px;{_FONT}">'
         '<p style="color:#64748b;">Browser view derived from the authoritative report.md.</p>'

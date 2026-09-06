@@ -108,6 +108,7 @@ def seed_foundry(runtime, *, bad_region=False, different_object=False):
                 "target_key": f"{unit.unit_id.agent}/{unit.unit_id.logical_version}",
                 "agent_name": "synthetic-other" if index and different_object else "synthetic-actual-object",
                 "provider_version": str(index + 5),
+                "source_revision": "a" * 40,
             })
     return plan
 

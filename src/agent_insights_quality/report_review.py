@@ -90,14 +90,18 @@ class RetainedReviewContext:
 
     def __init__(self, runtime, run_id: str, result: QualityResult) -> None:
         from .runner import restore_unit
+        from .report_links import foundry_links
 
         records = runtime.run(run_id)
+        agent_links, _ = foundry_links(runtime, run_id, tuple(unit.planned for unit in result.units))
         units = {}
         for unit in result.units:
             identity = unit.planned.unit_id
             key = f"targets/{identity.agent}/{identity.logical_version}"
             source = records.read(key + "/source", missing_ok=True)
             retained = {"cards": {}, "observations": []}
+            if identity.agent in agent_links:
+                retained["agent_href"] = agent_links[identity.agent]
             if source and source.get("traffic_run_id") and source.get("work_key"):
                 work = runtime.run(source["traffic_run_id"])
                 deployment = work.read(source["work_key"] + "/deployment", missing_ok=True)

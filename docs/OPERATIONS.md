@@ -121,6 +121,13 @@ five rows for the baseline plus four issue versions. Run num, actual Agent versi
 insight, Generated insight(s), Assessment and short Notes keep review compact. Each row represents
 ten attempts, not one call. New/updated cards are listed with aligned Correct/Noise/Duplicate
 labels; unchanged historical cards are omitted. Missed and unscored cases remain distinct.
+Assessment numbers align with generated cards: "1. Matched", "2. Noise", "3. Duplicate".
+"Missed" marks an undetected expected defect; "Unconfirmed" rows are excluded, not misses.
+A separate "Unexpected" is a saved valid non-target finding, not expected-detection credit
+or an automatic Agent-fix request. Private Agent headings link to verified Foundry objects,
+and the report overview uses a short bullet list.
+Routine Notes are empty. Exceptional findings expose full saved rationales under collapsed
+Assessment details; disagreements show both passes without changing the resolved judgment.
 Detailed evidence and complete judgments stay in the original private artifacts referenced by
 the preview manifest, not repeated payload/provenance sections in the MD.
 Private detail is rendered through a separate boundary; public Markdown receives only approved

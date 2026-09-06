@@ -113,7 +113,7 @@ def test_private_review_quotes_evidence_and_distinguishes_benign_from_confirmati
     assert "endpoint-01" not in markdown and "probe-01" not in markdown
     assert "Generated insight(s)" in markdown
     assert "runs/synthetic-review/artifacts/" not in markdown
-    assert "Unexpected finding" in markdown and "Correct (other)" not in markdown
+    assert "1. Unexpected" in markdown and "Correct (other)" not in markdown
     assert "11 (v0)" in markdown and "12 (v0)" in markdown and "13 (issue-001)" in markdown
     assert "<script>" not in markdown_view(markdown)
     assert 'href="javascript:' not in markdown_view(markdown)
@@ -175,8 +175,8 @@ def test_derived_unknown_core_exclusion_does_not_block_private_failure_details(t
     markdown = render_private_markdown(
         result, allowed_units=(planned,), review_context=context,
     )
-    assert "incomplete_assessment" in markdown and "unknown_core" in markdown
-    assert "Not scored" in markdown
+    assert "Assessment incomplete" in markdown and "Finding unconfirmed" in markdown
+    assert "Unconfirmed" in markdown
     assert result.to_dict() == before
 
 
@@ -194,7 +194,7 @@ def test_human_triage_is_not_selected_by_specific_agent_or_card_title(tmp_path, 
     context = RetainedReviewContext(runtime, "synthetic-review", result)
     markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
     assert "automatic Agent-fix recommendations" in markdown
-    assert "correct non-target finding; it earns no expected-detection credit" in markdown
+    assert "saved valid non-target finding, not a match" in markdown
     assert "A different correctly handled situation" in markdown
 
 
@@ -221,8 +221,8 @@ def test_readiness_exclusion_retains_actual_deployment_without_claiming_no_findi
     markdown = render_private_markdown(result, allowed_units=(planned,), review_context=context)
     assert "27 (issue-003)" in markdown
     assert "Not generated (trace readiness insufficient)" in markdown
-    assert "| Expected issue: Not scored |" in markdown
-    assert "Not counted as a miss" in markdown
+    assert "| Unconfirmed |" in markdown
+    assert "Unconfirmed rows are excluded from the score, not counted as misses" in markdown
     assert "actual-weather-object" not in markdown
     assert "Expected defect: Missed" not in markdown
 
@@ -348,15 +348,15 @@ def test_disagreement_explains_both_full_passes_without_rejudgment_or_archive_ch
     context = RetainedReviewContext(runtime, "synthetic-passes", result)
     markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
     html = markdown_view(markdown)
-    assert "Assessment disagreement; unit not scored" in markdown
+    assert "Review disagreement." in markdown
     assert "Initial assessment (incorrect)" in markdown and "Focused review (correct)" in markdown
     assert initial_reason in markdown and review_reason in markdown
     assert "Resolved assessment" not in markdown  # The identical review prose is not repeated.
     assert initial_reason not in re.sub(r"<details>.*?</details>", "", html)
     assert review_reason not in re.sub(r"<details>.*?</details>", "", html)
-    assert "Unconfirmed (unscored)" in markdown
+    assert "1. Unconfirmed" in markdown
     row = next(line for line in markdown.splitlines() if line.startswith("| 1 |"))
-    assert "Expected issue: Not scored<br>1. Unconfirmed (unscored)" in row
+    assert "| 1. Unconfirmed |" in row
     assert "Core: unknown; classification: unknown." in html
     assert result.counts.expected_issues == result.counts.noise_cards == 0
     assert not result.units[0].scorable
@@ -386,7 +386,7 @@ def test_disagreement_uses_semantic_expected_match_and_root_partition_not_labels
     result, plan = seed_passes(runtime, initial, review)
     context = RetainedReviewContext(runtime, "synthetic-passes", result)
     markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
-    assert ("Assessment disagreement" in markdown) == (change != "rename")
+    assert ("Review disagreement" in markdown) == (change != "rename")
     assert ("Initial assessment" in markdown) == (change != "rename")
     assert result.units[0].scorable == (change == "rename")
 
@@ -489,7 +489,7 @@ def test_private_miss_identifies_insights_and_preserves_observation_count(tmp_pa
     context = RetainedReviewContext(runtime, "synthetic-review", result)
     markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
     missed_row = next(row for row in markdown.splitlines() if "| 13 (issue-001) |" in row)
-    assert "Expected issue: Not detected" in missed_row
+    assert "| Missed |" in missed_row
     assert "Observed 1/10." in missed_row
     assert "Expected defect missed" not in missed_row and "<details>" not in missed_row
 
@@ -504,7 +504,7 @@ def test_confirmed_noise_keeps_its_count_and_full_private_rationale(tmp_path):
     html = markdown_view(markdown)
     parsed = Markup()
     parsed.feed(html)
-    assert "1. Noise" in markdown and "Assessment disagreement" not in markdown
+    assert "1. Noise" in markdown and "Review disagreement" not in markdown
     assert cards[0]["reason"] in "".join(parsed.text)
     assert "NOISE_END" not in re.sub(r"<details>.*?</details>", "", html)
     assert result.to_dict() == before and result.counts.noise_cards == 1
@@ -554,9 +554,9 @@ def test_expected_miss_precedes_non_target_card_without_changing_its_saved_judgm
     context = RetainedReviewContext(runtime, "synthetic-passes", result)
     markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
     row = next(line for line in markdown.splitlines() if line.startswith("| 1 |"))
-    assert "Expected issue: Not detected<br>1. Unexpected finding" in row
+    assert "| Missed<br>1. Unexpected |" in row
     assert "Observed 1/10." in row
-    assert "Generated finding concerns a different claim." in row
+    assert "Generated finding concerns a different claim." not in row
     assert "Correct (other)" not in markdown and "1. Correct" not in row
     html = markdown_view(markdown)
     assert "Core: correct; classification: unexpected_real." in html
@@ -577,4 +577,30 @@ def test_baseline_rows_have_no_expected_issue_outcome(tmp_path):
     baseline_rows = [row for row in markdown.splitlines() if "(v0)" in row and row.startswith("| ")]
     assert len(baseline_rows) == 2
     assert all("Expected issue:" not in row for row in baseline_rows)
-    assert all("1. Unexpected finding" in row for row in baseline_rows)
+    assert all("| 1. Unexpected |" in row for row in baseline_rows)
+
+
+def test_private_agent_heading_uses_verified_native_foundry_link_only(tmp_path):
+    from test_report_links import seed_foundry
+    from agent_insights_quality.report_links import foundry_links
+
+    runtime = RuntimeStore("daily", root=tmp_path)
+    plan = seed_foundry(runtime)
+    result = aggregate_results(plan, tuple(UnitResult(unit.unit_id) for unit in plan))
+    expected, _ = foundry_links(runtime, "synthetic-daily", plan)
+    context = RetainedReviewContext(runtime, "synthetic-daily", result)
+    markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
+    assert f"## [Weather]({expected['weather-agent']})" in markdown
+    html = markdown_view(markdown)
+    assert f'<h2><a href="{expected["weather-agent"]}">Weather</a></h2>' in html
+    assert "ai.azure.com" not in render_markdown(result, allowed_units=plan)
+    assert "<ul>" in html and html.count("<li>") == 4
+    assert html.index("</ul>") < html.index("<h2>")
+
+
+def test_missing_foundry_identity_keeps_plain_heading_without_inventing_link(tmp_path):
+    runtime = RuntimeStore("daily", root=tmp_path)
+    result, plan = seed_review(runtime)
+    review = RetainedReviewContext(runtime, "synthetic-review", result)
+    markdown = render_private_markdown(result, allowed_units=plan, review_context=review)
+    assert "## Healthcare" in markdown and "ai.azure.com" not in markdown

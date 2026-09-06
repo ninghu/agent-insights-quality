@@ -68,17 +68,17 @@ def test_counts_coverage_and_exclusions_agree_across_every_renderer(excluded, st
         assert not re.search(r"\b(Full|Partial)\b", rendered)
         if rendered == markdown:
             assert "Quality score:" in rendered
-        assert f"Detected: {result.counts.correct_issues}/{result.counts.expected_issues} scored issues" in rendered
+        assert f"Matched: {result.counts.correct_issues}/{result.counts.expected_issues} scored issues" in rendered
         assert f"Noise: {result.counts.noise_cards}; Duplicate: {result.counts.duplicate_cards}" in rendered
         assert f"{result.coverage.scored_issues}/20 expected" in rendered
         assert f"{result.coverage.scored_baselines}/5 expected" in rendered
         assert f"{excluded} excluded units" in rendered
         if excluded:
-            assert "incomplete_evidence" in rendered
-            assert "Noise (unscored)" in rendered
-            assert "Not counted as a miss" in rendered
+            assert "Evidence incomplete" in rendered
+            assert "Unconfirmed" in rendered and "1. Noise" in rendered
+            assert "Unconfirmed rows are excluded from the score, not counted as misses" in rendered
         assert "Generated insight(s)" in rendered
-        assert "unchanged historical cards are omitted" in rendered
+        assert "Only new or updated findings are shown" in rendered
     assert result.score is None if excluded > 2 else result.score is not None
 
 
@@ -137,7 +137,7 @@ def test_catalog_bound_actionable_context_in_both_renderers(catalog_root):
         assert expected["expected_fix"] not in rendered
         assert "traffic.json" not in rendered
         assert "1. card-0001" in rendered and "1. Noise" in rendered
-        assert "Expected issue: Not detected" in rendered
+        assert "Missed" in rendered
         assert "Core claim judged incorrect" not in rendered
         assert "one version run (10 attempts)" in rendered
         assert "Report date: 2026-09-04" in rendered
@@ -256,12 +256,13 @@ def test_classified_card_aliases_explain_duplicate_noise_unexpected_and_history(
     html = unescape(re.sub("<[^>]+>", "", render_html(
         result, allowed_units=plan, report_context=load_report_context(catalog_root, allowed_units=plan),
     )))
-    for index, classification in ((1, "Correct"), (2, "Duplicate"), (3, "Noise"), (4, "Unexpected finding")):
+    for index in range(1, 5):
         assert f"{index}. card-{index:04d}" in html
-        assert f"{index}. {classification}" in html
+    for index, verdict in ((1, "Matched"), (2, "Duplicate"), (3, "Noise"), (4, "Unexpected")):
+        assert f"{index}. {verdict}" in html
     assert "card-0005" not in html
     assert "Same root as finding 1" in html
-    assert "correct non-target finding; it earns no expected-detection credit" in html
+    assert "saved valid non-target finding, not a match" in html
     assert "Correct (other)" not in html
     assert result.counts.to_dict() == {
         "correct_issues": 1, "expected_issues": 1, "noise_cards": 1, "duplicate_cards": 1,
@@ -288,7 +289,7 @@ def test_twenty_issue_coverage_stays_identical_with_reviewed_context(catalog_roo
         assert f"{result.coverage.scored_baselines}/5 expected" in rendered
         assert f"{excluded} excluded units" in rendered
         if excluded:
-            assert "Not counted as a miss" in rendered
+            assert "Unconfirmed rows are excluded from the score, not counted as misses" in rendered
     assert render_json(result, allowed_units=plan) == plain_json
     assert json.loads(plain_json) == result.to_dict()
 
@@ -381,8 +382,8 @@ def test_real_baseline_findings_are_not_automatically_noise_or_health_failures()
     assert "Independently supported Agent problem outside the expected defect" not in html
     assert "Other findings" not in html
     markdown = render_markdown(result, allowed_units=plan)
-    assert "Unexpected finding" in markdown
-    assert "correct non-target finding; it earns no expected-detection credit" in markdown
+    assert "1. Unexpected" in markdown
+    assert "saved valid non-target finding, not a match" in markdown
     assert "Healthy Agent versions should produce zero findings" not in html
     assert "Incorrect findings (Noise)</td>" not in html
 
@@ -445,7 +446,7 @@ def test_healthy_units_do_not_create_detailed_follow_up_boilerplate(catalog_root
     assert "Expected defect detected" not in markdown
     assert all(row.endswith(" | - |") for row in markdown.splitlines() if re.match(r"^\| [12] \|", row))
     assert "<details>" not in markdown
-    assert "Expected issue: Detected<br>1. Correct" in markdown
+    assert "| 1. Matched | - |" in markdown
     assert len(re.findall(r"^\| [12] \|", markdown, re.M)) == 2
     assert "### weather-agent / v0" not in markdown
     assert "### weather-agent / issue-001" not in markdown

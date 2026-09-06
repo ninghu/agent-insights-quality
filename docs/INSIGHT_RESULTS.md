@@ -36,12 +36,13 @@ Engine gap. Late telemetry, untriggered Agent defects, malformed execution and i
 must not be blamed on the Insight Engine.
 
 Review the private per-Agent report's five version rows alongside its saved classifications and
-short Notes. Normal detections and healthy baselines need no Notes. An **Unexpected finding** is a
-correct non-target finding with no expected-detection credit, not an automatic Agent-fix request.
-For issue rows, the assessment starts with **Expected issue: Detected / Not detected / Not scored**,
-then identifies each generated finding's scope. **Not detected** means Insights did not diagnose
-the expected defect, even when it generated a valid finding about a different claim. Baselines
-have no expected-issue outcome.
+short Notes. Normal detections and healthy baselines need no Notes. Assessment labels match the
+generated-card numbers: **1. Matched**, **2. Noise**, **3. Duplicate**, and so on.
+**Unexpected** is a saved valid non-target finding, without expected-detection credit or an automatic
+Agent-fix recommendation. **Missed** means Insights did not diagnose the expected defect.
+**Unconfirmed** rows are excluded from scoring and are not counted as misses.
+Verified Agent headings link directly to the actual Foundry Agent; missing identities are not guessed.
+Top-level score, counts, coverage and reading guidance are a short bullet list.
 
 Expand **Assessment details** in an exceptional row to read the full saved rationale. Disputed
 assessments show both the initial and focused-review rationales and remain wholly unscored when

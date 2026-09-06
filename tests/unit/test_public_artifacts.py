@@ -69,7 +69,7 @@ def test_historical_public_rendering_remains_deterministic(repository):
         assert f'id="{target.unit_id.agent}"' in markdown
     assert "No unexpected finding" not in markdown
     assert "Expected defect detected" not in markdown
-    assert "Expected issue: Detected" in markdown
+    assert "| 1. Matched |" in markdown
     assert "card-0001: expected_detection (scored)" not in markdown
 
 

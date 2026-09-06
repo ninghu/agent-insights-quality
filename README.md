@@ -76,6 +76,8 @@ they are not collected by default.
 See [Operations](docs/OPERATIONS.md) for staging, Daily and checkpoint recovery,
 [Quality rules](docs/QUALITY_BAR.md) for evidence/scoring, and
 [App automation](docs/AUTOMATION_SETUP.md) for the one-command launch and email handoff.
+The [quality dashboard](docs/QUALITY_DASHBOARD.md) shows stored-score trends, changes in
+Noise/Duplicate/missed counts, and coverage-aware Agent/issue drill-down.
 
 ## Skills
 
