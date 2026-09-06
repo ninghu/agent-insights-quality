@@ -131,6 +131,7 @@ def invoke(monkeypatch):
         assert root.attributes["gen_ai.agent.name"] == "synthetic-support"
         assert root.attributes["gen_ai.agent.version"] == version
         assert root.attributes["issue.id"] == version
+        assert json.loads(root.attributes["gen_ai.input.messages"]) == request_body["input"]
         assert root.attributes["aiq.terminal_response.success"] is True
         assert root.attributes["aiq.terminal_response.output_present"] is True
         assert json.loads(root.attributes["gen_ai.output.messages"])[0]["parts"][0]["content"] == output
@@ -164,6 +165,22 @@ def tool_data(span):
         json.loads(span.attributes["gen_ai.tool.call.arguments"]),
         json.loads(span.attributes["gen_ai.tool.call.result"]),
     )
+
+
+@pytest.mark.parametrize("version", VERSIONS)
+def test_invocation_input_preserves_caller_history_and_deliberate_fault_context(invoke, version):
+    inputs = [
+        {"role": "user", "content": [{"type": "input_text", "text": "Use ticket-demo-1."}]},
+        {"role": "assistant", "content": "Ready."},
+        {"role": "user", "content": [{
+            "type": "input_text",
+            "text": "Read ticket-demo-1 with one temporary read failure; optional history is unavailable.",
+        }]},
+    ]
+    result = invoke(version, body={"input": inputs, "max_output_tokens": 120})
+    root = next(span for span in result.spans if span.attributes.get("gen_ai.operation.name") == "invoke_agent")
+    assert json.loads(root.attributes["gen_ai.input.messages"]) == inputs
+    assert "gen_ai.output.messages" in root.attributes
 
 
 @pytest.mark.parametrize("version", VERSIONS)

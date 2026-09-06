@@ -102,3 +102,27 @@ def test_initial_and_focused_review_receive_materiality_guidance_without_schema_
     assert DAILY_SCHEMA == original_schema
     assert "description" not in DAILY_SCHEMA["properties"]["cards"]["items"]["properties"]["reason"]
     assert result.unit_result.cards[0].core.value == "incorrect"
+
+
+@pytest.mark.parametrize("core", ["correct", "incorrect"])
+def test_recovered_dependency_observation_and_false_unhandled_claim_keep_distinct_verdicts(core):
+    class CheckingSol(fake.Sol):
+        async def complete_json(self, *, instructions, **kwargs):
+            assert "Deliberate fault exercise or" in instructions
+            assert "do not insert the latter claim when the card exonerates" in instructions
+            return await super().complete_json(instructions=instructions, **kwargs)
+    def judgment(payload):
+        value = fake.output(payload)
+        value["cards"][0].update(
+            core=core, expected_match=False,
+            root_group="operational-dependency" if core == "correct" else None,
+            proposed_fix="disagrees",
+            reason="The dependency failed and the Agent recovered; only an unhandled-failure claim is false.",
+        )
+        return value
+    data = fake.evidence("baseline")
+    result = fake.daily(data, CheckingSol(judgment))
+    counts = fake.aggregate(data, result).counts
+    assert counts.correct_issues == 0
+    assert counts.noise_cards == (core == "incorrect")
+    assert result.unit_result.cards[0].proposed_fix.value == "disagrees"

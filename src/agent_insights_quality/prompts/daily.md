@@ -101,6 +101,12 @@ description of successful fallback is not proof of an unresolved Agent defect.
 Do not turn an unnecessary suggested fix into a core error when the diagnosis
 itself is supported. State when the recommended behavior already occurs; do not
 invent an Agent remediation requirement from the card's existence.
+A card can still correctly report an operational dependency failure while
+explicitly acknowledging successful Agent recovery. Deliberate fault exercise or
+successful fallback does not make the observed dependency error fictitious.
+Judge whether the card claims a real dependency condition or falsely alleges an
+unhandled Agent failure; do not insert the latter claim when the card exonerates
+Agent reasoning. Lack of need for an Agent fix is not itself evidence of Noise.
 
 Every correct card requires a non-null, nonempty string root_group. Give
 otherwise-correct cards the same private root_group iff they describe the same

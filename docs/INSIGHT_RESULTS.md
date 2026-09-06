@@ -25,6 +25,11 @@ stronger claim, or reinterpret an explicitly false external claim as internal.
 Keep genuinely unresolved scope uncertain. Saved reasons identify the claim,
 surface, evidence and any material contradiction; this does not change old judgments.
 
+Successful recovery does not erase a real dependency failure. An operational card
+that accurately reports the dependency issue and acknowledges recovery may be correct,
+even if no Agent fix is needed or the fault was deliberately exercised. Distinguish
+that from a false claim that the Agent failed to recover.
+
 Confirm that evidence was visible for the actual analysis window before calling a missing card an
 Engine gap. Late telemetry, untriggered Agent defects, malformed execution and incomplete evidence
 must not be blamed on the Insight Engine.

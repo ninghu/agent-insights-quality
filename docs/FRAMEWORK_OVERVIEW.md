@@ -46,5 +46,9 @@ replace one surface with the other or discard a genuine internal cost/latency ob
 Healthcare appointment listings distinguish existing records from evidence of open availability
 and retain the supplied in-scope record identifiers.
 
+Support invocation spans retain the original caller input/history alongside the delivered output.
+This preserves the distinction between explicitly requested recovery/fallback cases and an
+unexpected operational failure; model-summary inputs cannot substitute for the caller's request.
+
 Private runtime records and public result models are different objects. No raw provider payload,
 trace, credential, work item or private identifier belongs in the public model.
