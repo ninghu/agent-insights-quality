@@ -40,6 +40,11 @@ def seed_review(runtime, *, corrupt=False):
                 "tested_at": "2026-09-05T08:00:00Z", "assessed_at": "2026-09-05T08:10:00Z",
                 "traffic_source_revision": "a" * 40, "source_revision": "b" * 40,
             })
+            records.save_completed(key + "/work-synthetic/deployment", {
+                "target_key": f"{identity.agent}/{identity.logical_version}",
+                "agent_name": identity.agent, "provider_version": str(11 + index),
+                "source_revision": "a" * 40,
+            })
             citations = [{"attempt": 1, "step_id": "probe-01", "refs": ["endpoint-01"]}]
             cards = [{
                 "card_alias": "card-0001", "core": "correct", "expected_match": False,
@@ -98,15 +103,16 @@ def test_private_review_quotes_evidence_and_distinguishes_benign_from_confirmati
     markdown = render_private_markdown(
         result, allowed_units=plan, review_context=review, report_context=context,
     )
-    assert "Already handled / no Agent change requested" in markdown
-    assert "Human confirmation needed, not a confirmed Agent fix task" in markdown
-    assert "slot-demo-a8" in markdown
-    assert "appointment record" in markdown
+    assert "Review before requesting a fix" in markdown
+    assert "proposed fix is unnecessary" in markdown
+    assert "slot-demo-a8" not in markdown
+    assert "Unsupported availability label on existing appointment" in markdown
     assert "PRIVATE_ONLY_MARKER" in markdown
-    assert "endpoint-01" in markdown and "probe-01" in markdown
-    assert "Expected Engine behavior" in markdown
-    assert "runs/synthetic-review/artifacts/" in markdown
-    assert "Human confirmation needed" in markdown
+    assert "endpoint-01" not in markdown and "probe-01" not in markdown
+    assert "Generated insight(s)" in markdown
+    assert "runs/synthetic-review/artifacts/" not in markdown
+    assert "Correct (other)" in markdown
+    assert "11 (v0)" in markdown and "12 (v0)" in markdown and "13 (issue-001)" in markdown
     assert "<script>" not in markdown_view(markdown)
     assert 'href="javascript:' not in markdown_view(markdown)
     public = render_markdown(result, allowed_units=plan, report_context=context)
@@ -168,7 +174,7 @@ def test_derived_unknown_core_exclusion_does_not_block_private_failure_details(t
         result, allowed_units=(planned,), review_context=context,
     )
     assert "incomplete_assessment" in markdown and "unknown_core" in markdown
-    assert "Measurement exclusion" in markdown
+    assert "Not scored" in markdown
     assert result.to_dict() == before
 
 
@@ -185,6 +191,55 @@ def test_human_triage_is_not_selected_by_specific_agent_or_card_title(tmp_path, 
     monkeypatch.setattr(RecordStore, "read_artifact", renamed)
     context = RetainedReviewContext(runtime, "synthetic-review", result)
     markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
-    assert "Human confirmation needed, not a confirmed Agent fix task" in markdown
-    assert "Already handled / no Agent change requested" in markdown
+    assert "Review before requesting a fix" in markdown
+    assert "Outside the expected defect; no detection credit" in markdown
     assert "A different correctly handled situation" in markdown
+
+
+def test_readiness_exclusion_retains_actual_deployment_without_claiming_no_findings(tmp_path):
+    runtime = RuntimeStore("daily", root=tmp_path)
+    planned = PlannedUnit(UnitId("weather-agent", "issue-003"), "issue-003")
+    result = aggregate_results((planned,), (
+        UnitResult(planned.unit_id, exclusion_reasons=(ExclusionReason.INCOMPLETE_EVIDENCE,)),
+    ))
+    records = runtime.run("synthetic-readiness")
+    key = "targets/weather-agent/issue-003"
+    with runtime.ownership():
+        records.save_completed(key + "/source", {
+            "traffic_run_id": "synthetic-readiness", "work_key": key + "/work-one",
+        })
+        records.save_completed(key + "/work-one/deployment", {
+            "target_key": "weather-agent/issue-003", "agent_name": "actual-weather-object",
+            "provider_version": "27", "source_revision": "a" * 40,
+        })
+        records.save_progress(key + "/failure", {
+            "code": "trace_readiness_insufficient", "stage": "evidence",
+        })
+    context = RetainedReviewContext(runtime, "synthetic-readiness", result)
+    markdown = render_private_markdown(result, allowed_units=(planned,), review_context=context)
+    assert "27 (issue-003)" in markdown
+    assert "Not generated (trace readiness insufficient)" in markdown
+    assert "| Unscored |" in markdown
+    assert "Not counted as a miss" in markdown
+    assert "actual-weather-object" not in markdown
+    assert "Expected defect: Missed" not in markdown
+
+
+def test_short_notes_do_not_dump_long_evidence_or_claims(tmp_path, monkeypatch):
+    from agent_insights_quality.state import RecordStore
+    runtime = RuntimeStore("daily", root=tmp_path)
+    result, plan = seed_review(runtime)
+    read = RecordStore.read_artifact
+    def long_reason(self, *args, **kwargs):
+        value = read(self, *args, **kwargs)
+        for card in value.get("private_detail", {}).get("resolved", {}).get("cards", []):
+            card["reason"] = "Observed successful fallback. " * 30
+        return value
+    monkeypatch.setattr(RecordStore, "read_artifact", long_reason)
+    context = RetainedReviewContext(runtime, "synthetic-review", result)
+    markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
+    assert "Observed successful fallback." in markdown and "..." in markdown
+    assert markdown.count("Observed successful fallback.") < 20
+    assert "shortened saved judgments" in markdown
+    assert "javascript:alert" not in markdown
+    assert "response_output" not in markdown and "source_revision" not in markdown

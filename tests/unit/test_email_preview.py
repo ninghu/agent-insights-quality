@@ -162,7 +162,8 @@ def test_restyle_uses_frozen_result_current_style_and_distinct_local_identity(ru
     assert "cid:" not in eml_html and "file:" not in eml_html
     assert "Synthetic frozen private optional context" not in eml_html
     assert "Unsupported factual answer" in detailed
-    assert 'id="unit-weather-agent-issue-001"' in detailed
+    assert 'id="weather-agent"' in detailed
+    assert "Generated insight(s)" in detailed
     assert mail["X-AIQ-Local-Preview"] == "presentation-restyle"
     assert originals(runtime) == before
     manifest = json.loads((styled.directory / "manifest.json").read_text())

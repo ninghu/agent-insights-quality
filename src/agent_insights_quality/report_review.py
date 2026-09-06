@@ -38,41 +38,6 @@ def _citation(citations, steps) -> tuple[str, ...]:
     return tuple(references)
 
 
-def _endpoint_evidence(citations, steps) -> tuple[dict, ...]:
-    excerpts, seen = [], set()
-    for citation in citations:
-        key = (citation["attempt"], citation["step_id"])
-        step = steps[key]
-        if key in seen or step.get("endpoint_ref") not in citation["refs"]:
-            continue
-        seen.add(key)
-        response = (step.get("execution") or {}).get("response")
-        output = None
-        if isinstance(response, dict):
-            output = response.get("output", response.get("output_text"))
-            if isinstance(output, list):
-                texts = [
-                    part["text"] for item in output if isinstance(item, dict)
-                    and item.get("role") == "assistant"
-                    for part in item.get("content", []) if isinstance(part, dict)
-                    and part.get("type") == "output_text" and isinstance(part.get("text"), str)
-                ]
-                if texts:
-                    output = "\n".join(texts)
-        request = step.get("request")
-        values = {
-            "request": request.get("input") if isinstance(request, dict) else None,
-            "response_output": output,
-        }
-        excerpt = {"attempt": key[0], "step_id": key[1], "endpoint_ref": step["endpoint_ref"]}
-        for name, value in values.items():
-            text = json.dumps(value, ensure_ascii=False) if value is not None else "Not retained."
-            excerpt[name] = text[:4000]
-            excerpt[name + "_truncated"] = len(text) > 4000
-        excerpts.append(excerpt)
-    return tuple(excerpts)
-
-
 @dataclass(frozen=True, init=False)
 class RetainedReviewContext:
     _result_digest: str
@@ -87,14 +52,27 @@ class RetainedReviewContext:
             identity = unit.planned.unit_id
             key = f"targets/{identity.agent}/{identity.logical_version}"
             source = records.read(key + "/source", missing_ok=True)
+            retained = {"cards": {}, "observations": []}
+            if source and source.get("traffic_run_id") and source.get("work_key"):
+                work = runtime.run(source["traffic_run_id"])
+                deployment = work.read(source["work_key"] + "/deployment", missing_ok=True)
+                if deployment:
+                    if deployment.get("target_key") != f"{identity.agent}/{identity.logical_version}":
+                        raise ReportContextError("report_review_result_mismatch")
+                    retained["deployment"] = {
+                        k: deployment[k] for k in ("agent_name", "provider_version", "source_revision")
+                    }
+                failure = records.read(key + "/failure", missing_ok=True)
+                if failure:
+                    retained["failure_code"] = failure.get("code")
             reference = source.get("assessment") if source else None
             if not reference:
-                units[identity] = {"unavailable": "Retained assessment reference unavailable."}
+                units[identity] = {**retained, "unavailable": "Retained assessment reference unavailable."}
                 continue
             origin = runtime.run(reference["run_id"])
             artifact = origin.read_artifact(reference["artifact"], missing_ok=True)
             if artifact is None:
-                units[identity] = {"unavailable": "Retained assessment artifact unavailable."}
+                units[identity] = {**retained, "unavailable": "Retained assessment artifact unavailable."}
                 continue
             saved = artifact["unit_result"]
             rebuilt = aggregate_results((unit.planned,), (restore_unit(saved),)).units[0]
@@ -109,6 +87,7 @@ class RetainedReviewContext:
                 for attempt in payload["attempts"] for step in attempt["steps"]
             }
             value = {
+                **retained,
                 "artifact": f"runs/{reference['run_id']}/artifacts/{reference['artifact']}.json",
                 "sha256": _digest(artifact),
                 "tested_at": source.get("tested_at"),
@@ -145,7 +124,6 @@ class RetainedReviewContext:
                         "claim": _text(current.get("description", "")),
                         "reason": _text(judgment["reason"]),
                         "citations": _citation(judgment["citations"], steps),
-                        "endpoint_evidence": _endpoint_evidence(judgment["citations"], steps),
                         "provider_card_id": _text(current["id"]) if "id" in current else None,
                     }
                 for judgment in resolved["attempts"]:
@@ -153,17 +131,8 @@ class RetainedReviewContext:
                         value["observations"].append({
                             "reason": _text(judgment["reason"]),
                             "citations": _citation(judgment["citations"], steps),
-                            "endpoint_evidence": _endpoint_evidence(judgment["citations"], steps),
                         })
                 value["limitations"] = list(resolved["limitations"])
-            if source.get("traffic_run_id") and source.get("work_key"):
-                deployment = runtime.run(source["traffic_run_id"]).read(
-                    source["work_key"] + "/deployment", missing_ok=True,
-                )
-                if deployment:
-                    value["deployment"] = {
-                        k: deployment[k] for k in ("agent_name", "provider_version", "source_revision")
-                    }
             units[identity] = value
         object.__setattr__(self, "_result_digest", _digest(result.to_dict()))
         object.__setattr__(self, "_units", units)

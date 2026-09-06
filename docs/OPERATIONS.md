@@ -69,11 +69,15 @@ missing or conflicting metadata produces an explicit missing-link notice, never 
 old-region fallback. No catch-all Run notes, Other findings, methodology body or Run reference
 section is inserted, including hidden private context.
 
-The authoritative detail is `report.md`, organized by Agent with stable Agent-name anchors.
-It prioritizes misses, Noise and Duplicates, with actual retained claims, reasons, citations,
-version/source/date references, uncertainty and specific human checks. Healthy units do not
-receive repeated boilerplate. Private detail is rendered through a separate boundary; public
-Markdown receives only the approved result projection and reviewed catalog context.
+The authoritative detail is `report.md`: one table per Agent with stable Agent-name anchors and
+five rows for the baseline plus four issue versions. Run num, actual Agent version, Expected
+insight, Generated insight(s), Assessment and short Notes keep review compact. Each row represents
+ten attempts, not one call. New/updated cards are listed with aligned Correct/Noise/Duplicate
+labels; unchanged historical cards are omitted. Missed and unscored cases remain distinct.
+Detailed evidence and complete judgments stay in the original private artifacts referenced by
+the preview manifest, not repeated payload/provenance sections in the MD.
+Private detail is rendered through a separate boundary; public Markdown receives only approved
+aliases and reviewed catalog context, never actual private card titles or provider versions.
 An `unexpected_real` result is not an automatic Agent fix task. Human validation distinguishes
 an actionable defect, an ambiguous claim needing confirmation, and already-handled behavior
 requiring no Agent change. This presentation never changes retained judgments or scores.

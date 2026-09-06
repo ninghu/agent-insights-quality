@@ -14,7 +14,9 @@ from agent_insights_quality.privacy import PrivacyError
 from agent_insights_quality.report_context import (
     ReportContextError, ReportMetadata, ReviewedReportContext, load_report_context,
 )
-from agent_insights_quality.reporting import render_email_html, render_html, render_json, render_markdown
+from agent_insights_quality.reporting import (
+    markdown_view, render_email_html, render_html, render_json, render_markdown,
+)
 from agent_insights_quality.results import (
     CardVerdict,
     CoreVerdict,
@@ -66,18 +68,17 @@ def test_counts_coverage_and_exclusions_agree_across_every_renderer(excluded, st
         assert not re.search(r"\b(Full|Partial)\b", rendered)
         if rendered == markdown:
             assert "Quality score:" in rendered
-        assert f"C={result.counts.correct_issues}; E_scored={result.counts.expected_issues}" in rendered
-        assert f"N_scored={result.counts.noise_cards}; D_scored={result.counts.duplicate_cards}" in rendered
+        assert f"Detected: {result.counts.correct_issues}/{result.counts.expected_issues} scored issues" in rendered
+        assert f"Noise: {result.counts.noise_cards}; Duplicate: {result.counts.duplicate_cards}" in rendered
         assert f"{result.coverage.scored_issues}/20 expected" in rendered
         assert f"{result.coverage.scored_baselines}/5 expected" in rendered
-        assert f"excluded whole units: {excluded}" in rendered
-        assert "Noise weight 1; Duplicate weight 0.25" in rendered
-        assert "No overall quality threshold" in rendered
+        assert f"{excluded} excluded units" in rendered
         if excluded:
             assert "incomplete_evidence" in rendered
-            assert "noise (unscored)" in rendered
-        assert "Confirmed Engine gaps" in rendered
-        assert "framework/infrastructure" in rendered
+            assert "Noise (unscored)" in rendered
+            assert "Not counted as a miss" in rendered
+        assert "Generated insight(s)" in rendered
+        assert "unchanged historical cards are omitted" in rendered
     assert result.score is None if excluded > 2 else result.score is not None
 
 
@@ -132,15 +133,13 @@ def test_catalog_bound_actionable_context_in_both_renderers(catalog_root):
     expected = load_catalog(catalog_root).target("weather-agent/issue-001").expectation
     for rendered in (markdown, html):
         assert expected["title"] in rendered
-        assert expected["root_cause"] in rendered
-        assert expected["expected_fix"] in rendered
-        assert "agents/weather-agent/issues/issue-001/traffic.json" in rendered
-        assert "agents/weather-agent/issues/issue-001/definition.json" in rendered
-        assert "card-0001: noise (scored)" in rendered
-        assert "no current card correctly detected it" in rendered
-        assert "diagnosis" in rendered and "linkage" in rendered
-        assert "catalog context describes intended defects, not proof" in rendered
-        assert "ten attempts" in rendered and "setup/probe turn order" in rendered
+        assert expected["root_cause"] not in rendered
+        assert expected["expected_fix"] not in rendered
+        assert "traffic.json" not in rendered
+        assert "1. card-0001" in rendered and "1. Noise" in rendered
+        assert "Expected defect: Missed" in rendered
+        assert "Core claim judged incorrect" in rendered
+        assert "one version run (10 attempts)" in rendered
         assert "Report date: 2026-09-04" in rendered
         assert "Region: Sweden Central" in rendered
         assert "Source commit: " + "a" * 40 in rendered
@@ -257,11 +256,13 @@ def test_classified_card_aliases_explain_duplicate_noise_unexpected_and_history(
     html = unescape(re.sub("<[^>]+>", "", render_html(
         result, allowed_units=plan, report_context=load_report_context(catalog_root, allowed_units=plan),
     )))
-    for index, classification in ((2, "duplicate"), (3, "noise"), (4, "unexpected_real")):
-        assert f"card-{index:04d}: {classification}" in html
-    assert "Same independently supported root as card-0001" in html
-    assert "not Noise and earns no expected-issue credit" in html
-    assert "Human confirmation needed" in html
+    for index, classification in ((1, "Correct"), (2, "Duplicate"), (3, "Noise"), (4, "Correct (other)")):
+        assert f"{index}. card-{index:04d}" in html
+        assert f"{index}. {classification}" in html
+    assert "card-0005" not in html
+    assert "Same root as finding 1" in html
+    assert "Outside the expected defect; no detection credit" in html
+    assert "Review before requesting a fix" in html
     assert result.counts.to_dict() == {
         "correct_issues": 1, "expected_issues": 1, "noise_cards": 1, "duplicate_cards": 1,
     }
@@ -285,9 +286,9 @@ def test_twenty_issue_coverage_stays_identical_with_reviewed_context(catalog_roo
     for rendered in (html, markdown):
         assert f"{result.coverage.scored_issues}/20 expected" in rendered
         assert f"{result.coverage.scored_baselines}/5 expected" in rendered
-        assert f"excluded whole units: {excluded}" in rendered
+        assert f"{excluded} excluded units" in rendered
         if excluded:
-            assert "not a confirmed Engine miss" in rendered
+            assert "Not counted as a miss" in rendered
     assert render_json(result, allowed_units=plan) == plain_json
     assert json.loads(plain_json) == result.to_dict()
 
@@ -380,8 +381,8 @@ def test_real_baseline_findings_are_not_automatically_noise_or_health_failures()
     assert "Independently supported Agent problem outside the expected defect" not in html
     assert "Other findings" not in html
     markdown = render_markdown(result, allowed_units=plan)
-    assert "Human confirmation needed" in markdown
-    assert "not Noise and earns no expected-issue credit" in markdown
+    assert "Review before requesting a fix" in markdown
+    assert "Outside the expected defect; no detection credit" in markdown
     assert "Healthy Agent versions should produce zero findings" not in html
     assert "Incorrect findings (Noise)</td>" not in html
 
@@ -440,6 +441,46 @@ def test_healthy_units_do_not_create_detailed_follow_up_boilerplate(catalog_root
     markdown = render_markdown(
         result, allowed_units=plan, report_context=load_report_context(catalog_root, allowed_units=plan),
     )
-    assert "No confirmed gap or unresolved finding" in markdown
+    assert "No unexpected finding" in markdown
+    assert "Expected defect detected" in markdown
+    assert len(re.findall(r"^\| [12] \|", markdown, re.M)) == 2
     assert "### weather-agent / v0" not in markdown
     assert "### weather-agent / issue-001" not in markdown
+
+
+def test_compact_detail_has_five_tables_and_five_ordered_version_rows_each():
+    result, plan = report(excluded=2)
+    markdown = render_markdown(result, allowed_units=plan)
+    heading = "| Run num | Agent version | Expected insight | Generated insight(s) | Assessment | Notes |"
+    assert markdown.count(heading) == 5
+    assert len(re.findall(r"^\| [1-5] \|", markdown, re.M)) == 25
+    for section in markdown.split(heading)[1:]:
+        rows = re.findall(r"^\| ([1-5]) \| (.*)$", section.split("\n## ")[0], re.M)
+        assert [number for number, _ in rows] == ["1", "2", "3", "4", "5"]
+        assert rows[0][1].startswith("v0 (deployment not recorded)")
+    assert not re.search(r"^#{3,}", markdown, re.M)
+    html = markdown_view(markdown)
+    assert html.count("<thead>") == 5
+    for section in html.split("<tbody>")[1:]:
+        assert section.split("</tbody>")[0].count("<tr ") == 5
+    assert "Scope commit" not in markdown
+    assert len(markdown) < 6000
+
+
+def test_markdown_browser_table_preserves_escaped_pipes_and_literal_break_tags(catalog_root):
+    result, plan = reviewed_sample()
+    path = catalog_root / "catalogs" / "ISSUE_CATALOG.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    document["issues"][0]["title"] = r"Two | cases \ with <br> and <script>tags</script>"
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    markdown = render_markdown(
+        result, allowed_units=plan,
+        report_context=load_report_context(catalog_root, allowed_units=plan),
+    )
+    assert r"Two \| cases \\" in markdown
+    html = markdown_view(markdown)
+    rows = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    assert rows.count("<td ") == 12
+    assert "Two | cases" in html
+    assert "&lt;br&gt;" in html and "<script>" not in html
+    assert "<br>" not in html.split("Two | cases", 1)[1].split("</td>", 1)[0]

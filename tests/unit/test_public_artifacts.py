@@ -72,7 +72,8 @@ def test_public_files_share_one_validated_envelope_and_rendering(repository):
     for target in targets:
         assert target.unit_id.logical_version in markdown
         assert f'id="{target.unit_id.agent}"' in markdown
-    assert "No confirmed gap or unresolved finding" in markdown
+    assert "No unexpected finding" in markdown
+    assert "Expected defect detected" in markdown
     assert "card-0001: expected_detection (scored)" not in markdown
 
 
