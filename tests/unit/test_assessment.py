@@ -83,6 +83,7 @@ def judgment(payload, index, *, stage=False):
 def output(payload, *, stage=False):
     result = {"attempts": [judgment(payload, index, stage=stage) for index in range(1, 11)]}
     if stage:
+        result["additional_findings"] = []
         return result
     result["limitations"] = []
     result["cards"] = []
@@ -116,6 +117,17 @@ class Sol:
 def stage(data, sol=None, **kwargs):
     sol = sol or Sol(lambda payload: output(payload, stage=True))
     return asyncio.run(assess_staging(*data, sol, **kwargs))
+
+
+def legacy_staging_result(result):
+    """A historical fixture has no causal-hygiene output, even an empty list."""
+    value = deepcopy(result)
+    for name in ("root_hygiene_status", "additional_findings", "root_hygiene_reasons"):
+        value.pop(name)
+    value["private_detail"]["output"].pop("additional_findings")
+    for part in value["private_detail"]["partitions"]:
+        part["output"].pop("additional_findings")
+    return value
 
 
 def daily(data, sol=None, *, before=(), after=None, **kwargs):
@@ -175,7 +187,7 @@ def test_eight_role_observations_not_ten_perfect_responses(mode):
     assert result.passing_attempts == 8
     assert len(result.judgments) == 10
     assert result.minimum_required == 8
-    assert result.policy_version == "staging-observations-v2"
+    assert result.policy_version == "staging-root-hygiene-v3"
 
 
 @pytest.mark.parametrize("mode", ["baseline", "deterministic"])
@@ -408,9 +420,13 @@ def test_daily_request_guidance_leaves_shared_schemas_and_staging_requests_uncha
     daily(evidence("baseline"))
     daily(evidence())
     stage(evidence(), after)
-    expected = deepcopy(originals[1])
-    expected["properties"]["attempts"]["items"]["properties"]["index"]["enum"] = list(range(1, 11))
-    assert before.schemas == after.schemas == [expected]
+    assert before.schemas == after.schemas
+    schema = before.schemas[0]
+    assert schema["properties"]["attempts"]["items"]["properties"]["index"]["enum"] == list(range(1, 11))
+    assert "additional_findings" in schema["required"]
+    assert schema["properties"]["attempts"]["items"]["properties"]["reason"] == (
+        originals[1]["properties"]["attempts"]["items"]["properties"]["reason"]
+    )
     assert (DAILY_SCHEMA, STAGING_SCHEMA) == originals
 
 

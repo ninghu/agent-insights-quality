@@ -22,6 +22,8 @@ from jsonschema import Draft202012Validator
 
 from .assessment_partition import (
     Partition,
+    _subset,
+    conversation_groups,
     expand_payload,
     intern_payload,
     partition_payload,
@@ -39,7 +41,7 @@ from .results import (
     UnitResult,
 )
 from .telemetry import Snapshot
-from .staging_policy import STAGING_POLICY, StagingPolicy
+from .staging_policy import ROOT_HYGIENE_POLICY_VERSION, STAGING_POLICY, StagingPolicy
 
 
 class AssessmentError(QualityError):
@@ -73,10 +75,50 @@ _ATTEMPT = {
     "citations": _CITATIONS,
     "reason": {"type": "string", "minLength": 1},
 }
-STAGING_SCHEMA = _object({
+_LEGACY_STAGING_SCHEMA = _object({
     "attempts": {
         "type": "array", "minItems": 10, "maxItems": 10,
         "items": _object({**_ATTEMPT, "contract_violation": {"type": "boolean"}}),
+    },
+})
+
+
+def _finding_text(limit: int, *, nullable: bool = False) -> dict[str, Any]:
+    return {
+        "type": ["string", "null"] if nullable else "string",
+        "minLength": 1, "maxLength": limit, "pattern": r"\S",
+    }
+
+
+_ADDITIONAL_FINDING = _object({
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+    "relation": {"enum": [
+        "independent_agent_defect", "expected_root_consequence",
+        "handled_or_operational", "unresolved_additional_root",
+    ]},
+    "central_cause": _finding_text(1600),
+    "violated_healthy_contract": _finding_text(1200, nullable=True),
+    "causal_independence": _finding_text(2000),
+    "affected_component": _finding_text(240),
+    "behavior": _finding_text(2000),
+    "material_impact": _finding_text(1200, nullable=True),
+    "uncertainty": _finding_text(1200, nullable=True),
+    "citations": {
+        "type": "array", "minItems": 1, "maxItems": 20,
+        "items": _object({
+            "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+            "step_id": _finding_text(240),
+            "refs": {
+                "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": True,
+                "items": _finding_text(240),
+            },
+        }),
+    },
+})
+STAGING_SCHEMA = _object({
+    **deepcopy(_LEGACY_STAGING_SCHEMA["properties"]),
+    "additional_findings": {
+        "type": "array", "maxItems": 100, "items": _ADDITIONAL_FINDING,
     },
 })
 DAILY_SCHEMA = _object({
@@ -113,9 +155,59 @@ class StageResult:
     private_detail: dict[str, Any]
     policy_version: str
     minimum_required: int
+    root_hygiene_status: Literal["PASS", "FAIL", "INCOMPLETE", "NOT_EVALUATED"]
+    additional_findings: tuple[dict[str, Any], ...] | None
+    root_hygiene_reasons: tuple[str, ...]
 
     def to_private_dict(self) -> dict[str, Any]:
         return deepcopy(asdict(self))
+
+
+def staging_hygiene_fields(previous: Mapping[str, Any]) -> dict[str, Any]:
+    """Read private result/summary fields without granting legacy hygiene authority."""
+    value = _json_copy(previous)
+    names = {"root_hygiene_status", "additional_findings", "root_hygiene_reasons"}
+    present = names & value.keys()
+    if not present and value.get("policy_version") != ROOT_HYGIENE_POLICY_VERSION:
+        return {
+            "root_hygiene_status": "NOT_EVALUATED", "additional_findings": None,
+            "root_hygiene_reasons": ["legacy_root_hygiene_not_evaluated"],
+        }
+    if present != names:
+        raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    status, findings, reasons = (
+        value["root_hygiene_status"], value["additional_findings"], value["root_hygiene_reasons"],
+    )
+    if (
+        not isinstance(status, str) or status not in {"PASS", "FAIL", "INCOMPLETE", "NOT_EVALUATED"}
+        or not isinstance(reasons, list)
+        or any(not isinstance(reason, str) or not reason.strip() for reason in reasons)
+        or status == "PASS" and reasons
+        or status != "PASS" and not reasons
+        or status == "NOT_EVALUATED" and findings is not None
+        or status != "NOT_EVALUATED" and not Draft202012Validator(
+            STAGING_SCHEMA["properties"]["additional_findings"],
+        ).is_valid(findings)
+    ):
+        raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    if status != "NOT_EVALUATED":
+        for finding in findings:
+            _validate_finding_semantics(finding)
+        independent = any(item["relation"] == "independent_agent_defect" for item in findings)
+        unresolved = any(item["relation"] == "unresolved_additional_root" for item in findings)
+        if (
+            (status == "FAIL") != independent
+            or unresolved and not independent and status != "INCOMPLETE"
+            or status != "PASS" and value.get("status") == "PASS"
+            or status == "FAIL" and value.get("status") != "FAIL"
+        ):
+            raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    elif (
+        reasons != ["legacy_root_hygiene_not_evaluated"]
+        or value.get("policy_version") == ROOT_HYGIENE_POLICY_VERSION and value.get("status") == "PASS"
+    ):
+        raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    return {name: value[name] for name in names}
 
 
 @dataclass(frozen=True)
@@ -371,9 +463,31 @@ async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
     schema = deepcopy(DAILY_SCHEMA if daily else STAGING_SCHEMA)
     schema["properties"]["attempts"].update(minItems=len(indices), maxItems=len(indices))
     schema["properties"]["attempts"]["items"]["properties"]["index"]["enum"] = indices
+    if not daily:
+        findings = schema["properties"]["additional_findings"]
+        findings["maxItems"] = 10 * len(indices)
+        findings["items"]["properties"]["attempt"]["enum"] = indices
     if daily and decoded["measurement_facts"]["unit_limitations_not_applicable"]:
         schema["properties"]["limitations"]["maxItems"] = 0
     request_schema = deepcopy(schema)
+    if not daily:
+        fields = request_schema["properties"]["additional_findings"]["items"]["properties"]
+        variants = []
+        for relation in fields["relation"]["enum"]:
+            if relation == "expected_root_consequence" and decoded["target"]["validation_mode"] == "baseline":
+                continue
+            variant = deepcopy(fields)
+            variant["relation"] = {"enum": [relation]}
+            if relation in {"independent_agent_defect", "unresolved_additional_root"}:
+                for name in ("violated_healthy_contract", "material_impact"):
+                    variant[name]["type"] = "string"
+            if relation == "handled_or_operational":
+                variant["violated_healthy_contract"] = {"type": "null"}
+            variant["uncertainty"]["type"] = (
+                "string" if relation == "unresolved_additional_root" else "null"
+            )
+            variants.append(_object(variant))
+        request_schema["properties"]["additional_findings"]["items"] = {"anyOf": variants}
     if daily:
         # Express the existing semantic rules using supported nested object unions.
         attempts = request_schema["properties"]["attempts"]
@@ -455,6 +569,34 @@ def _validate_attempts(evidence: _Evidence, output: dict, *, staging: bool) -> N
         )
 
 
+def _validate_finding_semantics(finding: dict) -> None:
+    relation = finding["relation"]
+    candidate = relation in {"independent_agent_defect", "unresolved_additional_root"}
+    if (
+        candidate and (
+            finding["violated_healthy_contract"] is None or finding["material_impact"] is None
+        )
+        or relation == "handled_or_operational" and finding["violated_healthy_contract"] is not None
+        or (finding["uncertainty"] is not None) != (relation == "unresolved_additional_root")
+    ):
+        raise AssessmentError("assessment_additional_finding_invalid")
+
+
+def _validate_additional_findings(
+    target: Target, evidence: _Evidence, output: dict, indices: tuple[int, ...],
+) -> None:
+    for finding in output["additional_findings"]:
+        _validate_finding_semantics(finding)
+        if (
+            type(finding["attempt"]) is not int or finding["attempt"] not in indices
+            or finding["relation"] == "expected_root_consequence" and target.is_baseline
+        ):
+            raise AssessmentError("assessment_additional_finding_invalid")
+        evidence.citations(
+            finding["citations"], attempt=finding["attempt"], proof=True, probe_only=False,
+        )
+
+
 async def assess_staging(
     target: Target, attempts: tuple[Attempt, ...],
     invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot, sol: SolPort,
@@ -473,7 +615,7 @@ async def assess_staging(
         if _fits(evidence.payload, max_payload_bytes)
         else partition_payload(evidence.payload, max_payload_bytes)
     )
-    output: dict[str, Any] = {"attempts": []}
+    output: dict[str, Any] = {"attempts": [], "additional_findings": []}
     oversized = False
     for partition in partitions:
         part = {
@@ -493,6 +635,7 @@ async def assess_staging(
             result = await _complete(sol, partition.payload, daily=False)
             part["output"] = result
             _validate_attempts(evidence, result, staging=True)
+            _validate_additional_findings(target, evidence, result, partition.indices)
         except QualityError as error:
             part["status"] = "failed"
             failure_detail = getattr(error, "private_detail", None)
@@ -502,21 +645,40 @@ async def assess_staging(
             raise
         part["status"] = "completed"
         output["attempts"].extend(result["attempts"])
+        output["additional_findings"].extend(result["additional_findings"])
     detail["output"] = output
     return _aggregate_staging(target, evidence, output, detail, policy, oversized=oversized)
 
 
 def _aggregate_staging(
     target: Target, evidence: _Evidence, output: dict, detail: dict,
-    policy: StagingPolicy, *, oversized: bool = False,
+    policy: StagingPolicy, *, oversized: bool = False, legacy: bool = False,
 ) -> StageResult:
     if not isinstance(policy, StagingPolicy):
         raise AssessmentError("staging_policy_invalid")
-    if not Draft202012Validator(STAGING_SCHEMA).is_valid(output):
+    schema = _LEGACY_STAGING_SCHEMA if legacy else STAGING_SCHEMA
+    if not Draft202012Validator(schema).is_valid(output):
         raise AssessmentError("assessment_output_invalid", private_detail=detail)
     if sorted(item["index"] for item in output["attempts"]) != list(range(1, 11)):
         raise AssessmentError("assessment_attempt_coverage_invalid", private_detail=detail)
     _validate_attempts(evidence, output, staging=True)
+    if not legacy:
+        _validate_additional_findings(target, evidence, output, tuple(range(1, 11)))
+    findings = None if legacy else tuple(output["additional_findings"])
+    if legacy:
+        hygiene_status, hygiene_reasons = "NOT_EVALUATED", ("legacy_root_hygiene_not_evaluated",)
+    elif any(item["relation"] == "independent_agent_defect" for item in findings):
+        hygiene_status, hygiene_reasons = "FAIL", ("proven_additional_agent_defect",)
+    else:
+        hygiene_reasons = tuple(
+            reason for condition, reason in (
+                (any(item["relation"] == "unresolved_additional_root" for item in findings),
+                 "unresolved_additional_root"),
+                (oversized, "assessment_conversation_too_large"),
+                (not evidence.payload["snapshot"]["query_complete"], "insufficient_evidence"),
+            ) if condition
+        )
+        hygiene_status = "INCOMPLETE" if hygiene_reasons else "PASS"
     judgments = tuple(sorted(output["attempts"], key=lambda item: item["index"]))
     proven = [
         item for item in judgments
@@ -525,10 +687,20 @@ def _aggregate_staging(
     eligible = [
         item for item in proven if item["index"] in evidence.complete
     ] if evidence.payload["snapshot"]["query_complete"] else []
+    if not legacy and hygiene_status == "PASS" and len(eligible) < policy.minimum_required:
+        hygiene_status, hygiene_reasons = "INCOMPLETE", ("insufficient_hygiene_evidence",)
     passing = sum(item["observed"] and not item["contract_violation"] for item in eligible)
     def result(status, reasons=()):
+        hygiene_blocks = hygiene_status != "NOT_EVALUATED" or policy.requires_root_hygiene
+        if hygiene_blocks:
+            reasons = tuple(dict.fromkeys((*reasons, *hygiene_reasons)))
+            if hygiene_status == "FAIL":
+                status = "FAIL"
+            elif status == "PASS" and hygiene_status in {"INCOMPLETE", "NOT_EVALUATED"}:
+                status = "INCOMPLETE"
         return StageResult(
             status, passing, judgments, reasons, detail, policy.version, policy.minimum_required,
+            hygiene_status, findings, hygiene_reasons,
         )
     if target.validation_mode != "model_mediated" and any(
         item["contract_violation"] for item in proven
@@ -572,7 +744,59 @@ def reassess_staging_policy(
         for part in partitions
     ):
         raise AssessmentError("assessment_policy_judgments_incomplete")
-    result = _aggregate_staging(target, evidence, output, detail, policy)
+    legacy = "additional_findings" not in output
+    fields = staging_hygiene_fields(value)
+    if legacy and fields["root_hygiene_status"] != "NOT_EVALUATED":
+        raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    indices = []
+    findings = []
+    groups = conversation_groups(evidence.payload)
+    for part in partitions:
+        members = part.get("indices")
+        if (
+            not isinstance(members, list) or not members
+            or any(type(index) is not int or not 1 <= index <= 10 for index in members)
+        ):
+            raise AssessmentError("assessment_attempt_coverage_invalid")
+        if any(set(group) & set(members) and not set(group) <= set(members) for group in groups):
+            raise AssessmentError("assessment_policy_input_mismatch")
+        schema = deepcopy(_LEGACY_STAGING_SCHEMA if legacy else STAGING_SCHEMA)
+        schema["properties"]["attempts"].update(minItems=len(members), maxItems=len(members))
+        if not legacy:
+            schema["properties"]["additional_findings"]["maxItems"] = 10 * len(members)
+        if not Draft202012Validator(schema).is_valid(part["output"]):
+            raise AssessmentError("assessment_output_invalid")
+        if sorted(item["index"] for item in part["output"]["attempts"]) != sorted(members):
+            raise AssessmentError("assessment_attempt_coverage_invalid")
+        # Retained per-partition membership must agree with the packet actually assessed.
+        packet = part.get("input")
+        if not isinstance(packet, dict):
+            raise AssessmentError("assessment_policy_input_mismatch")
+        try:
+            decoded = expand_payload(packet)
+        except (KeyError, IndexError, TypeError) as error:
+            raise AssessmentError("assessment_policy_input_mismatch") from error
+        if not isinstance(decoded, dict):
+            raise AssessmentError("assessment_policy_input_mismatch")
+        expected_packet = (
+            _subset(evidence.payload, tuple(members))
+            if "assessment_partition" in decoded else evidence.payload
+        )
+        if decoded != expected_packet or (
+            "assessment_partition" not in decoded and members != list(range(1, 11))
+        ):
+            raise AssessmentError("assessment_policy_input_mismatch")
+        indices.extend(members)
+        if not legacy:
+            _validate_additional_findings(target, evidence, part["output"], tuple(members))
+            findings.extend(part["output"]["additional_findings"])
+    if sorted(indices) != list(range(1, 11)):
+        raise AssessmentError("assessment_attempt_coverage_invalid")
+    if not legacy and (
+        findings != output["additional_findings"] or findings != fields["additional_findings"]
+    ):
+        raise AssessmentError("assessment_policy_judgments_mismatch")
+    result = _aggregate_staging(target, evidence, output, detail, policy, legacy=legacy)
     merged = [item for part in partitions for item in part["output"]["attempts"]]
     if value["judgments"] != list(result.judgments) or (
         len(merged) != 10

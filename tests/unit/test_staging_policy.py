@@ -34,7 +34,8 @@ def test_eight_required_with_all_ten_judged(mode, observations, insufficient, st
         assert result.reasons == ("observation_threshold_not_met",)
         assert not any(item["contract_violation"] for item in result.judgments)
     elif status == "INCOMPLETE":
-        assert result.reasons == ("insufficient_evidence",)
+        assert result.reasons == ("insufficient_evidence", "insufficient_hygiene_evidence")
+        assert result.root_hygiene_status == "INCOMPLETE"
 
 
 @pytest.mark.parametrize("mode", ["baseline", "deterministic"])
@@ -57,7 +58,8 @@ def test_proven_strict_violation_wins_over_an_oversized_unjudged_group(mode):
     data = (*data[:3], replace(data[3], records=tuple(records)))
     result = fake.stage(data, partitioned.StageSol(violation=10), max_payload_bytes=limit)
     assert result.status == "FAIL" and result.passing_attempts == 8
-    assert result.reasons == ("proven_contract_violation",)
+    assert result.reasons == ("proven_contract_violation", "assessment_conversation_too_large")
+    assert result.root_hygiene_status == "INCOMPLETE"
     assert result.private_detail["partitions"][0]["status"] == "oversized"
 
 

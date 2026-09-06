@@ -282,6 +282,8 @@ class Sol:
                 judgment["contract_violation"] = False
             judgments.append(judgment)
         value = {"attempts": judgments}
+        if "cards" not in payload:
+            value["additional_findings"] = []
         if "cards" in payload:
             citation = next((item["citations"] for item in judgments if item["sufficient"]), [])
             value.update(cards=[{

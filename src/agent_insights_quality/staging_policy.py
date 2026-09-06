@@ -4,6 +4,9 @@ from dataclasses import asdict, dataclass
 import re
 
 
+ROOT_HYGIENE_POLICY_VERSION = "staging-root-hygiene-v3"
+
+
 @dataclass(frozen=True)
 class StagingPolicy:
     version: str
@@ -21,8 +24,12 @@ class StagingPolicy:
     def to_dict(self) -> dict[str, str | int]:
         return asdict(self)
 
+    @property
+    def requires_root_hygiene(self) -> bool:
+        return self.version == ROOT_HYGIENE_POLICY_VERSION
 
-STAGING_POLICY = StagingPolicy("staging-observations-v2", minimum_required=8)
+
+STAGING_POLICY = StagingPolicy(ROOT_HYGIENE_POLICY_VERSION, minimum_required=8)
 
 
 @dataclass(frozen=True)

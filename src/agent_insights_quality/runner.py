@@ -655,6 +655,10 @@ class Runner:
             if not isinstance(reference, dict):
                 raise StateError("assessment_checkpoint_missing")
             artifact = self.runtime.run(reference["run_id"]).read_artifact(reference["artifact"])
+            if self.runtime.environment == "staging":
+                from .assessment import staging_hygiene_fields
+                artifact = {**artifact, **staging_hygiene_fields(artifact)}
+                result = {**result, **staging_hygiene_fields(result)}
             if any(artifact.get(key) != value for key, value in result.items()):
                 raise StateError("assessment_checkpoint_conflict")
             configured = self._configured_assessor(reference, work.binding.get("configured_assessor"))
@@ -1499,10 +1503,12 @@ class Runner:
             {"run_id": self.run_id}, result.get("configured_assessor"),
         )
         if self.runtime.environment == "staging":
+            from .assessment import staging_hygiene_fields
             policy = {key: result[key] for key in ("policy_version", "minimum_required") if key in result}
             fields = {
                 "result": {
                     **{key: result[key] for key in ("status", "passing_attempts", "reasons")}, **policy,
+                    **staging_hygiene_fields(result),
                 },
                 "status": result["status"], **policy,
                 "judgment_source_revision": work.binding.get("policy_reassessment", {}).get(
@@ -1608,7 +1614,7 @@ class Runner:
                             self.metrics.reuse("unit", "staging")
                         self._snapshot(work, work.binding["evidence_key"])
                         self._index_staging(target, work)
-                        return {"unit": target.key, **work.binding}
+                        return {"unit": target.key, **work.binding, "result": prior}
                     if selection.action == "reassess" or policy_reassessment:
                         stage = "evidence"
                         invocations = self._load_traffic(target, work, attempts)

@@ -51,7 +51,7 @@ class StageSol:
     async def complete_json(self, *, instructions, payload, schema):
         self.calls.append(deepcopy(payload))
         self.schemas.append(deepcopy(schema))
-        value = {"attempts": [
+        value = {"additional_findings": [], "attempts": [
             judgment(
                 payload, item["index"],
                 observed=item["index"] <= self.observations and item["index"] != self.violation,

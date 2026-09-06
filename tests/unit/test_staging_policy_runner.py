@@ -1,6 +1,7 @@
 """Normal staging selection can reaggregate policy-only changes without traffic."""
 
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,7 @@ from agent_insights_quality.assessment import AssessmentError
 from agent_insights_quality.selection import SourceChanges
 from agent_insights_quality.staging_policy import STAGING_POLICY, StagingPolicy, StagingPolicyMigration
 import test_runner as fake
+from test_assessment import legacy_staging_result
 
 POLICY_PATH = "src/agent_insights_quality/staging_policy.py"
 PRIOR_POLICY = StagingPolicy("synthetic-six-v1", 6)
@@ -32,7 +34,9 @@ def previous_run(tmp_path, monkeypatch, *, ready=6, observations=None, source_re
     h.sol.complete_json = judge
     current = assessment.assess_staging
     async def old_policy(*args, **kwargs):
-        return await current(*args, **kwargs, policy=PRIOR_POLICY)
+        result = await current(*args, **kwargs, policy=PRIOR_POLICY)
+        value = legacy_staging_result(result.to_private_dict())
+        return SimpleNamespace(to_private_dict=lambda: deepcopy(value))
     with monkeypatch.context() as old:
         old.setattr(assessment, "assess_staging", old_policy)
         old.setattr(module, "STAGING_POLICY", PRIOR_POLICY)
@@ -43,7 +47,7 @@ def previous_run(tmp_path, monkeypatch, *, ready=6, observations=None, source_re
 @pytest.mark.parametrize("ready,observations,status,count", [
     (6, None, "INCOMPLETE", 6),
     (10, 7, "FAIL", 7),
-    (8, None, "PASS", 8),
+    (8, None, "INCOMPLETE", 8),
 ])
 def test_normal_selection_to_runner_reclassifies_retained_six_policy_without_new_calls(
     tmp_path, monkeypatch, ready, observations, status, count,
@@ -68,6 +72,9 @@ def test_normal_selection_to_runner_reclassifies_retained_six_policy_without_new
     assert current["source_revision"] == "current-source"
     assert current["traffic_source_revision"] == current["judgment_source_revision"] == "prior-source"
     assert current["evidence_key"] == previous["evidence_key"]
+    assert current["result"]["root_hygiene_status"] == "NOT_EVALUATED"
+    assert current["result"]["additional_findings"] is None
+    assert "legacy_root_hygiene_not_evaluated" in current["result"]["reasons"]
     assert (len(h.cloud.events), len(h.sol.calls)) == calls
     assert {path: path.read_bytes() for path in before} == before
     new_artifact = h.store.run("eight-policy").read_artifact(current["assessment"]["artifact"])
@@ -304,3 +311,42 @@ def test_initial_migration_hook_is_python_only_and_normal_cli_routes_real_select
     assert private["results"][0]["minimum_required"] == 8
     with pytest.raises(SystemExit):
         cli.parser().parse_args(["run-staging", "--staging-policy-migration", source])
+
+
+def test_whole_staging_unit_exposes_private_hygiene_and_restores_without_model_calls(tmp_path):
+    from test_staging_root_hygiene import finding
+    h = fake.Harness(tmp_path, profile="staging", issues=0)
+    complete = h.sol.complete_json
+    async def judge(**kwargs):
+        value = await complete(**kwargs)
+        value["additional_findings"] = [finding(kwargs["payload"], index=10)]
+        return value
+    h.sol.complete_json = judge
+    result = h.staging()
+    current = result["results"][0]
+    assert current["status"] == current["result"]["root_hygiene_status"] == "FAIL"
+    assert current["result"]["passing_attempts"] == 10
+    assert current["result"]["root_hygiene_reasons"] == ["proven_additional_agent_defect"]
+    artifact = h.store.run("stage").read_artifact(current["assessment"]["artifact"])
+    assert current["result"]["additional_findings"] == artifact["additional_findings"]
+    assert artifact["private_detail"]["partitions"][0]["output"]["additional_findings"] == artifact["additional_findings"]
+    counts = len(h.sol.calls), len(h.cloud.events)
+    assert h.staging()["results"][0]["result"] == {key: artifact[key] for key in current["result"]}
+    assert (len(h.sol.calls), len(h.cloud.events)) == counts
+
+
+def test_reading_legacy_history_preserves_artifact_status_and_policy_without_new_review(tmp_path, monkeypatch):
+    h, previous = previous_run(tmp_path, monkeypatch, ready=10)
+    old = h.store.run("six-policy")
+    before = {path: path.read_bytes() for path in old.directory.rglob("*.json")}
+    counts = len(h.sol.calls), len(h.cloud.events)
+    result = h.staging("historical-view", revision="prior-source")
+    current = result["results"][0]
+    assert current["status"] == previous["status"] == "PASS"
+    assert current["policy_version"] == previous["policy_version"] == PRIOR_POLICY.version
+    assert current["minimum_required"] == 6
+    assert current["result"]["root_hygiene_status"] == "NOT_EVALUATED"
+    assert current["result"]["additional_findings"] is None
+    assert current["tested_at"] == previous["tested_at"]
+    assert {path: path.read_bytes() for path in before} == before
+    assert (len(h.sol.calls), len(h.cloud.events)) == counts
