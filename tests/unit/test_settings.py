@@ -24,6 +24,7 @@ def test_code_defaults_are_offline_and_bounded(monkeypatch):
     assert settings.daily_attempt_workers == 4
     assert settings.daily_attempt_budget == 10
     assert settings.daily_travel_session_lookahead == 0
+    assert settings.staging_travel_session_lookahead == 0
     assert settings.invocation_trace_context == 1
     assert settings.daily_evidence_grace_seconds == 30
     assert settings.assessment_workers == 4
@@ -51,6 +52,8 @@ def test_code_defaults_are_offline_and_bounded(monkeypatch):
         {"daily_attempt_budget": True}, {"daily_attempt_budget": 0}, {"daily_attempt_budget": 11},
         {"daily_travel_session_lookahead": True}, {"daily_travel_session_lookahead": -1},
         {"daily_travel_session_lookahead": 2}, {"daily_travel_session_lookahead": "1"},
+        {"staging_travel_session_lookahead": True}, {"staging_travel_session_lookahead": -1},
+        {"staging_travel_session_lookahead": 2}, {"staging_travel_session_lookahead": "1"},
         {"invocation_trace_context": True}, {"invocation_trace_context": -1},
         {"invocation_trace_context": 2}, {"invocation_trace_context": "1"},
         {"daily_evidence_grace_seconds": True}, {"daily_evidence_grace_seconds": -1},
@@ -95,14 +98,18 @@ def test_daily_scheduling_setting_bounds_load_through_strict_json(tmp_path, work
 
 
 @pytest.mark.parametrize("ahead", [0, 1])
-def test_session_lookahead_is_explicit_small_json_option(tmp_path, ahead):
+@pytest.mark.parametrize("profile", ["daily", "staging"])
+def test_session_lookahead_is_explicit_small_json_option(tmp_path, ahead, profile):
+    key = f"{profile}_travel_session_lookahead"
     path = tmp_path / "runtime.json"
-    path.write_text(json.dumps({"daily_travel_session_lookahead": ahead}))
+    path.write_text(json.dumps({key: ahead}))
     settings = load_settings(path)
-    assert settings.daily_travel_session_lookahead == ahead
-    assert settings.to_dict()["daily_travel_session_lookahead"] == ahead
+    assert getattr(settings, key) == ahead
+    assert settings.to_dict()[key] == ahead
+    other = "daily" if profile == "staging" else "staging"
+    assert getattr(settings, f"{other}_travel_session_lookahead") == 0
     path.write_text("{}")
-    assert load_settings(path).daily_travel_session_lookahead == 0
+    assert getattr(load_settings(path), key) == 0
 
 
 @pytest.mark.parametrize("enabled", [0, 1])

@@ -385,6 +385,7 @@ class Runner:
         self.sol = ObservedSol(sol, metrics) if metrics is not None else sol
         self.registry = registry
         self.settings = settings or RuntimeSettings()
+        self._requested_staging_preparation_trial = self.settings.staging_travel_session_lookahead
         if self.metrics:
             self.metrics.configuration = self.settings.to_dict()
         self.test_run, self.rerun, self.reuse_run_id = test_run, rerun, reuse_run_id
@@ -474,21 +475,21 @@ class Runner:
         self.settings = replace(self.settings, invocation_trace_context=int(trace_enabled))
         if self.metrics:
             self.metrics.configuration = self.settings.to_dict()
-        if kind == "daily":
-            policy = self.run.read_completed("daily-session-lookahead", missing_ok=True)
+        if kind in {"daily", "staging"}:
+            policy_key = f"{kind}-session-lookahead"
+            setting = f"{kind}_travel_session_lookahead"
+            policy = self.run.read_completed(policy_key, missing_ok=True)
             if policy is None:
                 policy = {"travel_sessions_ahead": (
-                    0 if existing is not None else self.settings.daily_travel_session_lookahead
+                    0 if existing is not None else getattr(self.settings, setting)
                 )}
             if set(policy) != {"travel_sessions_ahead"} or (
                 type(policy["travel_sessions_ahead"]) is not int
                 or policy["travel_sessions_ahead"] not in (0, 1)
             ):
                 raise StateError("session_lookahead_policy_invalid")
-            self._save(self.run, "completed", "daily-session-lookahead", policy)
-            self.settings = replace(
-                self.settings, daily_travel_session_lookahead=policy["travel_sessions_ahead"],
-            )
+            self._save(self.run, "completed", policy_key, policy)
+            self.settings = replace(self.settings, **{setting: policy["travel_sessions_ahead"]})
             if self.metrics:
                 self.metrics.configuration = self.settings.to_dict()
         if self.reuse_run_id:
@@ -966,8 +967,8 @@ class Runner:
                 self._reused_traffic(target, attempts, invocations)
             return invocations
         lookahead = (
-            self.runtime.environment == "daily" and target.unit_id.agent == "travel-agent"
-            and not target.is_prompt and self.settings.daily_travel_session_lookahead == 1
+            target.unit_id.agent == "travel-agent" and not target.is_prompt
+            and getattr(self.settings, f"{self.runtime.environment}_travel_session_lookahead") == 1
             and work.binding["traffic_run_id"] == self.run_id
         )
         if lookahead:
@@ -1074,7 +1075,7 @@ class Runner:
             async def prepare_worker() -> None:
                 while (job := await jobs.get()) is not None:
                     with binding(self.metrics, attempt=job.attempt.index):
-                        async with limited(self.metrics, self.attempt_limit, "daily_attempt"):
+                        async with limited(self.metrics, self.attempt_limit, f"{self.runtime.environment}_attempt"):
                             self._check()
                             await one(job.attempt, job)
                     job.finished.set()
@@ -1107,7 +1108,15 @@ class Runner:
             await self._gather(worker() for _ in range(workers))
         else:
             for attempt in attempts:
-                await one(attempt)
+                if self.settings.staging_travel_session_lookahead:
+                    # During the canary, serial peers share the preparation budget.
+                    # Default staging keeps its original per-target scheduling.
+                    with binding(self.metrics, attempt=attempt.index):
+                        async with limited(self.metrics, self.attempt_limit, "staging_attempt"):
+                            self._check()
+                            await one(attempt)
+                else:
+                    await one(attempt)
         if all(item.status != "blocked" for item in invocations.values()):
             self._save(work.records, "completed", work.key + "/traffic-done", {"completed": True})
         return invocations
@@ -1566,6 +1575,14 @@ class Runner:
 
         if not self._initialized or self.runtime.environment != "staging":
             raise QualityError("runner_not_initialized")
+        trial_work = {}
+        if self.settings.staging_travel_session_lookahead:
+            for selection in selections:
+                target = selection.target
+                if target.unit_id.agent == "travel-agent" and not target.is_prompt:
+                    trial_work[target.key] = self._binding(target, selection)
+            if not any(work.binding["traffic_run_id"] == self.run_id for work in trial_work.values()):
+                raise QualityError("staging_session_trial_requires_fresh_travel")
         semaphore = asyncio.Semaphore(self.settings.staging_workers)
         @observe(self.metrics, "unit", "staging", lambda selection: {
             "unit": selection.target.key, "lane": selection.target.unit_id.agent,
@@ -1576,7 +1593,7 @@ class Runner:
                 work = None
                 stage = "deployment"
                 try:
-                    work = self._binding(target, selection)
+                    work = trial_work.get(target.key) or self._binding(target, selection)
                     attempts = self._plan(target, work)
                     recovered = self._recover_assessment(target, work)
                     prior = self._prior_result(work)
@@ -1636,6 +1653,14 @@ class Runner:
         summary = {
             "profile": "staging", "selected": len(selections), "results": records,
             "integrity_failure": self.integrity_failure, "staging_policy": STAGING_POLICY.to_dict(),
+            "session_preparation_trial": {
+                "requested": self._requested_staging_preparation_trial,
+                "frozen": self.settings.staging_travel_session_lookahead,
+                "current_run_travel_units": [
+                    key for key, work in trial_work.items() if work.binding["traffic_run_id"] == self.run_id
+                ],
+                "acceptance": "requires_saved_evidence_review" if trial_work else "not_exercised",
+            },
         }
         self._save(self.run, "progress", "staging-result", summary)
         self._event("completed")

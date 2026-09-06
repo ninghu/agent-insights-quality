@@ -278,6 +278,12 @@ async def _run(
         )
     metrics = begin_metrics(records)
     if not is_daily and active["completed"]:
+        settings_path = catalog.root / "config" / "runtime.json"
+        requested = load_settings(settings_path if settings_path.is_file() else None)
+        if requested.staging_travel_session_lookahead:
+            policy = records.read_completed("staging-session-lookahead", missing_ok=True)
+            if policy != {"travel_sessions_ahead": 1} or type(policy.get("travel_sessions_ahead")) is not int:
+                raise QualityError("staging_session_trial_frozen_off")
         if metrics:
             metrics.reuse("run", "staging")
         return _staging_status(runtime, records, active, records.read("staging-result"))
@@ -289,6 +295,8 @@ async def _run(
         settings = load_settings(settings_path if settings_path.is_file() else None)
     # An empty staging selection has no reason to discover credentials or create providers.
     if not is_daily and not targets:
+        if settings.staging_travel_session_lookahead:
+            raise QualityError("staging_session_trial_requires_fresh_travel")
         value = {"profile": "staging", "selected": 0, "status": "unchanged", "results": [], "integrity_failure": False}
         records.save_progress("staging-result", value)
         return _staging_status(runtime, records, active, value)

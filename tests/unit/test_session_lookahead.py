@@ -11,6 +11,7 @@ from agent_insights_quality.errors import QualityError
 from agent_insights_quality.performance import RunMetrics
 from agent_insights_quality.providers import AzureHttpTransport, AzureRuntime, HttpResponse
 from agent_insights_quality.results import UnitId
+from agent_insights_quality.selection import Selection
 from agent_insights_quality.state import CheckpointError, RecordStore, RuntimeStore, StateError
 import test_runner as fake
 
@@ -20,14 +21,21 @@ def storage(monkeypatch):
     fake.fake_storage(monkeypatch)
 
 
-def harness(path, *, budget=10, ahead=1, profile="daily", hosted=True, issues=0, agent="travel-agent"):
+def harness(path, *, budget=10, ahead=1, staging_ahead=0, profile="daily", hosted=True, issues=0, agent="travel-agent"):
     h = fake.Harness(path, profile=profile, hosted=hosted, issues=issues,
-                     daily_attempt_budget=budget, daily_travel_session_lookahead=ahead)
+                     daily_attempt_budget=budget, daily_travel_session_lookahead=ahead,
+                     staging_travel_session_lookahead=staging_ahead)
     h.catalog = replace(h.catalog, agents=(agent,), targets=tuple(
         replace(target, unit_id=UnitId(agent, target.unit_id.logical_version))
         for target in h.catalog.targets
     ))
     return h
+
+
+async def run_profile(h, runner):
+    if h.store.environment == "staging":
+        return await runner.run_staging(tuple(Selection(t, "traffic", ("missing",)) for t in h.catalog.targets))
+    return await runner.run_daily(h.catalog.targets)
 
 
 def work_key(h, target, run_id="trial"):
@@ -228,11 +236,12 @@ def test_serial_and_lookahead_keep_identical_business_bodies_bindings_and_outcom
     assert outcomes[0] == outcomes[1]
 
 
-def test_policy_checkpoint_failure_prevents_all_provider_effects(tmp_path, monkeypatch):
-    h = harness(tmp_path)
+@pytest.mark.parametrize("profile", ["daily", "staging"])
+def test_policy_checkpoint_failure_prevents_all_provider_effects(tmp_path, monkeypatch, profile):
+    h = harness(tmp_path, profile=profile, staging_ahead=1)
     save = RecordStore.save_completed
     def fail(records, key, value):
-        if key == "daily-session-lookahead":
+        if key == f"{profile}-session-lookahead":
             raise CheckpointError()
         save(records, key, value)
     monkeypatch.setattr(RecordStore, "save_completed", fail)
@@ -240,21 +249,22 @@ def test_policy_checkpoint_failure_prevents_all_provider_effects(tmp_path, monke
         runner = h.runner()
         try:
             with pytest.raises(CheckpointError):
-                runner.initialize(h.catalog.targets, fake.DAY, kind="daily")
+                runner.initialize(h.catalog.targets, fake.DAY, kind=profile)
             assert runner._stopped and not runner._initialized
             assert not h.cloud.events
         finally:
             runner.logger.close()
 
 
-def test_legacy_run_stays_off_and_corrupt_frozen_policy_fails_closed(tmp_path):
-    h = harness(tmp_path, ahead=0)
+@pytest.mark.parametrize("profile", ["daily", "staging"])
+def test_legacy_run_stays_off_and_corrupt_frozen_policy_fails_closed(tmp_path, profile):
+    h = harness(tmp_path, ahead=0, profile=profile)
     run_traffic(h)
-    path = h.store.run("trial")._path("completed", "daily-session-lookahead")
+    path = h.store.run("trial")._path("completed", f"{profile}-session-lookahead")
     path.unlink()
-    h.settings = replace(h.settings, daily_travel_session_lookahead=1)
+    h.settings = replace(h.settings, **{f"{profile}_travel_session_lookahead": 1})
     run_traffic(h)
-    assert h.store.run("trial").read_completed("daily-session-lookahead") == {"travel_sessions_ahead": 0}
+    assert h.store.run("trial").read_completed(f"{profile}-session-lookahead") == {"travel_sessions_ahead": 0}
     assert not list(h.store.run("trial").directory.rglob("session-affinity.json"))
     path.write_text('{"travel_sessions_ahead":true}')
     with pytest.raises(StateError, match="session_lookahead_policy_invalid"):
@@ -262,8 +272,9 @@ def test_legacy_run_stays_off_and_corrupt_frozen_policy_fails_closed(tmp_path):
 
 
 @pytest.mark.parametrize("prepared_state", ["ready", "pending"])
-def test_cancel_after_preparation_reuses_session_and_completed_turn(tmp_path, prepared_state):
-    h = harness(tmp_path)
+@pytest.mark.parametrize("profile", ["daily", "staging"])
+def test_cancel_after_preparation_reuses_session_and_completed_turn(tmp_path, prepared_state, profile):
+    h = harness(tmp_path, profile=profile, staging_ahead=1)
     original_session, original_invoke = h.cloud.create_session, h.cloud.invoke
     posted, preserved = [], {}
     async def run():
@@ -285,7 +296,7 @@ def test_cancel_after_preparation_reuses_session_and_completed_turn(tmp_path, pr
             return receipt
         h.cloud.create_session, h.cloud.invoke = create, invoke
         runner = h.runner()
-        runner.initialize(h.catalog.targets, fake.DAY, kind="daily")
+        runner.initialize(h.catalog.targets, fake.DAY, kind=profile)
         existing_tasks = set(asyncio.all_tasks())
         task = asyncio.create_task(traffic(h, runner))
         await second_ready.wait()
@@ -314,8 +325,9 @@ def test_cancel_after_preparation_reuses_session_and_completed_turn(tmp_path, pr
     assert all(o["elapsed_seconds"] is None for o in reused)
 
 
-def test_budget_one_cancels_waiting_prefetch_without_creating_a_session(tmp_path):
-    h = harness(tmp_path, budget=1)
+@pytest.mark.parametrize("profile", ["daily", "staging"])
+def test_budget_one_cancels_waiting_prefetch_without_creating_a_session(tmp_path, profile):
+    h = harness(tmp_path, budget=1, profile=profile, staging_ahead=1)
     original = h.cloud.invoke
     async def run():
         started = asyncio.Event()
@@ -327,7 +339,7 @@ def test_budget_one_cancels_waiting_prefetch_without_creating_a_session(tmp_path
         h.cloud.invoke = invoke
         metrics = RunMetrics(h.store.run("trial"))
         runner = h.runner(metrics=metrics)
-        runner.initialize(h.catalog.targets, fake.DAY, kind="daily")
+        runner.initialize(h.catalog.targets, fake.DAY, kind=profile)
         existing = set(asyncio.all_tasks())
         task = asyncio.create_task(traffic(h, runner))
         await started.wait()
@@ -349,8 +361,9 @@ def test_budget_one_cancels_waiting_prefetch_without_creating_a_session(tmp_path
 
 
 @pytest.mark.parametrize("accepted", [None, True, False])
-def test_ambiguous_or_rejected_preparation_is_checkpointed_and_not_blindly_reposted(tmp_path, accepted):
-    h = harness(tmp_path)
+@pytest.mark.parametrize("profile", ["daily", "staging"])
+def test_ambiguous_or_rejected_preparation_is_checkpointed_and_not_blindly_reposted(tmp_path, accepted, profile):
+    h = harness(tmp_path, profile=profile, staging_ahead=1)
     original = h.cloud.create_session
     posted = []
     async def create(deployment, request_id, persist):
@@ -377,8 +390,9 @@ def test_ambiguous_or_rejected_preparation_is_checkpointed_and_not_blindly_repos
         assert value["status"] == "unknown" and value["session_id"] == "synthetic-pending-session"
 
 
-def test_unknown_business_stops_later_turns_and_bounds_unused_prepared_sessions(tmp_path):
-    h = harness(tmp_path, issues=1)
+@pytest.mark.parametrize("profile", ["daily", "staging"])
+def test_unknown_business_stops_later_turns_and_bounds_unused_prepared_sessions(tmp_path, profile):
+    h = harness(tmp_path, issues=1 if profile == "daily" else 0, profile=profile, staging_ahead=1)
     original = h.cloud.create_session
     sessions, invocations = [], []
     async def run():
@@ -402,16 +416,22 @@ def test_unknown_business_stops_later_turns_and_bounds_unused_prepared_sessions(
             raise QualityError("synthetic_unknown", request_accepted=None)
         h.cloud.create_session, h.cloud.invoke = create, invoke
         runner = h.runner()
-        runner.initialize(h.catalog.targets, fake.DAY, kind="daily")
-        result = await runner.run_daily(h.catalog.targets)
-        assert result.score is None
+        runner.initialize(h.catalog.targets, fake.DAY, kind=profile)
+        result = await run_profile(h, runner)
+        if profile == "daily":
+            assert result.score is None
+        else:
+            assert result["results"][0]["status"] == "INCOMPLETE"
         runner.logger.close()
     with h.store.ownership():
         asyncio.run(asyncio.wait_for(run(), 5))
     assert sessions == [1, 2] and len(invocations) == 1
     assert not h.cloud.starts
-    assert not any(e == ("activate", h.catalog.targets[1].key) for e in h.cloud.events)
-    h.daily()
+    if profile == "daily":
+        assert not any(e == ("activate", h.catalog.targets[1].key) for e in h.cloud.events)
+        h.daily()
+    else:
+        h.staging("trial")
     assert sessions == [1, 2] and len(invocations) == 1
     key = work_key(h, h.catalog.targets[0])
     assert h.store.run("trial").read(key + "/traffic/attempt-01/setup")["status"] == "unknown"
@@ -420,8 +440,9 @@ def test_unknown_business_stops_later_turns_and_bounds_unused_prepared_sessions(
 
 
 @pytest.mark.parametrize("failure", ["cancel", "affinity", "session_ready"])
-def test_prefetch_cancellation_or_fatal_checkpoint_drains_both_workers_before_unlock(tmp_path, monkeypatch, failure):
-    h = harness(tmp_path)
+@pytest.mark.parametrize("profile", ["daily", "staging"])
+def test_prefetch_cancellation_or_fatal_checkpoint_drains_both_workers_before_unlock(tmp_path, monkeypatch, failure, profile):
+    h = harness(tmp_path, profile=profile, staging_ahead=1)
     original = h.cloud.create_session
     active, drained = set(), set()
     async def run():
@@ -461,9 +482,9 @@ def test_prefetch_cancellation_or_fatal_checkpoint_drains_both_workers_before_un
         h.cloud.invoke, h.cloud.create_session = invoke, create
         metrics = RunMetrics(h.store.run("trial"))
         runner = h.runner(metrics=metrics)
-        runner.initialize(h.catalog.targets, fake.DAY, kind="daily")
+        runner.initialize(h.catalog.targets, fake.DAY, kind=profile)
         existing_tasks = set(asyncio.all_tasks())
-        task = asyncio.create_task(runner.run_daily(h.catalog.targets))
+        task = asyncio.create_task(run_profile(h, runner))
         if failure == "cancel":
             await prep_started.wait()
             task.cancel()
@@ -484,10 +505,11 @@ def test_prefetch_cancellation_or_fatal_checkpoint_drains_both_workers_before_un
 
 @pytest.mark.parametrize("failure", ["cancel", "checkpoint"])
 @pytest.mark.parametrize("outcome", [201, 202, 429, "no_response"])
+@pytest.mark.parametrize("profile", ["daily", "staging"])
 def test_native_session_thread_holds_permit_and_ownership_until_drained(
-    tmp_path, monkeypatch, failure, outcome,
+    tmp_path, monkeypatch, failure, outcome, profile,
 ):
-    h = harness(tmp_path)
+    h = harness(tmp_path, profile=profile, staging_ahead=1)
     original_session, original_invoke = h.cloud.create_session, h.cloud.invoke
     release, finished = threading.Event(), threading.Event()
     transport = AzureHttpTransport()
@@ -542,9 +564,9 @@ def test_native_session_thread_holds_permit_and_ownership_until_drained(
                     metrics = RunMetrics(h.store.run("trial"))
                     runner = h.runner(metrics=metrics)
                     holder.update(runner=runner, metrics=metrics)
-                    runner.initialize(h.catalog.targets, fake.DAY, kind="daily")
+                    runner.initialize(h.catalog.targets, fake.DAY, kind=profile)
                     try:
-                        await runner.run_daily(h.catalog.targets)
+                        await run_profile(h, runner)
                     finally:
                         runner.logger.close()
             finally:
@@ -570,7 +592,7 @@ def test_native_session_thread_holds_permit_and_ownership_until_drained(
                 assert h.store._owned and not ownership_released.is_set()
                 assert holder["runner"].attempt_limit._value == 9
                 with pytest.raises(StateError, match="state_owned"):
-                    with RuntimeStore("daily", root=h.store.root).ownership():
+                    with RuntimeStore(profile, root=h.store.root).ownership():
                         pytest.fail("Ownership released with a session POST still running")
                 assert session_attempts == [1, 2] and len(posts) == len(h.cloud.invocations) == 1
         finally:
@@ -591,7 +613,7 @@ def test_native_session_thread_holds_permit_and_ownership_until_drained(
     assert h.store.run("trial").read_completed(key, missing_ok=True) is None
     with h.store.ownership():
         runner = h.runner()
-        runner.initialize(h.catalog.targets, fake.DAY, kind="daily")
+        runner.initialize(h.catalog.targets, fake.DAY, kind=profile)
         target = h.catalog.targets[0]
         try:
             with pytest.raises(QualityError, match="session_outcome_unresolved"):
@@ -604,8 +626,9 @@ def test_native_session_thread_holds_permit_and_ownership_until_drained(
 
 
 @pytest.mark.parametrize("damage", ["version", "missing_session", "missing_affinity", "wrong_session"])
-def test_changed_version_affinity_and_missing_completed_session_fail_before_post(tmp_path, damage):
-    h = harness(tmp_path)
+@pytest.mark.parametrize("profile", ["daily", "staging"])
+def test_changed_version_affinity_and_missing_completed_session_fail_before_post(tmp_path, damage, profile):
+    h = harness(tmp_path, profile=profile, staging_ahead=1)
     run_traffic(h)
     records = h.store.run("trial")
     target = h.catalog.targets[0]
