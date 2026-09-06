@@ -385,6 +385,16 @@ async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
         ]}
         cards = request_schema["properties"]["cards"]
         card_fields = cards["items"]["properties"]
+        card_fields["reason"] = {
+            **card_fields["reason"],
+            "description": (
+                "Identify the central causal claim, affected component/output surface, and "
+                "independent supporting or contradicting evidence. Explain any material core "
+                "error separately from wording, reasonable category, severity or proposed-fix "
+                "disagreements. Internal-only defects need not appear in the delivered answer; "
+                "do not reinterpret an explicit delivered-answer claim as internal."
+            ),
+        }
         cards["items"] = {"anyOf": [
             _object({
                 **card_fields,

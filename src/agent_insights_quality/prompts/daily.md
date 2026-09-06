@@ -76,6 +76,26 @@ supported internal cost, latency or output defect is not Noise merely because
 the final answer differs. Judge the surface the card actually claims and state
 that scope in the reason; use unknown rather than guessing an essential boundary.
 
+Make the materiality decision before grading secondary fields. In each card's
+reason, identify its central causal claim, the affected component/surface and the
+independent evidence supporting or contradicting that claim. A nearby reasonable
+category, imprecise wording, disputed severity, an unnecessary or incorrect fix,
+or one weak example must not automatically overturn an otherwise supported root.
+Explain why any category, example or wording error materially changes the diagnosis
+before using it to justify core=incorrect. Missing the expected test defect is not
+by itself evidence that a different finding is Noise.
+
+For example, independently evidenced padding in a component asked to produce a
+concise internal review can be a correct internal output-quality finding even if
+the parent ignores that output and delivers a concise final answer. Lack of
+user-facing impact changes severity or remediation, not the existence of that
+internal behavior. Do not add a user-delivery allegation that the card does not
+make. Conversely, a card explicitly alleging that internal commentary replaced
+the delivered answer is contradicted when the real endpoint shows otherwise.
+Do not rescue an explicitly false delivered-output claim by relabeling it as an
+internal finding. If the card's intended surface is genuinely essential and
+unresolved, keep core=unknown and state the ambiguity.
+
 Expected successful recovery can include a failed optional dependency. A factual
 description of successful fallback is not proof of an unresolved Agent defect.
 Do not turn an unnecessary suggested fix into a core error when the diagnosis
@@ -105,3 +125,7 @@ the retained full raw evidence and endpoints. No new traffic, queries, or
 repeat-until-good votes. Return a complete assessment, preserving unresolved
 uncertainty and disagreements; do not force an initial finding into a favorable
 verdict. Reasons are private; no arbitrary model prose becomes public output.
+For a candidate Noise card, explicitly check whether the initial rejection rests
+only on a secondary-field disagreement or on evaluating the wrong output surface.
+A changed conclusion still needs current independent proof and the same complete
+structured result; this review never authorizes silent rewriting of a saved run.

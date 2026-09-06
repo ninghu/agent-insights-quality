@@ -39,7 +39,10 @@ def make_cli(h, monkeypatch, *, after_ports=None):
     h.catalog = replace(h.catalog, targets=tuple(replace(target, expectation={
         "title": "Synthetic reviewed defect", "root_cause": "Synthetic input contradiction",
         "expected_fix": "Honor the synthetic reviewed input",
-    }) for target in h.catalog.targets))
+    }) for target in h.catalog.targets), _documents=(
+        {"agents": [{"name": agent, "owner": "Synthetic reviewed owner"} for agent in h.catalog.agents]},
+        {},
+    ))
     monkeypatch.setattr(catalogs, "load_catalog", lambda _: h.catalog)
     monkeypatch.setattr(report_context, "load_catalog", lambda _: h.catalog)
     monkeypatch.setattr(cli, "_committed_inputs", lambda _: None)
@@ -93,9 +96,11 @@ def test_new_daily_override_freezes_all_fields_before_ports_and_labels_test_emai
     assert delivery["configured_assessor"] == ASTRA.to_dict()
     from agent_insights_quality.email import read_email
     request = read_email(h.store.outbox("email"), status["delivery_id"]).request
-    assert "Configured assessment (intent, not observed serving metadata)" in request.html
-    assert all(value in request.html for value in ASTRA.to_dict().values())
-    assert "a" * 40 in request.html
+    assert "Configured assessment (intent, not observed serving metadata)" in delivery["private_context"]
+    assert all(value in delivery["private_context"] for value in ASTRA.to_dict().values())
+    assert "Configured assessment" not in request.html
+    assert "a" * 40 not in request.html
+    assert "a" * 40 in records.read_artifact("presentation/report")["markdown"]
     assert not h.store.outbox("publication").directory.exists()
     assert not (h.catalog.root / "reports").exists()
     performance = json.loads(Path(status["performance_path"]).read_text())
