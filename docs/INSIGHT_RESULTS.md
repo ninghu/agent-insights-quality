@@ -36,8 +36,15 @@ Engine gap. Late telemetry, untriggered Agent defects, malformed execution and i
 must not be blamed on the Insight Engine.
 
 Review the private per-Agent report's five version rows alongside its saved classifications and
-short Notes. The report never silently rejudges a card; an unexpected real finding may require an
-Agent fix, further clarification or no Agent action when recovery was correct.
+short Notes. Normal detections and healthy baselines need no Notes. An **Unexpected finding** is a
+correct non-target finding with no expected-detection credit, not an automatic Agent-fix request.
+An **Insights miss** means the expected defect was not detected, not a new Agent failure.
+
+Expand **Assessment details** in an exceptional row to read the full saved rationale. Disputed
+assessments show both the initial and focused-review rationales and remain wholly unscored when
+their resolved core is unknown. These escaped private quotations are not new judgments; the
+report never changes saved classifications, scores or archives. Public reports, email briefs
+and ADX do not include these private rationales.
 
 Detailed reproduction/evidence references stay private. New reports are archived in private
 Storage; approved expiring links grant read access to individual Agent files. They are not public

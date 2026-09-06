@@ -84,18 +84,52 @@ def render_private_markdown(
     )
 
 
-def _brief(text: str, limit: int = 200) -> str:
-    text = " ".join(text.split())
-    if len(text) <= limit:
-        return text
-    return text[:limit - 3].rsplit(" ", 1)[0] + "..."
+_ASSESSMENT_LABEL = (
+    r"(?:Saved assessment|(?:Initial assessment|Focused review|Resolved assessment)"
+    r" \((?:correct|incorrect|unknown)\))"
+)
+_DETAIL_ENTRY = (
+    r"<br><strong>Finding [1-9][0-9]*: " + _ASSESSMENT_LABEL
+    + r"</strong><br>(?:[^<>]|<br>)*?"
+)
+_DETAILS = re.compile(
+    r"<details><summary>Assessment details</summary>((?:" + _DETAIL_ENTRY + r")+)</details>"
+)
+_DETAIL_LABEL = re.compile(
+    r"(<br><strong>Finding [1-9][0-9]*: " + _ASSESSMENT_LABEL + r"</strong><br>)"
+)
+
+
+def _assessment_details(entries: list[tuple[int, dict]]) -> str:
+    body = []
+    for index, card in entries:
+        disagreement = card.get("disagreement")
+        if disagreement:
+            reasons = [
+                (f"{label} ({disagreement[stage]['core']})", disagreement[stage]["reason"])
+                for stage, label in (("initial", "Initial assessment"), ("review", "Focused review"))
+            ]
+            if card["reason"] not in {reason for _, reason in reasons}:
+                reasons.append(("Resolved assessment (unknown)", card["reason"]))
+        else:
+            label = "Resolved assessment (unknown)" if card.get("core") == "unknown" else "Saved assessment"
+            reasons = [(label, card["reason"])]
+        for label, reason in reasons:
+            # Raw HTML table cells need entities, not Markdown escapes. Keep all
+            # reason text while preventing pipes/newlines from creating rows.
+            text = escape(reason, quote=False).replace("|", "&#124;")
+            text = text.replace("\r\n", "<br>").replace("\r", "<br>").replace("\n", "<br>")
+            for character in ("\\", "`", "*", "[", "]", "\u2028", "\u2029"):
+                text = text.replace(character, f"&#{ord(character)};")
+            body.append(f"<br><strong>Finding {index}: {label}</strong><br>{text}")
+    return "<details><summary>Assessment details</summary>" + "".join(body) + "</details>"
 
 
 _FINDING_LABELS = {
     "expected_detection": "Correct",
     "noise": "Noise",
     "duplicate": "Duplicate",
-    "unexpected_real": "Correct (other)",
+    "unexpected_real": "Unexpected finding",
     "unknown": "Unconfirmed",
 }
 
@@ -112,18 +146,24 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
         context[identity].title if context else identity.logical_version
     )
     current = [finding for finding in unit["findings"] if finding["contribution"] == "current"]
-    titles, verdicts, notes = [], [], []
+    titles, verdicts, notes, details = [], [], [], []
     missed = unit["scorable"] and unit["kind"] == "issue" and not unit["counts"]["correct_issues"]
     if not unit["scorable"]:
-        reasons = ", ".join(unit["exclusion_reasons"])
-        notes.append("Not scored: " + reasons + ". Not counted as a miss.")
+        if any(
+            detail.get("cards", {}).get(finding["card_alias"], {}).get("disagreement")
+            for finding in current
+        ):
+            notes.append("Assessment disagreement; unit not scored.")
+        else:
+            reasons = ", ".join(unit["exclusion_reasons"])
+            notes.append("Not scored: " + reasons + ". Not counted as a miss.")
         if detail.get("failure_code"):
             notes.append("Reason: " + detail["failure_code"] + ".")
-    elif missed:
+    elif missed and private:
         observations = len(detail.get("observations", ()))
         notes.append(
-            f"Expected defect missed; {observations}/10 saved observations."
-            if observations else "Expected defect evidenced, but not correctly detected."
+            f"Observed {observations}/10; Insights did not detect."
+            if observations else "Insights did not detect the expected defect."
         )
     roots = {}
     for index, finding in enumerate(current, 1):
@@ -141,30 +181,27 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
         root = finding["root_cause_alias"]
         if finding["classification"] == "duplicate":
             notes.append(f"{index}: Same root as finding {roots[root]}.")
-        elif finding["classification"] == "unexpected_real":
-            notes.append(f"{index}: Outside the expected defect; no detection credit. Review before requesting a fix.")
         if card.get("reason") and finding["classification"] in {"noise", "unknown", "unexpected_real"}:
-            notes.append(f"{index}: {_brief(card['reason'])}")
-        elif finding["classification"] == "noise":
-            notes.append(f"{index}: Core claim judged incorrect; inspect its retained evidence.")
+            details.append((index, card))
     if not current:
         titles.append(
             "Not generated (trace readiness insufficient)"
             if detail.get("failure_code") == "trace_readiness_insufficient" else
             "Unavailable" if not unit["scorable"] else "None"
         )
-        verdicts.append("Unscored" if not unit["scorable"] else "Missed" if missed else "-")
-    elif missed:
-        verdicts.append("Expected defect: Missed")
+        verdicts.append("Unscored" if not unit["scorable"] else "Insights miss" if missed else "-")
+    elif missed and not private:
+        verdicts.append("Insights miss")
     if private and detail.get("unavailable"):
         notes.append("Assessment details unavailable.")
-    if not notes:
-        notes.append("Expected defect detected." if unit["kind"] == "issue" else "No unexpected finding.")
+    rendered_notes = [_markdown_text(note) for note in notes]
+    if details:
+        rendered_notes.append(_assessment_details(details))
     cells = [
         str(number), _markdown_text(version), _markdown_text(expected),
         "<br>".join(_markdown_text(title) for title in titles),
         "<br>".join(_markdown_text(verdict) for verdict in verdicts),
-        "<br>".join(_markdown_text(note) for note in notes),
+        "<br>".join(rendered_notes) or "-",
     ]
     return "| " + " | ".join(cells) + " |"
 
@@ -186,8 +223,7 @@ def _render_markdown(
         f"{coverage['excluded_units']} excluded units.",
         "", "Each row is one version run (10 attempts), not one attempt. "
         "Generated insights are new or updated findings from that run; unchanged historical cards are omitted.",
-        "", "Correct (other) is outside the expected defect and earns no detection credit. "
-        "Notes quote shortened saved judgments; they do not change the result.",
+        "", "Unexpected finding means a correct non-target finding; it earns no expected-detection credit.",
     ]
     if not value["team_report_eligible"]:
         lines += ["", "Personal notice: no valid overall measurement. Counts describe the scored subset only."]
@@ -222,8 +258,9 @@ def _render_markdown(
                 private=private is not None,
             ) for number, unit in enumerate(units, 1)],
         ]
-    lines += ["", "Detailed evidence and original judgments remain in the retained assessment artifacts; "
-              "the preview manifest identifies their sources."]
+    if private is not None:
+        lines += ["", "Expand Assessment details for full saved rationales, not new judgments or automatic "
+                  "Agent-fix recommendations. Original evidence remains in the retained private artifacts."]
     if delivery_id:
         lines += ["", f"Run: {delivery_id}."]
     if metadata:
@@ -247,10 +284,36 @@ def render_html(
 
 def markdown_view(markdown: str) -> str:
     """Browser view of our emitted Markdown subset; never a second report model."""
-    def inline(line):
-        # Escape all source markup; only our generated bold labels are interpreted.
+    def text(line):
         line = re.sub(r"\\([\\`*\[\]|_])", r"\1", line)
-        return re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escape(unescape(line)))
+        return escape(unescape(line))
+
+    def inline(line):
+        # Recognize exact generated markup before decoding untrusted entities.
+        if line.startswith("**Assigned To:** "):
+            return "<strong>Assigned To:</strong> " + text(line[len("**Assigned To:** "):])
+        parts, end = [], 0
+        for match in _DETAILS.finditer(line):
+            parts.append("<br>".join(text(part) for part in line[end:match.start()].split("<br>")))
+            body = []
+            for part in _DETAIL_LABEL.split(match[1]):
+                if _DETAIL_LABEL.fullmatch(part):
+                    body.append(part)
+                else:
+                    body.append("<br>".join(escape(unescape(value)) for value in part.split("<br>")))
+            parts.append("<details><summary>Assessment details</summary>" + "".join(body) + "</details>")
+            end = match.end()
+        parts.append("<br>".join(text(part) for part in line[end:].split("<br>")))
+        return "".join(parts)
+
+    def cells(line):
+        result, start, slashes = [], 0, 0
+        for index, character in enumerate(line):
+            if character == "|" and slashes % 2 == 0:
+                result.append(line[start:index].strip())
+                start = index + 1
+            slashes = slashes + 1 if character == "\\" else 0
+        return [*result, line[start:].strip()]
 
     parts, table_rows = [], []
     def flush_table():
@@ -268,11 +331,9 @@ def markdown_view(markdown: str) -> str:
         anchor = re.fullmatch(r'<a id="([a-z][a-z0-9-]*)"></a>', line)
         heading = re.fullmatch(r"(#{1,4}) (.*)", line)
         if line.startswith("| ") and line.endswith(" |"):
-            cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line[1:-1])]
-            if not all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
-                table_rows.append([
-                    "<br>".join(inline(part) for part in cell.split("<br>")) for cell in cells
-                ])
+            row = cells(line[1:-1])
+            if not all(re.fullmatch(r":?-{3,}:?", cell) for cell in row):
+                table_rows.append([inline(cell) for cell in row])
             continue
         flush_table()
         if anchor:

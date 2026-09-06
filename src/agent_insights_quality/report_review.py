@@ -38,6 +38,51 @@ def _citation(citations, steps) -> tuple[str, ...]:
     return tuple(references)
 
 
+def _judgments(output, canonical, steps) -> dict:
+    from jsonschema import ValidationError, validate
+    from .assessment import DAILY_SCHEMA
+
+    try:
+        validate(output, DAILY_SCHEMA)
+    except ValidationError as error:
+        raise ReportContextError("report_review_artifact_invalid") from error
+    cards = {card["card_alias"]: card for card in output["cards"]}
+    if (
+        len(cards) != len(output["cards"]) or cards.keys() != canonical.keys()
+        or sorted(item["index"] for item in output["attempts"]) != list(range(1, 11))
+    ):
+        raise ReportContextError("report_review_result_mismatch")
+    for judgment in [*output["cards"], *output["attempts"]]:
+        _text(judgment["reason"])
+        _citation(judgment["citations"], steps)
+    for card in cards.values():
+        if (
+            (card["core"] == "correct") != (card["root_group"] is not None)
+            or card["expected_match"] and card["core"] != "correct"
+        ):
+            raise ReportContextError("report_review_result_mismatch")
+    return cards
+
+
+def _peers(cards, alias, current) -> set[str]:
+    card = cards[alias]
+    return {
+        other for other in current
+        if cards[other]["root_group"] is not None and (
+            cards[other]["root_group"] == card["root_group"]
+            or cards[other]["expected_match"] and card["expected_match"]
+        )
+    }
+
+
+def _disagreed(initial, review, alias, current) -> bool:
+    first, second = initial[alias], review[alias]
+    return (
+        (first["core"], first["expected_match"]) != (second["core"], second["expected_match"])
+        or _peers(initial, alias, current) != _peers(review, alias, current)
+    )
+
+
 @dataclass(frozen=True, init=False)
 class RetainedReviewContext:
     _result_digest: str
@@ -105,27 +150,53 @@ class RetainedReviewContext:
                 },
             }
             if resolved is not None:
-                from jsonschema import ValidationError, validate
-                from .assessment import DAILY_SCHEMA
-                try:
-                    validate(resolved, DAILY_SCHEMA)
-                except ValidationError as error:
-                    raise ReportContextError("report_review_artifact_invalid") from error
                 canonical = {card["card_alias"]: card for card in payload["cards"]}
-                for judgment in resolved["cards"]:
+                findings = {finding.card.card_alias: finding for finding in unit.findings}
+                if len(canonical) != len(payload["cards"]) or canonical.keys() != findings.keys():
+                    raise ReportContextError("report_review_result_mismatch")
+                judgments = {
+                    stage: _judgments(detail[stage], canonical, steps)
+                    for stage in ("initial", "review", "resolved")
+                    if detail.get(stage) is not None
+                }
+                current_aliases = {
+                    alias for alias, finding in findings.items()
+                    if finding.card.contribution.value == "current"
+                }
+                for judgment in judgments["resolved"].values():
                     alias = judgment["card_alias"]
-                    finding = next((f for f in unit.findings if f.card.card_alias == alias), None)
-                    if finding is None or alias not in canonical or judgment["core"] != finding.card.core.value:
+                    finding = findings[alias]
+                    if (
+                        judgment["core"] != finding.card.core.value
+                        or judgment["expected_match"] != (
+                            finding.card.core.value == "correct"
+                            and finding.card.root_cause_alias == unit.planned.expected_issue_alias
+                        )
+                    ):
                         raise ReportContextError("report_review_result_mismatch")
                     card = canonical[alias]
                     current = card.get("current") or card.get("previous") or {}
                     value["cards"][alias] = {
                         "title": _text(current.get("title", "Untitled retained card")),
                         "claim": _text(current.get("description", "")),
+                        "core": judgment["core"],
                         "reason": _text(judgment["reason"]),
                         "citations": _citation(judgment["citations"], steps),
                         "provider_card_id": _text(current["id"]) if "id" in current else None,
                     }
+                    if (
+                        alias in current_aliases and judgment["core"] == "unknown"
+                        and "initial" in judgments and "review" in judgments
+                        and _disagreed(judgments["initial"], judgments["review"], alias, current_aliases)
+                    ):
+                        value["cards"][alias]["disagreement"] = {
+                            stage: {
+                                "core": judgments[stage][alias]["core"],
+                                "expected_match": judgments[stage][alias]["expected_match"],
+                                "reason": _text(judgments[stage][alias]["reason"]),
+                                "citations": _citation(judgments[stage][alias]["citations"], steps),
+                            } for stage in ("initial", "review")
+                        }
                 for judgment in resolved["attempts"]:
                     if judgment["sufficient"] and judgment["observed"]:
                         value["observations"].append({

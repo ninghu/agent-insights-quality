@@ -137,8 +137,8 @@ def test_catalog_bound_actionable_context_in_both_renderers(catalog_root):
         assert expected["expected_fix"] not in rendered
         assert "traffic.json" not in rendered
         assert "1. card-0001" in rendered and "1. Noise" in rendered
-        assert "Expected defect: Missed" in rendered
-        assert "Core claim judged incorrect" in rendered
+        assert "Insights miss" in rendered
+        assert "Core claim judged incorrect" not in rendered
         assert "one version run (10 attempts)" in rendered
         assert "Report date: 2026-09-04" in rendered
         assert "Region: Sweden Central" in rendered
@@ -256,13 +256,13 @@ def test_classified_card_aliases_explain_duplicate_noise_unexpected_and_history(
     html = unescape(re.sub("<[^>]+>", "", render_html(
         result, allowed_units=plan, report_context=load_report_context(catalog_root, allowed_units=plan),
     )))
-    for index, classification in ((1, "Correct"), (2, "Duplicate"), (3, "Noise"), (4, "Correct (other)")):
+    for index, classification in ((1, "Correct"), (2, "Duplicate"), (3, "Noise"), (4, "Unexpected finding")):
         assert f"{index}. card-{index:04d}" in html
         assert f"{index}. {classification}" in html
     assert "card-0005" not in html
     assert "Same root as finding 1" in html
-    assert "Outside the expected defect; no detection credit" in html
-    assert "Review before requesting a fix" in html
+    assert "correct non-target finding; it earns no expected-detection credit" in html
+    assert "Correct (other)" not in html
     assert result.counts.to_dict() == {
         "correct_issues": 1, "expected_issues": 1, "noise_cards": 1, "duplicate_cards": 1,
     }
@@ -381,8 +381,8 @@ def test_real_baseline_findings_are_not_automatically_noise_or_health_failures()
     assert "Independently supported Agent problem outside the expected defect" not in html
     assert "Other findings" not in html
     markdown = render_markdown(result, allowed_units=plan)
-    assert "Review before requesting a fix" in markdown
-    assert "Outside the expected defect; no detection credit" in markdown
+    assert "Unexpected finding" in markdown
+    assert "correct non-target finding; it earns no expected-detection credit" in markdown
     assert "Healthy Agent versions should produce zero findings" not in html
     assert "Incorrect findings (Noise)</td>" not in html
 
@@ -441,8 +441,10 @@ def test_healthy_units_do_not_create_detailed_follow_up_boilerplate(catalog_root
     markdown = render_markdown(
         result, allowed_units=plan, report_context=load_report_context(catalog_root, allowed_units=plan),
     )
-    assert "No unexpected finding" in markdown
-    assert "Expected defect detected" in markdown
+    assert "No unexpected finding" not in markdown
+    assert "Expected defect detected" not in markdown
+    assert all(row.endswith(" | - |") for row in markdown.splitlines() if re.match(r"^\| [12] \|", row))
+    assert "<details>" not in markdown
     assert len(re.findall(r"^\| [12] \|", markdown, re.M)) == 2
     assert "### weather-agent / v0" not in markdown
     assert "### weather-agent / issue-001" not in markdown
@@ -484,3 +486,46 @@ def test_markdown_browser_table_preserves_escaped_pipes_and_literal_break_tags(c
     assert "Two | cases" in html
     assert "&lt;br&gt;" in html and "<script>" not in html
     assert "<br>" not in html.split("Two | cases", 1)[1].split("</td>", 1)[0]
+
+
+@pytest.mark.parametrize("markup", [
+    '<details open><summary>Assessment details</summary>text</details>',
+    '<details><summary onclick="alert(1)">Assessment details</summary>text</details>',
+    '<details><summary>Other summary</summary>text</details>',
+    '<details><summary>Assessment details</summary><br><strong>Finding 1: Saved assessment</strong>'
+    '<br><script>alert(1)</script></details>',
+    '<details><summary>Assessment details</summary><br><strong onclick="alert(1)">'
+    'Finding 1: Saved assessment</strong><br>text</details>',
+    '<a href="javascript:alert(1)">link</a><img src="https://invalid.test/x">',
+])
+def test_browser_only_recognizes_strict_generated_details_markup(markup):
+    html = markdown_view(markup)
+    assert "<details" not in html and "<summary" not in html
+    assert "<script" not in html and "<img" not in html
+    assert 'href="javascript:' not in html and 'src="https:' not in html
+    assert '<strong onclick=' not in html
+
+
+def test_browser_does_not_interpret_untrusted_bold_or_html_entities_as_markup():
+    html = markdown_view(
+        r"\*\*Assigned To:\*\* \*\*model label\*\* &lt;details&gt;"
+        "&lt;summary&gt;Assessment details&lt;/summary&gt;&lt;/details&gt;\n"
+        "**Assigned To:** Synthetic Owner"
+    )
+    assert "<details>" not in html and "<summary>" not in html
+    assert "**Assigned To:** **model label**" in html
+    assert "<strong>Assigned To:</strong> Synthetic Owner" in html
+    assert html.count("<strong>") == 1
+
+
+def test_browser_table_separator_distinguishes_odd_and_even_backslashes():
+    markdown = (
+        "| First | Second |\n| --- | --- |\n"
+        r"| Slash \\| Other |" "\n"
+        r"| Literal \\\| pipe | Last |" "\n"
+    )
+    html = markdown_view(markdown)
+    rows = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    assert rows.count("<td ") == 4
+    assert r"Slash \</td>" in html
+    assert r"Literal \| pipe" in html
