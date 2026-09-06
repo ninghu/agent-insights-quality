@@ -48,30 +48,72 @@ ambiguous previous send is reconciled, never sent again blindly.
 
 ## Email presentation and local review
 
-Email shows numeric issue/baseline coverage and every excluded unit, without visible Full/Partial
-labels or a quality PASS/FAIL threshold. The internal eligibility policy is unchanged: an eligible
-result may be a team report; an invalid measurement has no score and is addressed only to the
-configured personal recipient. TEST is always private. A measured zero remains a real zero score.
+Email shows the quality score, expected/detected/missed issue counts, Noise and Duplicate.
+It has no baseline-coverage row, always-on exclusion table, score-change note or visible
+Full/Partial/PASS/FAIL labels. Actual exclusions have a conditional notice linking to their
+Agent's human-validation detail; all of each excluded unit's counts remain excluded.
+The eligibility/scoring policies are unchanged. An invalid measurement has no quality score
+and is addressed only to the personal recipient. TEST is private; measured zero is valid.
 
 The Outlook-compatible brief presents Summary, What needs improvement, What is working, and a
-five-Agent overview before optional private work items. Engine gaps require independent current
-evidence; exclusions and unexpected real Agent findings remain separate. No day-to-day improvement
-is implied when a comparable prior measurement is unavailable. Detailed unit reasoning is separate
-from the brief and uses the same result, not another assessment.
+five-Agent table, then optional private Quality work-item tables. Agent | Findings |
+Human Validation | Assigned To are the only Agent-table columns. Assignments come from the
+reviewed `catalogs/AGENT_CATALOG.yaml` owner fields, separately from the frozen measured unit
+contracts. Foundry links use saved Daily Sweden environment and actual deployment object names;
+missing or conflicting metadata produces an explicit missing-link notice, never an API URL or
+old-region fallback. No catch-all Run notes, Other findings, methodology body or Run reference
+section is inserted, including hidden private context.
+
+The authoritative detail is `report.md`, organized by Agent with stable Agent-name anchors.
+It prioritizes misses, Noise and Duplicates, with actual retained claims, reasons, citations,
+version/source/date references, uncertainty and specific human checks. Healthy units do not
+receive repeated boilerplate. Private detail is rendered through a separate boundary; public
+Markdown receives only the approved result projection and reviewed catalog context.
+An `unexpected_real` result is not an automatic Agent fix task. Human validation distinguishes
+an actionable defect, an ambiguous claim needing confirmation, and already-handled behavior
+requiring no Agent change. This presentation never changes retained judgments or scores.
 
 ```powershell
 python -m agent_insights_quality email-preview --delivery-id <existing-delivery-id>
 python -m agent_insights_quality email-preview --delivery-id <existing-delivery-id> --restyle
+python -m agent_insights_quality email-preview --delivery-id <existing-delivery-id> --restyle --scoring-revision <published-40-character-commit>
 ```
 
 The first command preserves the exact prepared recipient, subject and HTML. Explicit `--restyle`
 creates a clearly labelled local presentation preview from that delivery's frozen result, only
-when the reviewed unit context still matches. Both export `email.html`, `email.eml`, `report.html`
-and a provenance manifest to a content-addressed directory under the private Daily `previews/`
-folder. The restyled EML attaches the detailed report; browser HTML links to its adjacent file.
-Neither command claims, sends, changes the original request, invokes providers or publishes data.
+when the reviewed unit context still matches. Both export `email.html`, `email.eml`, `report.md`,
+`report.html` and a provenance manifest under the private Daily `previews/` folder.
+The MD is the EML's actual `text/markdown` attachment. `report.html` is a browser view derived
+from that same MD, not an independent report. Browser email links to its per-Agent anchors;
+EML tells readers which heading to open in the attachment, without broken relative/cid/file links.
+Exact export preserves the original email HTML bytes, even when the original presentation is
+obsolete. A legacy request without frozen inputs gets an explicit unavailable-detail MD notice,
+not invented counts. The manifest identifies authoritative/derived files, attachment names,
+hashes, retained assessment references, assignment provenance and link blockers.
+Neither command claims, sends, changes the original request, invokes Agent/Sol/Insights or publishes data.
 EML is marked unsent, not delivered. Normal runtime ownership applies; do not bypass an active
 runner's lock to export a preview.
+
+The preview CLI returns `report_markdown_path`, `report_html_path`, `email_html_path`,
+`email_eml_path`, `manifest_path` and `blockers`, alongside the content-addressed presentation ID.
+New delivery preparation also durably saves private `artifacts/presentation/report.md` and its
+evidence-reference checkpoint before freezing delivery inputs. Daily status exposes
+`private_report_markdown_path` and `presentation_blockers`. Existing prepared requests return
+unchanged. Native HTML handoff does not claim to attach a report: absent a delivery-available
+detail URL it discloses that the link is unavailable; local EML export supplies the attachment.
+
+Summary's **How Scoring Works** row links only to a verified, immutable GitHub version of
+`docs/QUALITY_BAR.md`. It never assumes `main` has the current formula. `--scoring-revision`
+performs a bounded public read and requires exact equality with the reviewed local document
+(apart from CRLF/LF). An unpublished, malformed or stale version is rejected, not linked.
+For new preparation or restyle without an existing receipt, an operator can provide
+`config/report-links.json` under the private runtime root containing
+`{"scoring_revision":"<published-40-character-commit>"}`. Successful verification is frozen
+with the presentation; resume uses the retained receipt, not a mutable branch.
+Without a correct published version, `scoring_link_publication_required` is an explicit
+publication blocker and the row says the link is pending. This does not block eligible inline
+email, authorize publication, change credentials, or publish TEST content. Optional generated
+report files/PR requests are not proof that a detailed GitHub report URL is available.
 
 New work-item tables include Type and use a frozen provider-as-of snapshot. Closed items cover
 the interval since the previous successfully submitted eligible official report's snapshot;

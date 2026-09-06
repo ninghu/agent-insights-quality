@@ -86,10 +86,24 @@ def _catalog_text(value: Any) -> str:
 class ReviewedReportContext:
     _root: Path
     _units: tuple[_ReviewedUnit, ...]
+    _assignments: tuple[tuple[str, str], ...]
 
     def __init__(self, root: Path, *, allowed_units: Iterable[PlannedUnit]) -> None:
         plan = _plan(allowed_units)
         catalog = load_catalog(root)
+        assignments = []
+        agents = catalog._documents[0].get("agents")
+        if (
+            not isinstance(agents, list) or any(not isinstance(agent, dict) for agent in agents)
+            or len(agents) != len(catalog.agents)
+            or {agent.get("name") for agent in agents} != set(catalog.agents)
+        ):
+            raise ReportContextError("report_catalog_owner_invalid")
+        for agent in agents:
+            owner = _catalog_text(agent.get("owner"))
+            if len(owner) > 100 or any(char in owner for char in ";,\r\n<>"):
+                raise ReportContextError("report_catalog_owner_invalid")
+            assignments.append((agent["name"], owner))
         by_id = {target.unit_id: target for target in catalog.targets}
         units = []
         for planned in plan:
@@ -113,6 +127,12 @@ class ReviewedReportContext:
             ))
         object.__setattr__(self, "_root", catalog.root)
         object.__setattr__(self, "_units", tuple(units))
+        object.__setattr__(self, "_assignments", tuple(assignments))
+
+    @property
+    def assignments(self) -> dict[str, str]:
+        """Presentation assignments, not a change to the frozen measured contract."""
+        return dict(self._assignments)
 
     def for_plan(self, allowed_units: Iterable[PlannedUnit]) -> dict[UnitId, _ReviewedUnit]:
         plan = _plan(allowed_units)

@@ -74,7 +74,7 @@ def test_claim_before_send_replay_content_conflict_and_acceptance_not_delivery(t
         request = prepare(box)
         assert prepare(box) == request
         with pytest.raises(StateConflict):
-            prepare(box, private_context="Changed content is a different delivery.")
+            prepare(box, team_recipient="different-team@example.test")
         with pytest.raises(EmailError, match="claim_conflict"):
             record_email_outcome(
                 box, request.delivery_id, claim_id="app-1",
@@ -126,7 +126,7 @@ def test_ambiguous_send_requires_reconciliation_and_keeps_exact_request(tmp_path
         assert not reconciled.inbox_delivery_confirmed
 
 
-def test_private_context_is_escaped_and_test_mode_only_writes_private_outbox(tmp_path):
+def test_private_context_is_omitted_even_from_hidden_html_and_test_only_writes_private_outbox(tmp_path):
     runtime = RuntimeStore("daily", root=tmp_path)
     with runtime.ownership():
         request = prepare(
@@ -136,7 +136,7 @@ def test_private_context_is_escaped_and_test_mode_only_writes_private_outbox(tmp
             warnings=("work_item_unavailable",),
         )
     assert "<script>" not in request.html
-    assert "&lt;script&gt;synthetic private" in request.html
+    assert "synthetic private" not in request.html
     files = list(tmp_path.rglob("*.json"))
     assert len(files) == 1
     assert files[0].relative_to(runtime.directory).parts[:3] == ("outboxes", "email", "progress")
@@ -194,11 +194,11 @@ def test_email_uses_reviewed_context_and_exact_metadata_including_private_failur
     assert "agents/weather-agent/issues/issue-001/traffic.json" not in request.html
     assert "What needs improvement" in request.html
     assert "TEST RUN" in request.html
-    assert "Report date: 2026-09-04" in request.html and "2026-09-04" in request.subject
-    assert "Region: Sweden Central" in request.html
-    assert "Source commit: " + "a" * 40 in request.html
-    assert "synthetic private work-item context" in request.html
-    assert "Optional work-item context is unavailable." in request.html
+    assert "2026-09-04" in request.html and "2026-09-04" in request.subject
+    assert "Sweden Central" in request.subject
+    assert "Source commit" not in request.html
+    assert "synthetic private work-item context" not in request.html
+    assert "Run notes" not in request.html
     assert read_email(runtime.outbox("email"), request.delivery_id).request == request
     assert len(list(tmp_path.rglob("*.json"))) == 1
 
@@ -223,12 +223,13 @@ def test_metadata_changes_cannot_rewrite_prepared_or_claimed_email(tmp_path):
         box = runtime.outbox("email")
         original = prepare(box, **metadata)
         assert prepare(box, **metadata) == original
-        for change in ({"source_revision": "b" * 40}, {"region_display": "Sweden Central"}):
+        # Source is frozen by integration; it is no longer displayed in email.
+        assert prepare(box, **{**metadata, "source_revision": "b" * 40}) == original
+        for change in ({"region_display": "Sweden Central"},):
             with pytest.raises(StateConflict):
                 prepare(box, **{**metadata, **change})
         claim_email(box, original.delivery_id, claim_id="native-app")
-        with pytest.raises(StateConflict):
-            prepare(box, **{**metadata, "source_revision": "b" * 40})
+        assert prepare(box, **{**metadata, "source_revision": "b" * 40}) == original
     assert read_email(box, original.delivery_id).request == original
 
 
@@ -260,5 +261,5 @@ def test_coverage_labels_are_hidden_without_changing_private_failure_routing(tmp
         assert request.mode == "official"
         assert request.recipient == TEAM_RECIPIENT
         assert "0.0/100" in request.subject
-    assert f"excluded whole units: {excluded}" in request.html
+    assert (f"{excluded} unit(s) excluded" in request.html) == bool(excluded)
     assert read_email(runtime.outbox("email"), "coverage-email").status == "prepared"

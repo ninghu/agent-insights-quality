@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import date
-from html import escape
 import json
 import re
 import threading
@@ -19,7 +18,8 @@ from typing import Any, Literal
 
 from .errors import QualityError
 from .report_context import ReportMetadata, ReviewedReportContext
-from .reporting import html_section, render_email_html
+from .report_links import VerifiedScoringLink
+from .reporting import render_email_html
 from .results import PlannedUnit, QualityResult
 from .state import RecordStore, StateConflict
 
@@ -145,6 +145,8 @@ def render_email_content(
     report_context: ReviewedReportContext | None = None,
     region_display: str | None = None, source_revision: str | None = None,
     details_href: str | None = None, delivery_id: str | None = None,
+    scoring_link: VerifiedScoringLink | None = None,
+    agent_links: dict[str, str] | None = None, attached_report: bool = False,
 ) -> tuple[str, str]:
     """Render only: no recipients, claims, delivery records or provider calls."""
     try:
@@ -163,6 +165,7 @@ def render_email_content(
     html = render_email_html(
         result, allowed_units=allowed_units, warnings=warnings, report_context=report_context,
         metadata=metadata, test_run=test_run, details_href=details_href, delivery_id=delivery_id,
+        scoring_link=scoring_link, agent_links=agent_links, attached_report=attached_report,
     )
     prefix = "[TEST] " if test_run else ""
     summary = (
@@ -184,12 +187,8 @@ def render_email_content(
     if private_context is not None:
         if not isinstance(private_context, str):
             raise EmailError("email_private_context_invalid")
-        notes = "".join(
-            '<p style="margin:8px 0;color:#475569;">'
-            + "<br>".join(escape(line) for line in paragraph.splitlines()) + "</p>"
-            for paragraph in private_context.split("\n\n") if paragraph
-        )
-        private_sections.append(html_section("Run notes", notes))
+        # Retain this legacy input in its checkpoint only, never as hidden HTML
+        # or a catch-all notes section. Typed work items are the sole email prose input.
     return subject, html.replace("<!--private-context-->", "".join(private_sections))
 
 
@@ -203,6 +202,7 @@ def prepare_email(
     warnings: tuple[str, ...] = (),
     report_context: ReviewedReportContext | None = None,
     region_display: str | None = None, source_revision: str | None = None,
+    scoring_link: VerifiedScoringLink | None = None, agent_links: dict[str, str] | None = None,
 ) -> EmailRequest:
     """Prepare one private record (including the HTML preview), without sending.
 
@@ -222,6 +222,7 @@ def prepare_email(
         private_context=private_context, work_item_context=work_item_context, warnings=warnings,
         report_context=report_context, region_display=region_display, source_revision=source_revision,
         delivery_id=delivery_id,
+        scoring_link=scoring_link, agent_links=agent_links,
     )
     request = EmailRequest(
         delivery_id, recipient, subject, html, mode, report_date, test_run, rerun,

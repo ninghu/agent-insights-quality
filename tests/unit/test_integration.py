@@ -98,7 +98,9 @@ def reviewed_catalog(tmp_path, monkeypatch):
         {"title": "Synthetic reviewed issue", "root_cause": "Contradicts the synthetic input",
          "expected_fix": "Honor synthetic input"},
     ) for unit in plan)
-    catalog = Catalog(root, ("synthetic-agent",), targets, ({}, {}))
+    catalog = Catalog(root, ("synthetic-agent",), targets, (
+        {"agents": [{"name": "synthetic-agent", "owner": "Synthetic owner"}]}, {},
+    ))
     monkeypatch.setattr(report_context, "load_catalog", lambda _: catalog)
     return catalog
 
@@ -448,7 +450,11 @@ def test_real_official_artifacts_and_email_use_one_result_and_private_context_ne
             assert email.request.mode == "official"
             assert "Synthetic private quality item" in email.request.html
             assert "Synthetic reviewed issue" in email.request.html
-            assert "Sweden Central" in email.request.html and SOURCE in email.request.html
+            assert "Sweden Central" in email.request.subject and SOURCE not in email.request.html
+            detail = adapters.records.read_artifact("presentation/report")
+            assert SOURCE in detail["markdown"]
+            report_path = adapters.records._path("artifacts", "presentation/report").with_suffix(".md")
+            assert report_path.read_text(encoding="utf-8") == detail["markdown"]
             assert DAY.isoformat() in email.request.html
             for relative in output["generated_paths"]:
                 document = (tmp_path / "repo" / relative).read_text()

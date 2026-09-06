@@ -24,7 +24,10 @@ def app(tmp_path, monkeypatch):
     h.catalog = fake.replace(h.catalog, targets=tuple(fake.replace(target, expectation={
         "title": "Synthetic reviewed defect", "root_cause": "Synthetic input contradiction",
         "expected_fix": "Honor the synthetic reviewed input",
-    }) for target in h.catalog.targets))
+    }) for target in h.catalog.targets), _documents=(
+        {"agents": [{"name": agent, "owner": "Synthetic reviewed owner"} for agent in h.catalog.agents]},
+        {},
+    ))
     private_config = h.store.root / "config"
     private_config.mkdir(parents=True)
     (private_config / "email-recipient.json").write_text(json.dumps({
@@ -145,6 +148,9 @@ def test_fresh_trial_runs_all_25_units_without_reusing_or_rewriting_prior_run(ap
     app.catalog = fake.catalog(app.catalog.root, agents=5, issues=4)
     app.catalog = fake.replace(app.catalog, targets=tuple(
         fake.replace(target, expectation=expectation) for target in app.catalog.targets
+    ), _documents=(
+        {"agents": [{"name": agent, "owner": "Synthetic reviewed owner"} for agent in app.catalog.agents]},
+        {},
     ))
     assert app.cli("run-daily", "--test-run", "--rerun", "4") == 0
     n4, _ = last_json(capsys)
@@ -441,7 +447,8 @@ def test_prepared_email_resume_skips_ports_and_retains_frozen_metadata_context_a
     assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
     value, _ = last_json(capsys)
     record = read_email(app.store.outbox("email"), value["delivery_id"])
-    assert "Sweden Central" in record.request.html and "a" * 40 in record.request.html
+    assert "Sweden Central" in record.request.html and "a" * 40 not in record.request.html
+    assert "a" * 40 in Path(value["private_report_markdown_path"]).read_text(encoding="utf-8")
     assert "2026-09-04" in record.request.html and "Test Agents" in record.request.html
     calls = len(app.port_calls), len(app.sol.calls), len(app.cloud.invocations)
     (app.store.root / "config" / "email-recipient.json").write_text("{broken")

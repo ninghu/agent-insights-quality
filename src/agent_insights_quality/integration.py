@@ -466,6 +466,10 @@ class RunIntegration:
         rerun: int, recipient: Callable[[], str], assessment_settings: AssessmentSettings | None = None,
     ):
         from .report_context import load_report_context
+        from .report_links import VerifiedScoringLink, configured_scoring_link, foundry_links
+        from .report_review import RetainedReviewContext
+        from .reporting import render_private_markdown
+        from .report_context import ReportMetadata
 
         outbox = self.runtime.outbox("email")
         existing = outbox.read(self.run_id, missing_ok=True)
@@ -490,6 +494,43 @@ class RunIntegration:
                 private_context = "\n\n".join(
                     part for part in (private_context, assessor_context) if part
                 )
+            links, link_blockers = foundry_links(self.runtime, self.run_id, self.allowed_units)
+            try:
+                scoring = configured_scoring_link(self.runtime, self.root)
+            except (QualityError, OSError):
+                scoring = None
+            blockers = [*link_blockers]
+            if scoring is None:
+                blockers.append("scoring_link_publication_required")
+            review = RetainedReviewContext(self.runtime, self.run_id, result)
+            markdown = render_private_markdown(
+                result, allowed_units=self.allowed_units, review_context=review,
+                warnings=tuple(sorted(warnings)), report_context=context,
+                metadata=ReportMetadata(self.report_date.isoformat(), environment.region_display, source_revision),
+                delivery_id=self.run_id,
+            )
+            self.records.save_artifact("presentation/report", {
+                "format": "markdown", "private": True, "markdown": markdown,
+                "retained_review": review.provenance(),
+            })
+            from .state import _atomic_write, _confirm_durable, _inside, _open_snapshot
+            report_path = _inside(
+                self.runtime.root, self.records._path("artifacts", "presentation/report").with_suffix(".md"),
+            )
+            encoded_report = markdown.encode("utf-8")
+            with self.runtime._write_lock:
+                if not self.runtime._owned:
+                    raise StateError("state_not_owned")
+                try:
+                    with _open_snapshot(report_path) as stream:
+                        existing_report = stream.read()
+                except FileNotFoundError:
+                    _atomic_write(report_path, encoded_report)
+                else:
+                    if existing_report != encoded_report:
+                        raise StateError("delivery_private_report_conflict")
+                    _confirm_durable(report_path)
+            blockers.append("human_validation_link_unavailable")
             frozen = {
                 "report": result.to_dict(), "test_run": self.test_run, "rerun": rerun,
                 "report_date": self.report_date.isoformat(), "region_display": environment.region_display,
@@ -499,11 +540,23 @@ class RunIntegration:
                 "warnings": sorted(warnings), "recipient": recipient(),
                 "report_context": context.to_private_dict(),
                 "configured_assessor": configured,
+                "presentation": {
+                    "assignments": context.assignments, "foundry_links": links,
+                    "scoring_link": scoring.to_dict() if scoring else None,
+                    "blockers": blockers, "private_report_artifact": "presentation/report",
+                },
             }
             self.records.save_completed("delivery-inputs", frozen)
         elif frozen["report_context"] != context.to_private_dict():
             raise QualityError("delivery_reviewed_context_changed")
         result = restore_public_result(frozen["report"], allowed_units=self.allowed_units)
+        presentation = frozen.get("presentation", {})
+        if presentation and presentation["assignments"] != context.assignments:
+            raise QualityError("delivery_presentation_assignments_changed")
+        scoring = (
+            VerifiedScoringLink.from_retained(self.root, presentation["scoring_link"])
+            if presentation.get("scoring_link") else None
+        )
         prepare_email(
             outbox, self.run_id, result, allowed_units=self.allowed_units,
             report_date=frozen["report_date"], test_run=frozen["test_run"], rerun=frozen["rerun"],
@@ -512,5 +565,6 @@ class RunIntegration:
             work_item_context=frozen.get("work_item_context", unavailable_context("work_item_legacy_snapshot")),
             region_display=frozen["region_display"], source_revision=frozen["source_revision"],
             report_context=context,
+            scoring_link=scoring, agent_links=presentation.get("foundry_links"),
         )
         return read_email(outbox, self.run_id)

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from html import escape
+from html import escape, unescape
 import json
 import re
 
 from .privacy import public_projection, warning_text
 from .report_context import ReportContextError, ReportMetadata, ReviewedReportContext
+from .report_links import VerifiedScoringLink, validate_foundry_link
+from .report_review import RetainedReviewContext
 from .results import PlannedUnit, QualityResult, UnitId
 
 
@@ -20,115 +22,6 @@ def _unit_name(unit: dict, context: dict) -> str:
     identity = _identity(unit)
     name = f"{identity.agent} / {identity.logical_version}"
     return f"{name} - {context[identity].title}" if context else name
-
-
-def _rows(value: dict, context: dict) -> list[tuple[str, str, str, str]]:
-    rows = []
-    for unit in value["units"]:
-        name = _unit_name(unit, context)
-        counts = unit["counts"]
-        if not unit["scorable"]:
-            outcome = "Unscored: " + ", ".join(unit["exclusion_reasons"])
-        elif unit["kind"] == "baseline":
-            outcome = "Baseline measured (no healthy bonus)"
-        else:
-            outcome = "Detected" if counts["correct_issues"] else "Missed"
-        gaps = []
-        if unit["scorable"]:
-            if unit["kind"] == "issue" and not counts["correct_issues"]:
-                gaps.append("Expected defect not correctly detected")
-            if counts["noise_cards"]:
-                gaps.append(f"{counts['noise_cards']} Noise")
-            if counts["duplicate_cards"]:
-                gaps.append(f"{counts['duplicate_cards']} Duplicate")
-        other = []
-        unexpected = sum(
-            finding["classification"] == "unexpected_real" for finding in unit["findings"]
-        )
-        if unexpected:
-            other.append(f"{unexpected} unexpected real finding(s)")
-        unscored = [
-            finding for finding in unit["findings"]
-            if not finding["scored"] and finding["contribution"] == "current"
-        ]
-        for classification in sorted({finding["classification"] for finding in unscored}):
-            count = sum(finding["classification"] == classification for finding in unscored)
-            other.append(f"{count} unscored {classification}")
-        rows.append((name, outcome, "; ".join(gaps) or "None confirmed",
-                     "; ".join(other) or "None reported"))
-    return rows
-
-
-def _follow_up(unit: dict) -> tuple[tuple[str, str], ...]:
-    notes = []
-    if not unit["scorable"]:
-        notes.append((
-            "Measurement follow-up",
-            "This whole unit is excluded: " + ", ".join(unit["exclusion_reasons"])
-            + ". Resolve the execution, evidence or assessment gap in the retained private "
-            "checkpoint before drawing a quality conclusion. This is not a confirmed Engine miss.",
-        ))
-    elif unit["kind"] == "issue" and not unit["counts"]["correct_issues"]:
-        notes.append((
-            "Engine follow-up",
-            "The reviewed defect was independently evidenced, but no current card correctly "
-            "detected it. Check diagnosis and current evidence linkage for the expected symptom "
-            "below using the retained pre-Insights evidence. The healthy behavior is an Agent "
-            "reference, not a claim that the Engine itself should implement the Agent fix.",
-        ))
-    roots = {}
-    for finding in unit["findings"]:
-        classification = finding["classification"]
-        root = finding["root_cause_alias"]
-        alias = finding["card_alias"]
-        scope = "scored" if finding["scored"] else "unscored"
-        if classification == "historical":
-            action = "Historical context only; no current score contribution."
-        elif classification == "expected_detection":
-            action = "Correct detection of the reviewed expected defect."
-            roots[root] = alias
-        elif classification == "unexpected_real":
-            action = (
-                "Inspect the independently supported Agent problem outside the expected defect. "
-                "It is not Noise and earns no expected-issue credit."
-            )
-            roots[root] = alias
-        elif classification == "noise":
-            action = (
-                "Check the core diagnosis, category and linkage against retained current evidence; "
-                "the core claim is confirmed incorrect. Severity/fix disagreement alone is not Noise."
-            )
-        elif classification == "duplicate":
-            action = (
-                f"Same independently supported root as {roots[root]}. Check same-root "
-                "deduplication across distinct cards without suppressing different real defects."
-            )
-        else:
-            action = (
-                "The core diagnosis is unconfirmed. Resolve it from retained current evidence, "
-                "not catalog wording or the card's own claim."
-            )
-        reference = f" Root: {root}." if root is not None else ""
-        notes.append((f"{alias}: {classification} ({scope})", action + reference))
-    return tuple(notes)
-
-
-def _details(value: dict, context: dict) -> list[tuple[str, tuple[tuple[str, str], ...]]]:
-    sections = []
-    for unit in value["units"]:
-        notes = []
-        if context:
-            reviewed = context[_identity(unit)]
-            notes.extend((
-                ("Reviewed expected symptom" if unit["kind"] == "issue" else "Reviewed baseline",
-                 reviewed.expected_symptom),
-                ("Healthy Agent behavior to compare", reviewed.healthy_behavior),
-                ("Reproduction reference", f"{reviewed.traffic_path}; source: {reviewed.source_path}"),
-            ))
-        notes.extend(_follow_up(unit))
-        if notes:
-            sections.append((_unit_name(unit, context), tuple(notes)))
-    return sections
 
 
 def _inputs(result, allowed_units, report_context, metadata):
@@ -164,7 +57,7 @@ _CONTEXT_GUIDANCE = (
 
 def _markdown_text(text: str) -> str:
     # Escape markup, not content. Approval is established before rendering.
-    text = escape(text, quote=False)
+    text = escape(" ".join(text.splitlines()), quote=False)
     for character in ("\\", "`", "*", "[", "]", "|"):
         text = text.replace(character, "\\" + character)
     return re.sub(r"(?<!\w)_|_(?!\w)", r"\\_", text)
@@ -178,12 +71,12 @@ def _summary(value: dict) -> tuple[str, ...]:
         f"C={counts['correct_issues']}; E_scored={counts['expected_issues']}; "
         f"N_scored={counts['noise_cards']}; D_scored={counts['duplicate_cards']}. "
         "Noise weight 1; Duplicate weight 0.25.",
-        f"Issue coverage: {coverage['scored_issues']}/{coverage['planned_issues']} planned; "
-        f"baseline coverage: {coverage['scored_baselines']}/{coverage['planned_baselines']} planned; "
+        f"Issue coverage: {coverage['scored_issues']}/{coverage['planned_issues']} expected; "
+        f"baseline coverage: {coverage['scored_baselines']}/{coverage['planned_baselines']} expected; "
         f"excluded whole units: {coverage['excluded_units']}.",
         "Score = 100*C/(E_scored+N_scored+0.25*D_scored). No overall quality threshold.",
         "Engine gaps below are confirmed only for scorable units. Unexpected real findings "
-        "are Agent problems, not Noise. Execution, evidence and assessment exclusions are "
+        "need human triage, not automatic Agent fixes or rescoring. Execution, evidence and assessment exclusions are "
         "framework/infrastructure or unresolved measurement problems, not proven Engine misses.",
     )
 
@@ -193,27 +86,232 @@ def render_markdown(
     warnings: tuple[str, ...] = (),
     report_context: ReviewedReportContext | None = None,
     metadata: ReportMetadata | None = None,
+    delivery_id: str | None = None,
+) -> str:
+    """Public-safe report. No private evidence/context parameter exists here."""
+    return _render_markdown(
+        result, allowed_units=allowed_units, warnings=warnings,
+        report_context=report_context, metadata=metadata, delivery_id=delivery_id,
+    )
+
+
+def render_private_markdown(
+    result: QualityResult, *, allowed_units: Iterable[PlannedUnit],
+    review_context: RetainedReviewContext, warnings: tuple[str, ...] = (),
+    report_context: ReviewedReportContext | None = None,
+    metadata: ReportMetadata | None = None, delivery_id: str | None = None,
+) -> str:
+    """Explicit private boundary; never used by public_artifacts or ADX."""
+    if type(review_context) is not RetainedReviewContext:
+        raise ReportContextError("report_review_context_invalid")
+    return _render_markdown(
+        result, allowed_units=allowed_units, warnings=warnings,
+        report_context=report_context, metadata=metadata, delivery_id=delivery_id,
+        private=review_context.for_result(result),
+    )
+
+
+def _extra_action() -> str:
+    return (
+        "Human confirmation needed, not a confirmed Agent fix task. Compare the exact user request, "
+        "delivered output and cited pre-Insights spans with the card's core claim. Establish whether "
+        "there is an unresolved contract violation, ambiguous wording, or already-correct behavior. "
+        "For a confirmed violation, request an Agent fix and a regression case. If the recommended "
+        "behavior already occurs, record 'Already handled / no Agent change requested' with evidence; "
+        "do not change working behavior just to remove a finding. If the core claim is unsupported, "
+        "request review of the finding/assessment rather than silently relabeling it. Engine behavior: "
+        "distinguish defects from successful recovery. unexpected_real alone is not a fix instruction; "
+        "as recorded, it is not Noise and earns no expected-issue credit. No frozen result is changed here."
+    )
+
+
+def _evidence_lines(excerpts: tuple[dict, ...]) -> list[str]:
+    lines = []
+    for item in excerpts[:2]:
+        lines += ["", "**Cited endpoint:** " + _markdown_text(
+            f"attempt {item['attempt']}, step {item['step_id']}, {item['endpoint_ref']}")]
+        for label, key in (("Actual request input", "request"), ("Delivered endpoint output", "response_output")):
+            suffix = " [Excerpt truncated; full content remains in the retained artifact.]" if item[key + "_truncated"] else ""
+            lines += ["", f"**{label}:** " + _markdown_text(item[key] + suffix)]
+    if len(excerpts) > 2:
+        lines += ["", f"Showing two of {len(excerpts)} cited endpoints; all references remain in the assessment."]
+    return lines
+
+
+def _render_markdown(
+    result, *, allowed_units, warnings, report_context, metadata, delivery_id, private=None,
 ) -> str:
     value, context = _inputs(result, allowed_units, report_context, metadata)
+    if delivery_id is not None and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", delivery_id) is None:
+        raise ReportContextError("report_delivery_identity_invalid")
     lines = [
         "# Agent Insights quality", "",
+        *([f"Run identity: {delivery_id}", ""] if delivery_id else []),
+        *(["Private human-validation report. Retained judgments are quoted, not reassessed.", ""]
+          if private is not None else []),
         *[line + "\n" for line in _metadata_lines(metadata) + _summary(value)],
     ]
     if value["failure_reasons"]:
         lines += ["Private failure notice: " + ", ".join(value["failure_reasons"]), ""]
-    lines += [
-        "| Unit | Outcome / exclusion | Confirmed Engine gaps | Other / unscored findings |",
-        "| --- | --- | --- | --- |",
-        *["| " + " | ".join(_markdown_text(cell) for cell in row) + " |"
-          for row in _rows(value, context)],
-    ]
     if context:
-        lines += ["", "## Reviewed contracts and follow-up", "", _CONTEXT_GUIDANCE]
-    for title, notes in _details(value, context):
-        lines += ["", "### " + _markdown_text(title)]
-        for label, text in notes:
-            lines += ["", f"**{_markdown_text(label)}:** {_markdown_text(text)}"]
-    lines += ["", *warning_text(warnings)]
+        lines += ["", _CONTEXT_GUIDANCE]
+    if private is not None:
+        lines += [
+            "", "For each reviewed case, record confirmed, disputed, or insufficient evidence, "
+            "with the supporting references and follow-up owner. Resolve evidence by Agent, version, "
+            "response/turn and span branch; an operation ID alone is not an invocation identity. "
+            "Distinguish the external user's task and delivered answer from internal model prompts "
+            "and intermediate outputs. Review results do not silently replace this frozen measurement.",
+        ]
+    agents = dict.fromkeys(unit["unit_id"]["agent"] for unit in value["units"])
+    for agent in agents:
+        units = [unit for unit in value["units"] if unit["unit_id"]["agent"] == agent]
+        missed = [u for u in units if u["scorable"] and u["kind"] == "issue"
+                  and not u["counts"]["correct_issues"]]
+        noise = sum(u["counts"]["noise_cards"] for u in units)
+        duplicates = sum(u["counts"]["duplicate_cards"] for u in units)
+        lines += [
+            "", f'<a id="{agent}"></a>', f"## {_agent_name(agent)}", "",
+            f"Confirmed Engine gaps: {len(missed)} missed defects; {noise} Noise; {duplicates} Duplicates.",
+        ]
+        if report_context:
+            lines += ["", "**Assigned To:** " + _markdown_text(report_context.assignments[agent])]
+        actionable = [
+            unit for unit in units if unit in missed or not unit["scorable"]
+            or any(f["classification"] in {"noise", "duplicate", "unexpected_real", "unknown"}
+                   for f in unit["findings"])
+        ]
+        if not actionable:
+            lines += ["", "No confirmed gap or unresolved finding in the measured scope; no human action requested."]
+        healthy = [u["unit_id"]["logical_version"] for u in units if u not in actionable]
+        if healthy:
+            lines += ["", "Other measured versions (no detailed follow-up): " + ", ".join(healthy) + "."]
+        if private is not None:
+            versions = []
+            for unit in units:
+                retained = private.get(_identity(unit), {})
+                deployment = retained.get("deployment")
+                if deployment:
+                    versions.append(
+                        f"{unit['unit_id']['logical_version']} = {deployment['agent_name']} / "
+                        f"{deployment['provider_version']} (deployment source {deployment['source_revision']}; "
+                        f"traffic source {retained['traffic_source_revision']}, tested {retained['tested_at']})"
+                    )
+            if versions:
+                lines += ["", "**Retained version references:**", *[
+                    "\n" + _markdown_text(version) for version in versions
+                ]]
+        for unit in actionable:
+            identity = _identity(unit)
+            detail = private.get(identity, {}) if private is not None else {}
+            lines += ["", f'<a id="{_unit_anchor(unit)}"></a>',
+                      "### " + _markdown_text(_unit_name(unit, context))]
+            if not unit["scorable"]:
+                lines += ["", "**Measurement exclusion:** " + ", ".join(unit["exclusion_reasons"])
+                          + ". All this unit's counts are excluded; not a confirmed Engine miss.",
+                          "", "Human validation: inspect the retained execution/evidence/assessment "
+                          "checkpoint for the stated gap before drawing a quality conclusion."]
+            if unit in missed:
+                lines += ["", "**Missed defect:** The reviewed defect was independently evidenced, "
+                          "but no current card correctly detected it.",
+                          "", "Human validation: compare the observations below with the reviewed "
+                          "expected symptom; inspect the retained current card set for a matching "
+                          "root diagnosis and evidence linkage. Expected Engine behavior: detect "
+                          "that evidenced defect with a reasonable category and attributable current evidence."]
+            if context:
+                reviewed = context[identity]
+                lines += [
+                    "", "**Reviewed expected symptom (not proof):** " + _markdown_text(reviewed.expected_symptom),
+                    "", "**Healthy Agent reference:** " + _markdown_text(reviewed.healthy_behavior),
+                    "", "**Source / reproduction reference:** " + _markdown_text(
+                        f"{reviewed.traffic_path}; source: {reviewed.source_path}"),
+                ]
+            if detail.get("artifact"):
+                lines += ["", "**Retained private assessment:** " + _markdown_text(detail["artifact"]),
+                          "", "Path is relative to the private Daily runtime directory. Contains "
+                          "private_detail.input.cards, private_detail.input.attempts, "
+                          "private_detail.input.visible_snapshot and private_detail.resolved judgments. "
+                          "Citation row/endpoint references are local to this artifact.",
+                          "", "**Measured provenance:** " + _markdown_text(
+                              f"traffic {detail['traffic_run_id']}; tested {detail['tested_at']}; "
+                              f"assessed {detail['assessed_at']}; traffic source "
+                              f"{detail['traffic_source_revision']}; judgment source {detail['source_revision']}.")]
+                if detail.get("deployment"):
+                    deployment = detail["deployment"]
+                    lines += ["", "**Retained deployment:** " + _markdown_text(
+                        f"{deployment['agent_name']} / version {deployment['provider_version']} "
+                        f"(source {deployment['source_revision']})")]
+                if unit in missed:
+                    observations = detail["observations"]
+                    lines += ["", f"Saved sufficient observations: {len(observations)}/10. "
+                              "Representative citations below; all ten judgments remain in the artifact."]
+                    for observed in observations[:2]:
+                        lines += ["", "**Saved observation:** " + _markdown_text(observed["reason"]),
+                                  "", "**Verify evidence:** " + _markdown_text("; ".join(observed["citations"]))]
+                        lines += _evidence_lines(observed["endpoint_evidence"])
+                if detail["limitations"]:
+                    lines += ["", "**Saved uncertainty:** " + ", ".join(detail["limitations"])]
+                for name, snapshot in detail["evidence_scope"].items():
+                    lines += ["", "**Retained evidence scope:** " + _markdown_text(
+                        f"{name}: observed {snapshot.get('observed_at', 'not recorded')}; "
+                        f"query complete={snapshot.get('query_complete', 'not recorded')}; "
+                        f"gaps={', '.join(snapshot.get('gaps', [])) or 'none recorded'}. "
+                        "A complete query is not proof of complete telemetry."
+                    )]
+            else:
+                lines += ["", "**Evidence detail unavailable here:** " + _markdown_text(
+                    detail.get("unavailable", "Consult the retained private assessment for actual claims, "
+                               "judgment reasons and citations. Catalog context is not proof."))]
+            roots = {
+                finding["root_cause_alias"]: finding["card_alias"]
+                for finding in reversed(unit["findings"])
+                if finding["classification"] in {"expected_detection", "unexpected_real"}
+            }
+            for finding in unit["findings"]:
+                classification = finding["classification"]
+                if classification in {"expected_detection", "historical"}:
+                    continue
+                alias = finding["card_alias"]
+                card = detail.get("cards", {}).get(alias, {})
+                scope = "scored" if finding["scored"] else "unscored"
+                lines += ["", f"#### {alias}: {classification} ({scope})"]
+                for label, field in (("Actual card", "title"), ("Claim", "claim"), ("Saved judgment", "reason")):
+                    if card.get(field):
+                        lines += ["", f"**{label}:** " + _markdown_text(card[field])]
+                if card.get("provider_card_id"):
+                    lines += ["", "**Retained card identity:** " + _markdown_text(card["provider_card_id"])]
+                if card.get("citations"):
+                    lines += ["", "**Verify evidence:** " + _markdown_text("; ".join(card["citations"]))]
+                    lines += _evidence_lines(card["endpoint_evidence"])
+                elif private is not None:
+                    lines += ["", "This retained card has no available citation detail here; consult its assessment "
+                              "artifact rather than treating the card's claim as proof."]
+                if classification == "unexpected_real":
+                    action = _extra_action()
+                elif classification == "noise":
+                    action = (
+                        "Compare the actual card claim with the saved reason and cited endpoint/spans. "
+                        "The core claim was judged incorrect; identify the contradicted assertion, not "
+                        "merely a severity or proposed-fix disagreement. If the cited evidence actually "
+                        "supports the correctly scoped claim, dispute the assessment rather than requesting "
+                        "an Engine fix. Expected Engine behavior: suppress or correct unsupported diagnoses "
+                        "and distinguish internal-only observations from delivered-response defects."
+                    )
+                elif classification == "duplicate":
+                    action = (
+                        f"Same independently supported root as {roots.get(finding['root_cause_alias'], 'the first correct card')}. "
+                        "Compare both distinct card identities and causal claims against the cited evidence. "
+                        "Expected Engine behavior: consolidate the same proven root without suppressing "
+                        "different defects; page copies and same-ID updates are not duplicates."
+                    )
+                else:
+                    action = (
+                        "Resolve the core diagnosis from retained current evidence before requesting a fix. "
+                        "Expected Engine behavior: disclose uncertainty rather than assert an unsupported defect."
+                    )
+                lines += ["", "**Human action:** " + _markdown_text(action)]
+    if warnings:
+        lines += ["", "## Measurement notes", "", *warning_text(warnings)]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -223,35 +321,39 @@ def render_html(
     report_context: ReviewedReportContext | None = None,
     metadata: ReportMetadata | None = None,
 ) -> str:
-    value, context = _inputs(result, allowed_units, report_context, metadata)
-    parts = [_html_summary(value, context)]
-    rows = _rows(value, context)
-    linked_rows = [
-        (f'<span id="{_unit_anchor(unit)}">{escape(row[0])}</span>', *row[1:])
-        for unit, row in zip(value["units"], rows, strict=True)
-    ]
-    parts.append(html_section("Unit results", html_table(
-        ("Unit", "Outcome / exclusion", "Confirmed Engine gaps", "Other / unscored findings"),
-        linked_rows, raw_cells={(index, 0) for index in range(len(rows))},
-    )))
-    if context:
-        parts.append(html_section("Reviewed contracts and follow-up", _paragraph(_CONTEXT_GUIDANCE)))
-    for title, notes in _details(value, context):
-        parts.append(html_section(title, "".join(
-            f"<p><strong>{escape(label)}:</strong> {escape(text)}</p>" for label, text in notes
-        )))
-    parts.append(_html_methodology(value, metadata, warnings))
-    return _html_page("".join(parts), metadata=metadata)
+    return markdown_view(render_markdown(
+        result, allowed_units=allowed_units, warnings=warnings,
+        report_context=report_context, metadata=metadata,
+    ))
+
+
+def markdown_view(markdown: str) -> str:
+    """Browser view of our emitted Markdown subset; never a second report model."""
+    def inline(line):
+        # Escape all source markup; only our generated bold labels are interpreted.
+        line = re.sub(r"\\([\\`*\[\]|_])", r"\1", line)
+        return re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escape(unescape(line)))
+
+    parts = []
+    for line in markdown.splitlines():
+        anchor = re.fullmatch(r'<a id="([a-z][a-z0-9-]*)"></a>', line)
+        heading = re.fullmatch(r"(#{1,4}) (.*)", line)
+        if anchor:
+            parts.append(f'<a id="{anchor[1]}"></a>')
+        elif heading:
+            level = len(heading[1])
+            parts.append(f"<h{level}>{inline(heading[2])}</h{level}>")
+        elif line.strip():
+            parts.append(f"<p>{inline(line)}</p>")
+    body = (
+        f'<tr><td style="padding:24px 28px;{_FONT}">'
+        '<p style="color:#64748b;">Browser view derived from the authoritative report.md.</p>'
+        + "".join(parts) + "</td></tr>"
+    )
+    return _html_page(body, metadata=None)
 
 
 _FONT = "font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:21px;"
-_REASONS = {
-    "missing_result": "Result not available",
-    "incomplete_execution": "Execution could not be completed",
-    "incomplete_evidence": "Insufficient attributable evidence",
-    "incomplete_assessment": "Assessment could not be completed",
-    "unknown_core": "Finding's core diagnosis remains unresolved",
-}
 
 
 def _paragraph(text: str) -> str:
@@ -297,7 +399,10 @@ def html_section(title: str, body: str, *, anchor: str | None = None) -> str:
 
 
 def _html_page(body: str, *, metadata: ReportMetadata | None, test_run: bool = False) -> str:
-    date_line = f"Daily report &middot; {escape(metadata.report_date)}" if metadata else "Daily report"
+    date_line = (
+        f"Daily report &middot; {escape(metadata.report_date)} &middot; {escape(metadata.region_display)}"
+        if metadata else "Daily report"
+    )
     test_banner = (
         '<tr><td bgcolor="#e8f2ff" style="padding:13px 28px;color:#164e80;'
         f'{_FONT}"><strong>TEST RUN</strong> &mdash; Private review only. '
@@ -336,7 +441,7 @@ def _agent_name(name: str) -> str:
     return name.removesuffix("-agent").replace("-", " ").title()
 
 
-def _html_summary(value: dict, context: dict) -> str:
+def _html_summary(value: dict, context: dict, details_href, scoring_link, warnings: tuple[str, ...]) -> str:
     counts, coverage = value["counts"], value["coverage"]
     score = (
         '<strong style="font-size:28px;line-height:36px;color:#12304a;">'
@@ -345,15 +450,15 @@ def _html_summary(value: dict, context: dict) -> str:
     )
     rows = [
         ("Quality score", score),
-        ("Issue coverage", f'{coverage["scored_issues"]}/{coverage["planned_issues"]} planned; '
+        ("Expected issues", f'{coverage["planned_issues"]} expected; '
          f'{counts["correct_issues"]} detected, '
-         f'{counts["expected_issues"] - counts["correct_issues"]} missed, '
-         f'{coverage["planned_issues"] - coverage["scored_issues"]} unscored'),
-        ("Baseline coverage", f'{coverage["scored_baselines"]}/{coverage["planned_baselines"]} planned'
-         " (no healthy bonus)"),
-        ("Finding quality", f'{counts["noise_cards"]} Noise cards (weight 1); '
-         f'{counts["duplicate_cards"]} Duplicate cards (weight 0.25)'),
-        ("Measurement exclusions", f'excluded whole units: {coverage["excluded_units"]}'),
+         f'{counts["expected_issues"] - counts["correct_issues"]} missed'
+         + (f'; {coverage["planned_issues"] - coverage["scored_issues"]} unscored'
+            if coverage["planned_issues"] != coverage["scored_issues"] else "")),
+        ("Noise / Duplicate", f'{counts["noise_cards"]} Noise; {counts["duplicate_cards"]} Duplicate'),
+        ("How Scoring Works",
+         f'<a href="{escape(scoring_link.href, quote=True)}" style="color:#0067b8;">Scoring rules on GitHub</a>'
+         if scoring_link else "Link pending publication of the current scoring rules."),
     ]
     banner = ""
     if not value["team_report_eligible"]:
@@ -363,24 +468,19 @@ def _html_summary(value: dict, context: dict) -> str:
             'A reliable overall measurement is unavailable. No team quality report is produced. '
             'The counts below describe only the scorable subset, not an overall quality score.</p>'
         )
-    body = banner + html_table(("Summary", "Result"), rows, raw_cells={(0, 1)})
-    body += _paragraph("Score change: not compared. No comparable prior measurement is attached; "
-                       "rotating cases or different exclusions must not imply improvement.")
-    exclusions = []
-    for unit in value["units"]:
-        if not unit["scorable"]:
-            reasons = "; ".join(
-                f"{_REASONS[reason]} ({reason})" for reason in unit["exclusion_reasons"]
-            )
-            exclusions.append((_unit_name(unit, context), reasons))
+    body = banner + html_table(("Summary", "Result"), rows, raw_cells={(0, 1), (3, 1)})
+    exclusions = [unit for unit in value["units"] if not unit["scorable"]]
     if exclusions:
-        body += _paragraph(
-            "Excluded units are measurement follow-ups, not a confirmed Engine miss. "
-            "Their detections, Noise and Duplicate counts are excluded together."
+        references = ", ".join(_detail_link(unit, context, details_href) for unit in exclusions)
+        body += (
+            f'<p style="margin:12px 0;color:#704c16;{_FONT}">'
+            f'{len(exclusions)} unit(s) excluded from every score count; evidence is not complete. '
+            f'Human validation: {references}.</p>'
         )
-        body += html_table(("Excluded unit", "Why it could not be scored"), exclusions)
     if value["failure_reasons"]:
         body += _paragraph("Private failure notice: " + ", ".join(value["failure_reasons"]))
+    if "logging_failed" in warnings:
+        body += _paragraph(warning_text(("logging_failed",))[0])
     return html_section("Summary", body)
 
 
@@ -389,7 +489,7 @@ def _detail_link(unit: dict, context: dict, details_href: str | None, *, short: 
     if details_href is None:
         return escape(label)
     return (
-        f'<a href="{escape(details_href, quote=True)}#{_unit_anchor(unit)}" '
+        f'<a href="{escape(details_href, quote=True)}#{unit["unit_id"]["agent"]}" '
         f'style="color:#0067b8;text-decoration:underline;">{escape(label)}</a>'
     )
 
@@ -420,13 +520,7 @@ def _html_improvements(value: dict, context: dict, details_href: str | None) -> 
     body = (
         html_table(("Product gap", "What happened", "Needed behavior"), rows,
                    raw_cells={(index, 1) for index in range(len(rows))})
-        if rows else _paragraph("No confirmed Engine gap in the scorable scope. "
-                                "This does not establish that excluded units are healthy.")
-    )
-    body += _paragraph(
-        "These are confirmed Engine gaps, not a checklist of Agent fixes. "
-        "Unit references identify the retained assessments; reviewed catalog descriptions "
-        "alone are not proof of a defect."
+        if rows else _paragraph("No confirmed Engine gap in the measured scope.")
     )
     return html_section("What needs improvement", body)
 
@@ -451,69 +545,42 @@ def _html_working(value: dict) -> str:
 
 
 def _html_agents(
-    value: dict, context: dict, details_href: str | None, metadata: ReportMetadata | None,
+    value: dict, context: dict, details_href: str | None, assignments: dict, agent_links: dict,
+    *, attached_report: bool,
 ) -> str:
     rows = []
     for agent in dict.fromkeys(unit["unit_id"]["agent"] for unit in value["units"]):
         units = [unit for unit in value["units"] if unit["unit_id"]["agent"] == agent]
         issues = [unit for unit in units if unit["kind"] == "issue"]
-        baselines = [unit for unit in units if unit["kind"] == "baseline"]
         scored = [unit for unit in units if unit["scorable"]]
         kind = ""
         if context:
             source = context[_identity(units[0])].source_path
             kind = "Prompt" if source.endswith("definition.json") else "Hosted"
-        name = escape(_agent_name(agent)) + (f"<br><small>{kind}</small>" if kind else "")
-        issue_text = (
-            f'{sum(unit["counts"]["correct_issues"] for unit in issues)} detected / '
-            f'{sum(unit["scorable"] for unit in issues)} scored / {len(issues)} planned'
-        )
-        baseline_text = f'{sum(unit["scorable"] for unit in baselines)}/{len(baselines)} scored'
+        name = escape(_agent_name(agent))
+        if agent in agent_links:
+            href = validate_foundry_link(agent_links[agent])
+            name = f'<a href="{escape(href, quote=True)}" style="color:#0067b8;">{name}</a>'
+        else:
+            name += "<br><small>Foundry link unavailable</small>"
+        if kind:
+            name += f"<br><small>{kind}</small>"
+        missed = sum(unit["scorable"] and not unit["counts"]["correct_issues"] for unit in issues)
         card_text = (
-            f'{sum(unit["counts"]["noise_cards"] for unit in scored)} Noise / '
+            f'{missed} missed; {sum(unit["counts"]["noise_cards"] for unit in scored)} Noise; '
             f'{sum(unit["counts"]["duplicate_cards"] for unit in scored)} Duplicate'
         )
-        references = ", ".join(
-            _detail_link(unit, {}, details_href, short=True) for unit in units
+        references = (
+            f'<a href="{escape(details_href, quote=True)}#{agent}" style="color:#0067b8;">'
+            "Review findings &amp; evidence</a>" if details_href else
+            f"Attached report.md: {_agent_name(agent)}" if attached_report else
+            "Detailed report link unavailable"
         )
-        rows.append((name, issue_text, baseline_text, card_text, references))
-    location = _paragraph("Test region: " + metadata.region_display) if metadata else ""
-    return html_section("Test Agents", location + html_table(
-        ("Agent", "Issues", "Baseline", "Findings", "Version references"), rows,
-        raw_cells={(index, column) for index in range(len(rows)) for column in (0, 4)},
+        rows.append((name, card_text, references, assignments.get(agent, "Assignment unavailable")))
+    return html_section("Test Agents", html_table(
+        ("Agent", "Findings", "Human Validation", "Assigned To"), rows,
+        raw_cells={(index, column) for index in range(len(rows)) for column in (0, 2)},
     ))
-
-
-def _html_other(value: dict, context: dict, details_href: str | None) -> str:
-    rows = []
-    for unit in value["units"]:
-        for finding in unit["findings"]:
-            kind = finding["classification"]
-            if kind == "historical" or finding["scored"] and kind != "unexpected_real":
-                continue
-            note = (
-                "Independently supported Agent problem outside the expected defect; "
-                "not Noise and no additional expected-issue credit."
-                if kind == "unexpected_real" else
-                "Retained for follow-up only; this finding does not contribute to the score."
-            )
-            rows.append((_detail_link(unit, context, details_href),
-                         f'{finding["card_alias"]}: {kind}'
-                         + (" (unscored)" if not finding["scored"] else ""), note))
-    if not rows:
-        return ""
-    return html_section("Other findings and measurement follow-up", html_table(
-        ("Unit", "Finding", "Meaning"), rows,
-        raw_cells={(index, 0) for index in range(len(rows))},
-    ))
-
-
-def _html_methodology(value: dict, metadata: ReportMetadata | None, warnings: tuple[str, ...]) -> str:
-    summary = _summary(value)
-    body = "".join(_paragraph(line) for line in summary[1:2] + summary[3:])
-    body += "".join(_paragraph(line) for line in _metadata_lines(metadata))
-    body += "".join(_paragraph(line) for line in warning_text(warnings))
-    return html_section("How Scoring Works", body, anchor="how-scoring-works")
 
 
 def render_email_html(
@@ -521,24 +588,33 @@ def render_email_html(
     warnings: tuple[str, ...] = (), report_context: ReviewedReportContext | None = None,
     metadata: ReportMetadata | None = None, test_run: bool = False,
     details_href: str | None = None, delivery_id: str | None = None,
+    scoring_link: VerifiedScoringLink | None = None,
+    agent_links: dict[str, str] | None = None, attached_report: bool = False,
 ) -> str:
     """Compact email projection; private context is inserted by the email boundary."""
     if details_href not in {None, "report.html"}:
         raise ReportContextError("report_detail_link_invalid")
     if delivery_id is not None and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", delivery_id) is None:
         raise ReportContextError("report_delivery_identity_invalid")
+    if scoring_link is not None and type(scoring_link) is not VerifiedScoringLink:
+        raise ReportContextError("report_scoring_link_unverified")
+    warning_text(warnings)
     value, context = _inputs(result, allowed_units, report_context, metadata)
+    agent_links = {} if agent_links is None else agent_links
+    if not isinstance(agent_links, dict) or not set(agent_links) <= {
+        unit["unit_id"]["agent"] for unit in value["units"]
+    }:
+        raise ReportContextError("report_foundry_link_invalid")
+    for link in agent_links.values():
+        validate_foundry_link(link)
     parts = [
-        _html_summary(value, context),
+        _html_summary(value, context, details_href, scoring_link, warnings),
         _html_improvements(value, context, details_href),
         _html_working(value),
-        _html_agents(value, context, details_href, metadata),
-        _html_other(value, context, details_href),
+        _html_agents(value, context, details_href, report_context.assignments if report_context else {},
+                     agent_links, attached_report=attached_report),
         "<!--private-context-->",
-        _html_methodology(value, metadata, warnings),
     ]
-    if delivery_id:
-        parts.append(html_section("Run reference", _paragraph(delivery_id)))
     return _html_page("".join(parts), metadata=metadata, test_run=test_run)
 
 

@@ -70,11 +70,10 @@ def test_public_files_share_one_validated_envelope_and_rendering(repository):
     assert "Source commit: " + value["source_commit"] in markdown
     targets = select_daily(load_catalog(repository), date.fromisoformat(value["report_date"]))
     for target in targets:
-        if not target.is_baseline:
-            assert target.expectation["title"] in markdown
-            assert target.expectation["root_cause"] in markdown
-            assert target.expectation["expected_fix"] in markdown
-    assert "card-0001: expected_detection (scored)" in markdown
+        assert target.unit_id.logical_version in markdown
+        assert f'id="{target.unit_id.agent}"' in markdown
+    assert "No confirmed gap or unresolved finding" in markdown
+    assert "card-0001: expected_detection (scored)" not in markdown
 
 
 def test_dated_report_is_not_overwritten_by_a_different_measurement(repository):

@@ -46,6 +46,10 @@ def parser() -> argparse.ArgumentParser:
         "--restyle", action="store_true",
         help="Render current presentation from this delivery's frozen result; no remeasurement",
     )
+    preview.add_argument(
+        "--scoring-revision",
+        help="Verify a published GitHub commit's QUALITY_BAR.md against the reviewed local file",
+    )
     for command in ("email-claim", "email-result"):
         child = commands.add_parser(command, help="Claim app-native send" if command == "email-claim"
                                     else "Record actual app-native send evidence")
@@ -344,6 +348,8 @@ async def _run(
 
 def _daily_status(runtime, records, run_id, result, email, published, warnings):
     pointer = records.read("quality-result")
+    frozen = records.read_completed("delivery-inputs", missing_ok=True)
+    presentation = frozen.get("presentation", {}) if frozen else {}
     return {
         "run_id": run_id, "profile": "daily", "status": result.status.value,
         "score": result.score, "counts": result.counts.to_dict(),
@@ -351,6 +357,12 @@ def _daily_status(runtime, records, run_id, result, email, published, warnings):
         "delivery_id": email.request.delivery_id,
         "email_record_path": str(runtime.outbox("email")._path("progress", run_id)),
         "email_status": email.status, "warnings": sorted(warnings), **published,
+        **({
+            "private_report_markdown_path": str(
+                records._path("artifacts", "presentation/report").with_suffix(".md"),
+            ),
+            "presentation_blockers": presentation["blockers"],
+        } if presentation else {}),
     }, 0 if result.team_report_eligible else 2
 
 
@@ -440,6 +452,7 @@ def main(
                 from .email_preview import export_email_preview
                 preview = export_email_preview(
                     runtime, args.delivery_id, root=root, restyle=args.restyle,
+                    scoring_revision=args.scoring_revision,
                 )
                 value, code = preview.to_dict(), 0
             elif args.command == "email-claim":

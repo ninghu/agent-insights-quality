@@ -68,14 +68,14 @@ def test_counts_coverage_and_exclusions_agree_across_every_renderer(excluded, st
             assert "Quality score:" in rendered
         assert f"C={result.counts.correct_issues}; E_scored={result.counts.expected_issues}" in rendered
         assert f"N_scored={result.counts.noise_cards}; D_scored={result.counts.duplicate_cards}" in rendered
-        assert f"{result.coverage.scored_issues}/20 planned" in rendered
-        assert f"{result.coverage.scored_baselines}/5 planned" in rendered
+        assert f"{result.coverage.scored_issues}/20 expected" in rendered
+        assert f"{result.coverage.scored_baselines}/5 expected" in rendered
         assert f"excluded whole units: {excluded}" in rendered
         assert "Noise weight 1; Duplicate weight 0.25" in rendered
         assert "No overall quality threshold" in rendered
         if excluded:
             assert "incomplete_evidence" in rendered
-            assert "unscored noise" in rendered
+            assert "noise (unscored)" in rendered
         assert "Confirmed Engine gaps" in rendered
         assert "framework/infrastructure" in rendered
     assert result.score is None if excluded > 2 else result.score is not None
@@ -257,13 +257,11 @@ def test_classified_card_aliases_explain_duplicate_noise_unexpected_and_history(
     html = unescape(re.sub("<[^>]+>", "", render_html(
         result, allowed_units=plan, report_context=load_report_context(catalog_root, allowed_units=plan),
     )))
-    for index, classification in enumerate(
-        ("expected_detection", "duplicate", "noise", "unexpected_real", "historical"), 1,
-    ):
+    for index, classification in ((2, "duplicate"), (3, "noise"), (4, "unexpected_real")):
         assert f"card-{index:04d}: {classification}" in html
     assert "Same independently supported root as card-0001" in html
     assert "not Noise and earns no expected-issue credit" in html
-    assert "Historical context only; no current score contribution" in html
+    assert "Human confirmation needed" in html
     assert result.counts.to_dict() == {
         "correct_issues": 1, "expected_issues": 1, "noise_cards": 1, "duplicate_cards": 1,
     }
@@ -285,8 +283,8 @@ def test_twenty_issue_coverage_stays_identical_with_reviewed_context(catalog_roo
     html = render_html(result, allowed_units=plan, report_context=context)
     markdown = render_markdown(result, allowed_units=plan, report_context=context)
     for rendered in (html, markdown):
-        assert f"{result.coverage.scored_issues}/20 planned" in rendered
-        assert f"{result.coverage.scored_baselines}/5 planned" in rendered
+        assert f"{result.coverage.scored_issues}/20 expected" in rendered
+        assert f"{result.coverage.scored_baselines}/5 expected" in rendered
         assert f"excluded whole units: {excluded}" in rendered
         if excluded:
             assert "not a confirmed Engine miss" in rendered
@@ -330,22 +328,26 @@ def test_email_brief_preserves_counts_and_numeric_coverage_without_verdict_label
     assert "max-width:960px" in html and "font-size:14px" in html
     assert "<!--[if mso]>" in html and 'role="presentation"' in html
     assert "TEST RUN" in plain
-    assert f"{result.coverage.scored_issues}/20 planned" in plain
-    assert f"{result.coverage.scored_baselines}/5 planned" in plain
-    assert f"excluded whole units: {excluded}" in plain
-    assert f"C={result.counts.correct_issues}; E_scored={result.counts.expected_issues}" in plain
-    assert f"N_scored={result.counts.noise_cards}; D_scored={result.counts.duplicate_cards}" in plain
+    assert "20 expected" in plain
+    assert f'{result.counts.correct_issues} detected' in plain
+    assert f'{result.counts.noise_cards} Noise; {result.counts.duplicate_cards} Duplicate' in plain
+    assert "Baseline coverage" not in plain
+    assert "Measurement exclusions" not in plain
+    assert "E_scored=" not in plain and "C=" not in plain
     assert ("PERSONAL NOTICE" in plain) == (excluded > 2)
-    assert "Score change: not compared" in plain
+    assert "Score change" not in plain
     assert "Extra cards" not in plain
-    assert "framework/infrastructure" in plain
+    assert "How Scoring Works" in plain
+    assert 'id="how-scoring-works"' not in html
     assert html.index(">Summary<") < html.index(">What needs improvement<")
     assert html.index(">What needs improvement<") < html.index(">What is working<")
     assert html.index(">What is working<") < html.index(">Test Agents<")
-    assert html.count("<small>") == 0  # No inferred catalog type for synthetic identities.
+    assert "Prompt</small>" not in html  # No inferred catalog type for synthetic identities.
     if excluded:
-        assert "not a confirmed Engine miss" in plain
-        assert "unscored" in plain and "incomplete_evidence" in plain
+        assert f"{excluded} unit(s) excluded" in plain
+        assert "evidence is not complete" in plain and "Human validation" in plain
+    else:
+        assert "excluded from every score count" not in plain
 
 
 def test_email_brief_has_five_agent_rows_and_complete_detail_targets():
@@ -356,11 +358,12 @@ def test_email_brief_has_five_agent_rows_and_complete_detail_targets():
     assert agent_section.count('<tr bgcolor="#f8fafc">') == 2
     details = render_html(result, allowed_units=plan)
     links = re.findall(r'href="report\.html#([^"]+)"', html)
-    assert len(set(links)) == 25
+    assert len(set(links)) == 5
     for anchor in links:
         assert f'id="{anchor}"' in details
     assert "Reviewed contracts and follow-up" not in html
-    assert "Noise weight 1; Duplicate weight 0.25" in html
+    assert "Scoring rules" not in html  # No invented published link.
+    assert "Link pending publication" in html
 
 
 def test_real_baseline_findings_are_not_automatically_noise_or_health_failures():
@@ -374,8 +377,11 @@ def test_real_baseline_findings_are_not_automatically_noise_or_health_failures()
     html = render_email_html(result, allowed_units=plan)
     assert "1 of 1 scorable baselines had no confirmed Noise" in html
     assert "not a claim of perfect Agent health" in html
-    assert "Independently supported Agent problem outside the expected defect" in html
-    assert "not Noise and no additional expected-issue credit" in html
+    assert "Independently supported Agent problem outside the expected defect" not in html
+    assert "Other findings" not in html
+    markdown = render_markdown(result, allowed_units=plan)
+    assert "Human confirmation needed" in markdown
+    assert "not Noise and earns no expected-issue credit" in markdown
     assert "Healthy Agent versions should produce zero findings" not in html
     assert "Incorrect findings (Noise)</td>" not in html
 
@@ -388,3 +394,52 @@ def test_brief_cannot_introduce_unvalidated_report_links(href):
     result, plan = report()
     with pytest.raises(ReportContextError, match="detail_link_invalid"):
         render_email_html(result, allowed_units=plan, details_href=href)
+
+
+def test_agent_table_has_only_approved_columns_and_catalog_assignments(catalog_root):
+    result, plan = reviewed_sample()
+    before = load_report_context(catalog_root, allowed_units=plan)
+    path = catalog_root / "catalogs" / "AGENT_CATALOG.yaml"
+    catalog = yaml.safe_load(path.read_text())
+    catalog["agents"][0]["owner"] = "Synthetic Reviewed Owner"
+    path.write_text(yaml.safe_dump(catalog), encoding="utf-8")
+    after = load_report_context(catalog_root, allowed_units=plan)
+    assert before.to_private_dict()["units"] == after.to_private_dict()["units"]
+    assert after.assignments["weather-agent"] == "Synthetic Reviewed Owner"
+    html = render_email_html(
+        result, allowed_units=plan, report_context=after, details_href="report.html",
+    )
+    table = html.split(">Test Agents</h2>", 1)[1]
+    assert re.findall(r'<th[^>]*>([^<]+)</th>', table) == [
+        "Agent", "Findings", "Human Validation", "Assigned To",
+    ]
+    assert "Synthetic Reviewed Owner" in table
+    assert "report.html#weather-agent" in table
+    assert not re.search(r"\bplanned\b", html, re.I)
+    assert "Baseline coverage" not in html and "Run notes" not in html
+    assert "How Scoring Works</h2>" not in html and "Run reference" not in html
+
+
+@pytest.mark.parametrize("owner", [None, "", ["One", "Two"], "One;Two", "One, Two", "<script>One</script>"])
+def test_catalog_owner_must_be_one_reviewed_person(catalog_root, owner):
+    _, plan = reviewed_sample()
+    path = catalog_root / "catalogs" / "AGENT_CATALOG.yaml"
+    catalog = yaml.safe_load(path.read_text())
+    catalog["agents"][0]["owner"] = owner
+    path.write_text(yaml.safe_dump(catalog), encoding="utf-8")
+    with pytest.raises(ReportContextError):
+        load_report_context(catalog_root, allowed_units=plan)
+
+
+def test_healthy_units_do_not_create_detailed_follow_up_boilerplate(catalog_root):
+    _, plan = reviewed_sample()
+    result = aggregate_results(plan, (
+        UnitResult(plan[0].unit_id),
+        UnitResult(plan[1].unit_id, (CardVerdict("card-0001", CoreVerdict.CORRECT, "issue-001"),)),
+    ))
+    markdown = render_markdown(
+        result, allowed_units=plan, report_context=load_report_context(catalog_root, allowed_units=plan),
+    )
+    assert "No confirmed gap or unresolved finding" in markdown
+    assert "### weather-agent / v0" not in markdown
+    assert "### weather-agent / issue-001" not in markdown

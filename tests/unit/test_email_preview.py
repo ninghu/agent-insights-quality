@@ -129,8 +129,8 @@ def test_exact_exports_preserve_prepared_fields_and_every_existing_record(runtim
     assert mail.get_body(preferencelist=("html",)).get_content() == request.html
     assert (preview.directory / "email.html").read_bytes() == request.html.encode("utf-8")
     attachment, = mail.iter_attachments()
-    assert attachment.get_filename() == "report.html"
-    assert attachment.get_content() == (preview.directory / "report.html").read_text(encoding="utf-8")
+    assert attachment.get_filename() == "report.md"
+    assert attachment.get_content() == (preview.directory / "report.md").read_text(encoding="utf-8")
     assert str(result.score) in attachment.get_content()
     manifest = json.loads((preview.directory / "manifest.json").read_text())
     assert manifest["export_kind"] == "exact_prepared_request"
@@ -153,14 +153,14 @@ def test_restyle_uses_frozen_result_current_style_and_distinct_local_identity(ru
     assert styled.directory != exact.directory
     assert "Original frozen presentation" not in html
     assert f"{result.score:.1f}" in html and "LOCAL PRESENTATION PREVIEW" in html
-    assert SOURCE in html and "renderer provenance are in manifest.json" in html
+    assert SOURCE not in html and SOURCE in detailed and "renderer provenance are in manifest.json" in html
     assert "Full" not in str(mail["Subject"]) and "Partial" not in str(mail["Subject"])
     assert "LOCAL PRESENTATION PREVIEW" in mail["Subject"]
     assert "report.html" in html
     assert 'href="report.html' not in eml_html
-    assert "Open the attached report.html" in eml_html
+    assert "Open the attached report.md" in eml_html
     assert "cid:" not in eml_html and "file:" not in eml_html
-    assert "Synthetic frozen private optional context" in eml_html
+    assert "Synthetic frozen private optional context" not in eml_html
     assert "Unsupported factual answer" in detailed
     assert 'id="unit-weather-agent-issue-001"' in detailed
     assert mail["X-AIQ-Local-Preview"] == "presentation-restyle"
@@ -191,11 +191,11 @@ def test_old_request_without_frozen_inputs_is_exact_only_and_does_not_load_catal
     monkeypatch.setattr(email_preview, "load_report_context", lambda *a, **k: pytest.fail("Current catalog"))
     preview = exported(runtime, request)
     assert (preview.directory / "email.html").read_bytes() == request.html.encode("utf-8")
-    assert (preview.directory / "report.html").read_bytes() == request.html.encode("utf-8")
+    assert "Detailed report unavailable" in (preview.directory / "report.md").read_text()
     assert message(preview).get_body().get_content() == request.html
-    assert not list(message(preview).iter_attachments())
+    assert [part.get_filename() for part in message(preview).iter_attachments()] == ["report.md"]
     manifest = json.loads((preview.directory / "manifest.json").read_text())
-    assert manifest["report_kind"] == "prepared_email_copy"
+    assert manifest["report_kind"] == "frozen_inputs_unavailable_notice"
     assert manifest["measurement_source_revision"] is None
     with pytest.raises(PreviewError, match="frozen_inputs_missing"):
         exported(runtime, request, restyle=True)
@@ -297,7 +297,7 @@ def test_legacy_same_run_snapshot_restyles_as_disclosed_table_without_parsing_or
     assert "Initial 7-day lookback" not in html
     assert "Since the previous successfully submitted official report snapshot" not in html
     assert "Saved verbatim, not parsed." not in html
-    assert "synthetic assessor" in html and contexts == [notes, notes]
+    assert "synthetic assessor" not in html and contexts == [notes, notes]
     manifest = json.loads((preview.directory / "manifest.json").read_text())
     assert manifest["work_item_presentation"]["source"] == "same_run_legacy_snapshot"
     assert manifest["work_item_presentation"]["retained_text_prefix_removed"] is True
@@ -363,7 +363,7 @@ def test_legacy_context_never_falls_back_to_another_run(runtime):
     preview = exported(runtime, request, restyle=True)
     html = message(preview).get_body().get_content()
     assert "Synthetic legacy work item" not in html
-    assert "Synthetic frozen private optional context" in html
+    assert "Synthetic frozen private optional context" not in html
     manifest = json.loads((preview.directory / "manifest.json").read_text())
     assert manifest["work_item_presentation"]["source"] == "legacy_snapshot_unavailable"
 
@@ -377,7 +377,7 @@ def test_retained_legacy_unavailable_context_preserves_notes_without_fabricating
     preview = exported(runtime, request, restyle=True)
     html = message(preview).get_body().get_content()
     assert "Unavailable." in html and "This is not an empty result." in html
-    assert "Synthetic frozen private optional context" in html
+    assert "Synthetic frozen private optional context" not in html
     assert "None in this snapshot." not in html
     manifest = json.loads((preview.directory / "manifest.json").read_text())
     assert manifest["work_item_presentation"]["retained_text_prefix_removed"] is False
@@ -563,7 +563,7 @@ def test_manifest_is_committed_last_and_atomic_failure_is_recoverable(runtime, m
     monkeypatch.setattr(email_preview, "_atomic_write", fail_manifest)
     with pytest.raises(CheckpointError):
         exported(runtime, request)
-    assert written == ["email.html", "email.eml", "report.html", "manifest.json"]
+    assert written == ["email.html", "email.eml", "report.md", "report.html", "manifest.json"]
     assert not list((runtime.directory / "previews").rglob("manifest.json"))
     monkeypatch.setattr(email_preview, "_atomic_write", write)
     assert (exported(runtime, request).directory / "manifest.json").is_file()

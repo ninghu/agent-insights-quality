@@ -22,7 +22,9 @@ from .email import EmailRequest, TEAM_RECIPIENT, _address, read_email
 from .errors import QualityError
 from .privacy import restore_public_result, warning_text
 from .report_context import ReportMetadata, load_report_context
-from .reporting import render_html
+from .report_links import VerifiedScoringLink, configured_scoring_link, foundry_links
+from .report_review import RetainedReviewContext
+from .reporting import markdown_view, render_markdown, render_private_markdown
 from .results import PlannedUnit, UnitId
 from .state import (
     RuntimeStore, StateConflict, StateError, _atomic_write, _confirm_durable,
@@ -40,13 +42,16 @@ class EmailPreview:
     presentation_id: str
     directory: Path
     restyled: bool
+    blockers: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         return {
             "delivery_id": self.delivery_id, "presentation_id": self.presentation_id,
             "status": "local_preview", "restyled": self.restyled,
+            "blockers": list(self.blockers),
             **{name + "_path": str(self.directory / filename) for name, filename in (
                 ("email_html", "email.html"), ("email_eml", "email.eml"),
+                ("report_markdown", "report.md"),
                 ("report_html", "report.html"), ("manifest", "manifest.json"),
             )},
         }
@@ -111,7 +116,7 @@ class _SafeHTML(HTMLParser):
         if re.fullmatch(r"#[a-zA-Z][a-zA-Z0-9_-]*", value):
             return
         if self.local_links and re.fullmatch(
-            r"report\.html(?:#unit-[a-z0-9-]+)?", value,
+            r"report\.html(?:#[a-z][a-z0-9-]*)?", value,
         ):
             return
         try:
@@ -145,7 +150,7 @@ def _frozen_inputs(runtime, request):
     }
     if (
         not required <= frozen.keys()
-        or frozen.keys() - required - {"configured_assessor", "work_item_context"}
+        or frozen.keys() - required - {"configured_assessor", "work_item_context", "presentation"}
         or frozen["test_run"] is not request.test_run
         or type(frozen["rerun"]) is not int or frozen["rerun"] != request.rerun
         or frozen["report_date"] != request.report_date
@@ -196,6 +201,23 @@ def _frozen_inputs(runtime, request):
     except (KeyError, TypeError, ValueError) as error:
         raise PreviewError("email_preview_frozen_invalid") from error
     result = restore_public_result(frozen["report"], allowed_units=plan)
+    if "presentation" in frozen:
+        from .report_links import validate_foundry_link
+        presentation = frozen["presentation"]
+        if (
+            not isinstance(presentation, dict) or set(presentation) != {
+                "assignments", "foundry_links", "scoring_link", "blockers", "private_report_artifact",
+            }
+            or not isinstance(presentation["assignments"], dict)
+            or not isinstance(presentation["foundry_links"], dict)
+            or not isinstance(presentation["blockers"], list)
+            or presentation["private_report_artifact"] != "presentation/report"
+        ):
+            raise PreviewError("email_preview_frozen_invalid")
+        if not set(presentation["foundry_links"]) <= {unit.unit_id.agent for unit in plan}:
+            raise PreviewError("email_preview_frozen_invalid")
+        for href in presentation["foundry_links"].values():
+            validate_foundry_link(href)
     mode = "test" if request.test_run else "official" if result.team_report_eligible else "failure"
     if request.mode != mode or request.recipient != (
         TEAM_RECIPIENT if mode == "official" else frozen["recipient"]
@@ -265,6 +287,7 @@ def _renderer_provenance(root: Path) -> dict:
         for name in (
             "email_preview.py", "email.py", "reporting.py", "report_context.py",
             "privacy.py", "results.py", "scoring.py", "work_items.py",
+            "report_review.py", "report_links.py",
         )
     }
     return {
@@ -282,7 +305,7 @@ def _banner(html: str, *, delivery_id: str, attachment: bool = False) -> str:
         "<strong>LOCAL PRESENTATION PREVIEW &mdash; NOT SENT</strong><br>"
         f"Delivery: {escape(delivery_id)}. Same frozen measurement; no remeasurement.<br>"
         "The prepared email is unchanged. Measurement and renderer provenance are in manifest.json."
-        + ("<br>Open the attached report.html for the self-contained detailed report."
+        + ("<br>Open the attached report.md; its per-Agent headings contain human validation."
            if attachment else "")
         + "</div>"
     )
@@ -304,8 +327,8 @@ def _mime(request: EmailRequest, subject: str, html: str, report: str | None, *,
     message.set_param("charset", "utf-8")
     if report is not None:
         message.add_attachment(
-            report.encode("utf-8"), maintype="text", subtype="html",
-            cte="base64", filename="report.html",
+            report.encode("utf-8"), maintype="text", subtype="markdown",
+            cte="base64", filename="report.md",
         )
         message.get_payload()[-1].set_param("charset", "utf-8")
         message.set_boundary("aiq-preview-" + sha256((html + report).encode("utf-8")).hexdigest())
@@ -340,6 +363,7 @@ def _save_export(runtime, directory, files, manifest):
 
 def export_email_preview(
     runtime: RuntimeStore, delivery_id: str, *, root: Path, restyle: bool = False,
+    scoring_revision: str | None = None,
 ) -> EmailPreview:
     """Export only beneath Daily/previews; no arbitrary output or recipient."""
     if runtime.environment != "daily":
@@ -354,12 +378,22 @@ def export_email_preview(
     if restyle and restored is None:
         raise PreviewError("email_preview_frozen_inputs_missing")
     renderer = _renderer_provenance(root)
-    html, subject, report = request.html, request.subject, request.html
+    html, subject = request.html, request.subject
+    markdown = (
+        "# Detailed report unavailable\n\n"
+        "This legacy delivery has no frozen result/context. Its prepared email is exported "
+        "unchanged; no measurement or detailed report has been reconstructed.\n"
+    )
     eml_html = html
-    detail_kind = "prepared_email_copy"
+    detail_kind = "frozen_inputs_unavailable_notice"
     context_matches = None
     work_item_provenance = None
     metadata = None
+    blockers, agent_links, scoring_link = [], {}, None
+    review = None
+    assignments = None
+    if scoring_revision is not None:
+        scoring_link = VerifiedScoringLink(root, scoring_revision)
     if restored is not None:
         frozen, plan, result, metadata = restored
         current = None
@@ -368,14 +402,42 @@ def export_email_preview(
             context_matches = current.to_private_dict()["units"] == frozen["report_context"]["units"]
             if not context_matches:
                 raise PreviewError("email_preview_reviewed_context_changed")
+            agent_links, missing_links = foundry_links(runtime, delivery_id, plan)
+            blockers.extend(missing_links)
+            if scoring_link is None:
+                retained = frozen.get("presentation", {}).get("scoring_link")
+                if retained:
+                    scoring_link = VerifiedScoringLink.from_retained(root, retained)
+                else:
+                    try:
+                        scoring_link = configured_scoring_link(runtime, root)
+                    except (QualityError, OSError):
+                        blockers.append("scoring_link_verification_failed")
+            if scoring_link is None:
+                blockers.append("scoring_link_publication_required")
+            assignments = {
+                "source": "current_reviewed_catalog_presentation_only",
+                "catalog_sha256": sha256((root / "catalogs" / "AGENT_CATALOG.yaml").read_bytes()).hexdigest(),
+                "owners": current.assignments,
+            }
         # Exact exports need no current catalog, even if the old unit no longer
         # exists. Their optional attachment shows frozen counts without new prose.
-        report = render_html(
+        markdown = render_markdown(
             result, allowed_units=plan, warnings=tuple(frozen["warnings"]),
-            report_context=current, metadata=metadata,
+            report_context=current, metadata=metadata, delivery_id=delivery_id,
         )
         detail_kind = "frozen_result"
         if restyle:
+            review = RetainedReviewContext(runtime, delivery_id, result)
+            if "presentation" in frozen:
+                retained_report = runtime.run(delivery_id).read_artifact("presentation/report")
+                if retained_report.get("retained_review") != review.provenance():
+                    raise PreviewError("email_preview_retained_review_changed")
+            markdown = render_private_markdown(
+                result, allowed_units=plan, warnings=tuple(frozen["warnings"]),
+                report_context=current, metadata=metadata, delivery_id=delivery_id,
+                review_context=review,
+            )
             from .email import render_email_content
             work_items, private_context, work_item_provenance = _work_item_presentation(
                 runtime, request, frozen,
@@ -386,9 +448,12 @@ def export_email_preview(
                 work_item_context=work_items, report_context=current,
                 region_display=metadata.region_display, source_revision=metadata.source_revision,
                 delivery_id=delivery_id,
+                scoring_link=scoring_link, agent_links=agent_links,
             )
             subject, html = render_email_content(result, details_href="report.html", **kwargs)
-            eml_subject, eml_html = render_email_content(result, details_href=None, **kwargs)
+            eml_subject, eml_html = render_email_content(
+                result, details_href=None, attached_report=True, **kwargs,
+            )
             if subject != eml_subject:
                 raise PreviewError("email_preview_subject_mismatch")
             subject = "[LOCAL PRESENTATION PREVIEW] " + subject
@@ -396,17 +461,22 @@ def export_email_preview(
             eml_html = _banner(
                 eml_html, delivery_id=delivery_id, attachment=True,
             )
-            report = _banner(report, delivery_id=delivery_id)
+            markdown = (
+                "# Local presentation preview - not sent\n\n"
+                "The original prepared request and frozen measurement are unchanged.\n\n" + markdown
+            )
+    report = markdown_view(markdown)
     _validate_html(html, local_links=True)
-    _validate_html(report, local_links=restored is None)
+    _validate_html(report, local_links=False)
     # An exact export never rewrites even legacy link text. Restyled MIME has
     # no relative/file/cid links; its details are a real attachment instead.
     _validate_html(eml_html, local_links=not restyle)
     files = {
         "email.html": html.encode("utf-8"),
         "email.eml": _mime(
-            request, subject, eml_html, report if restored is not None else None, restyle=restyle,
+            request, subject, eml_html, markdown, restyle=restyle,
         ),
+        "report.md": markdown.encode("utf-8"),
         "report.html": report.encode("utf-8"),
     }
     manifest = {
@@ -421,6 +491,14 @@ def export_email_preview(
         "measurement_source_revision": metadata.source_revision if metadata else None,
         "renderer": renderer, "reviewed_units_match": context_matches,
         "work_item_presentation": work_item_provenance,
+        "assignment_presentation": assignments,
+        "links": {"scoring": scoring_link.to_dict() if scoring_link else None,
+                  "foundry": agent_links},
+        "blockers": blockers,
+        "retained_review": review.provenance() if review else None,
+        "authoritative_report": "report.md",
+        "report_html_derived_from": "report.md",
+        "eml_attachments": ["report.md"],
         "frozen_inputs_sha256": sha256(_encode(restored[0])).hexdigest() if restored else None,
         "files": {name: {"sha256": sha256(content).hexdigest(), "bytes": len(content)}
                   for name, content in files.items()},
@@ -429,4 +507,4 @@ def export_email_preview(
     manifest["presentation_id"] = presentation_id
     directory = _inside(runtime.root, runtime.directory / "previews" / delivery_id / presentation_id)
     _save_export(runtime, directory, files, manifest)
-    return EmailPreview(delivery_id, presentation_id, directory, restyle)
+    return EmailPreview(delivery_id, presentation_id, directory, restyle, tuple(blockers))

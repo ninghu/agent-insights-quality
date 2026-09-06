@@ -1,5 +1,8 @@
 # Evidence and quality rules
 
+These rules apply to the replacement runner. Historical reports retain their recorded scoring
+and coverage policies; do not reinterpret an older report using newer weights or requirements.
+
 ## Staging
 
 Staging normally selects changed, missing or incomplete targets. First use or an explicit full run
@@ -40,6 +43,10 @@ review using already-generated evidence, not new Agent traffic.
 
 The same card is never both Noise and Duplicate. Repeated incorrect cards remain Noise. Same-ID
 updates, reopenings and transport duplicates are not additional duplicate cards.
+
+Retained categories are not remediation instructions. Human review must distinguish an unresolved
+Agent defect from an ambiguous claim and from correctly handled recovery (no Agent change needed).
+Disagreement found during report review is documented for review, not silently rescored.
 
 ## Score and coverage
 

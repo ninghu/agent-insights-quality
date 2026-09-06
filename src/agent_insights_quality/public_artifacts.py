@@ -51,6 +51,7 @@ def public_markdown(root: Path, document: Mapping[str, Any]) -> str:
         result, allowed_units=plan,
         report_context=load_report_context(root, allowed_units=plan),
         metadata=ReportMetadata(value["report_date"], value["region"], value["source_commit"]),
+        delivery_id=value["framework_run_id"],
     )
 
 
