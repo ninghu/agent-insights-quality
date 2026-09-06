@@ -21,7 +21,6 @@ dev = [
 ]
 hosted-test = [
   "agent-framework-core==1.14.0",
-  "azure-ai-agentserver-responses==2.0.0",
   "opentelemetry-sdk>=1.35,<2",
 ]
 azure = [

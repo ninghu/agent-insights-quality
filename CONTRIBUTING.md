@@ -36,6 +36,13 @@ Default pytest collection is `tests/unit`. Keep it offline and quick using small
 fake clocks/transports and pure functions. Real Hosted-framework tests live in `tests/hosted`;
 their dependency sets are intentionally separate from default CI.
 
+Use a separate environment for each Agent's Hosted suite and install that Agent's
+`v0/requirements.txt` alongside the shared test extras. The hosting stacks have incompatible
+Responses SDK contracts; the common `hosted-test` extra must not force one Responses SDK
+version onto every Agent. Do not combine their requirement files or reuse a global environment
+whose transitive dependencies another Agent installation has replaced. Keep the suite's
+deployed-dependency and actual request/response-shape guards enabled.
+
 Private runtime evidence and local logs belong under
 `$HOME\.aiq-runtime\agent-insights-quality\`. Never publish raw traces, provider receipts,
 work-item content or private service diagnostics. Preserve historical reports and retained

@@ -7,6 +7,7 @@ is scripted; no model reasoning, deployed hosting, or telemetry export is qualif
 import asyncio
 import importlib
 import importlib.util
+from importlib.metadata import requires, version as installed_version
 import json
 import socket
 import sys
@@ -24,10 +25,26 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from packaging.requirements import Requirement
 
 
 ROOT = Path(__file__).resolve().parents[2] / "agents" / "finance-agent"
 VERSIONS = ["v0", *(f"issue-{number:03d}" for number in range(13, 21))]
+
+
+def test_finance_host_dependencies_match_deployable_requirements():
+    for line in (ROOT / "v0" / "requirements.txt").read_text(encoding="utf-8").splitlines():
+        dependency = Requirement(line)
+        assert installed_version(dependency.name) in dependency.specifier, str(dependency)
+    hosting_dependencies = [
+        Requirement(line) for line in requires("agent-framework-foundry-hosting") or ()
+    ]
+    response_contracts = [
+        dependency for dependency in hosting_dependencies
+        if dependency.name == "azure-ai-agentserver-responses"
+    ]
+    assert len(response_contracts) == 1 and response_contracts[0].marker is None
+    assert installed_version("azure-ai-agentserver-responses") in response_contracts[0].specifier
 
 
 @pytest.fixture(scope="module")
