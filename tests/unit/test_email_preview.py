@@ -35,7 +35,7 @@ def offline_renderer(monkeypatch):
     })
 
 
-def quality(*, failed=False):
+def quality(*, failed=False, scoring_policy=None):
     baseline = PlannedUnit(UnitId("weather-agent", "v0"))
     issue = PlannedUnit(UnitId("weather-agent", "issue-001"), "issue-001")
     missed = PlannedUnit(UnitId("weather-agent", "issue-002"), "issue-002")
@@ -48,13 +48,14 @@ def quality(*, failed=False):
         )),
         UnitResult(missed.unit_id),
     )
-    return aggregate_results(plan, () if failed else measured), plan
+    kwargs = {"scoring_policy": scoring_policy} if scoring_policy is not None else {}
+    return aggregate_results(plan, () if failed else measured, **kwargs), plan
 
 
-def seed(runtime, *, mode="test", frozen=True, mutate=None, status="prepared", html=None):
+def seed(runtime, *, mode="test", frozen=True, mutate=None, status="prepared", html=None, scoring_policy=None):
     failed = mode in {"failure", "failed-test"}
     test_run = mode in {"test", "failed-test"}
-    result, plan = quality(failed=failed)
+    result, plan = quality(failed=failed, scoring_policy=scoring_policy)
     delivery_id = "daily-" + DAY + ("-test-2" if test_run else "")
     request = EmailRequest(
         delivery_id, PRIVATE if test_run or failed else TEAM_RECIPIENT,
@@ -171,6 +172,83 @@ def test_restyle_uses_frozen_result_current_style_and_distinct_local_identity(ru
     assert manifest["renderer"]["source_revision"] == RENDERER
     assert manifest["measurement_source_revision"] == SOURCE
     assert manifest["prepared_subject"] == request.subject
+
+
+def test_rescoring_exports_new_policy_without_changing_measurement_or_prepared_mail(runtime):
+    from agent_insights_quality.privacy import restore_public_result
+    from agent_insights_quality.scoring import LEGACY_SCORING_POLICY, SCORING_POLICY
+
+    request, original, plan = seed(runtime, scoring_policy=LEGACY_SCORING_POLICY)
+    before = originals(runtime)
+    exact = exported(runtime, request)
+    preview = exported(runtime, request, restyle=True, rescore=True)
+    assert preview.rescored and preview.directory != exact.directory
+    derived = json.loads((preview.directory / "result.json").read_text())
+    result = restore_public_result(derived, allowed_units=plan)
+    assert original.score == 30.8 and result.score == 36.4
+    assert result.scoring_policy == SCORING_POLICY
+    assert result.units == original.units and result.counts == original.counts
+    assert result.coverage == original.coverage and result.status == original.status
+    assert result.failure_reasons == original.failure_reasons
+    html = (preview.directory / "email.html").read_text(encoding="utf-8")
+    assert "LOCAL SCORING PREVIEW" in html and "36.4" in html
+    assert "report.html" in html and "?sig=" not in html
+    mail = message(preview)
+    assert mail["X-AIQ-Local-Preview"] == "scoring-rescore"
+    assert "LOCAL SCORING PREVIEW" in mail["Subject"] and "36.4" in mail["Subject"]
+    assert str(mail["To"]) == request.recipient
+    assert originals(runtime) == before
+    manifest = json.loads((preview.directory / "manifest.json").read_text())
+    assert manifest["export_kind"] == "local_scoring_preview"
+    assert not manifest["send_authorized"] and not manifest["measurement_changed"]
+    provenance = manifest["scoring_derivation"]
+    assert provenance["source_policy"] == original.to_dict()["scoring_policy"]
+    assert provenance["derived_policy"] == result.to_dict()["scoring_policy"]
+    assert provenance["source_score"] == 30.8 and provenance["derived_score"] == 36.4
+    assert not provenance["classifications_changed"] and not provenance["coverage_changed"]
+    assert preview.to_dict()["result_path"] == str(preview.directory / "result.json")
+    repeated = exported(runtime, request, restyle=True, rescore=True)
+    assert repeated.directory == preview.directory and originals(runtime) == before
+
+
+def test_rescoring_keeps_failed_measurements_unscored(runtime):
+    from agent_insights_quality.scoring import LEGACY_SCORING_POLICY
+
+    request, original, _ = seed(runtime, mode="failed-test", scoring_policy=LEGACY_SCORING_POLICY)
+    before = originals(runtime)
+    preview = exported(runtime, request, restyle=True, rescore=True)
+    result = json.loads((preview.directory / "result.json").read_text())
+    assert result["score"] is None and result["status"] == original.status.value
+    assert result["failure_reasons"] == original.to_dict()["failure_reasons"]
+    assert "Measurement unavailable" in message(preview)["Subject"]
+    assert originals(runtime) == before
+
+
+def test_rescoring_requires_explicit_restyle_and_preserved_frozen_inputs(runtime):
+    request, _, _ = seed(runtime, frozen=False)
+    with pytest.raises(PreviewError, match="rescore_requires_restyle"):
+        exported(runtime, request, rescore=True)
+    with pytest.raises(PreviewError, match="frozen_inputs_missing"):
+        exported(runtime, request, restyle=True, rescore=True)
+    with pytest.raises(PreviewError, match="identity_invalid"):
+        exported(runtime, request, restyle=True, rescore="yes")
+
+
+def test_cli_rescoring_returns_the_derived_email_and_result_paths(runtime, monkeypatch, capsys):
+    from agent_insights_quality.scoring import LEGACY_SCORING_POLICY
+
+    request, _, _ = seed(runtime, scoring_policy=LEGACY_SCORING_POLICY)
+    before = originals(runtime)
+    monkeypatch.setattr(cli, "_catalog", lambda *args: pytest.fail("Preview started qualification"))
+    assert cli.main(
+        ["email-preview", "--delivery-id", request.delivery_id, "--restyle", "--rescore"],
+        root=ROOT, runtime_factory=lambda _: runtime,
+    ) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["rescored"] and output["restyled"]
+    assert json.loads(Path(output["result_path"]).read_text())["score"] == 36.4
+    assert "36.4" in Path(output["email_html_path"]).read_text(encoding="utf-8")
+    assert originals(runtime) == before
 
 
 @pytest.mark.parametrize("mode", ["official", "test", "failure", "failed-test"])

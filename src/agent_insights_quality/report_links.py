@@ -68,16 +68,36 @@ class VerifiedScoringLink:
         return dict(href=self.href, revision=self.revision, content_sha256=self.content_sha256)
 
     @classmethod
-    def from_retained(cls, root: Path, receipt: dict) -> VerifiedScoringLink:
+    def from_retained(cls, root: Path, receipt: dict, *, fetch=_public_read) -> VerifiedScoringLink:
         """Restore only a receipt previously frozen by the trusted delivery boundary."""
         if not isinstance(receipt, dict) or set(receipt) != {"href", "revision", "content_sha256"}:
             raise ReportContextError("report_scoring_link_unverified")
+        if (
+            not isinstance(receipt["revision"], str) or re.fullmatch(_REVISION, receipt["revision"]) is None
+            or not isinstance(receipt["content_sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", receipt["content_sha256"]) is None
+        ):
+            raise ReportContextError("report_scoring_link_unverified")
+        href = (
+            f"https://github.com/{REPOSITORY}/blob/{receipt['revision']}/"
+            "docs/QUALITY_BAR.md#score-and-coverage"
+        )
+        if receipt["href"] != href:
+            raise ReportContextError("report_scoring_link_unverified")
         content = (root / "docs" / "QUALITY_BAR.md").read_bytes().replace(b"\r\n", b"\n")
         if sha256(content).hexdigest() != receipt["content_sha256"]:
+            content = fetch(
+                f"https://raw.githubusercontent.com/{REPOSITORY}/{receipt['revision']}/docs/QUALITY_BAR.md"
+            )
+            if not isinstance(content, bytes) or len(content) > 250_000:
+                raise ReportContextError("report_scoring_link_unverified")
+            content = content.replace(b"\r\n", b"\n")
+        if sha256(content).hexdigest() != receipt["content_sha256"]:
             raise ReportContextError("report_scoring_link_content_mismatch")
-        link = cls(root, receipt["revision"], fetch=lambda _: content)
-        if link.to_dict() != receipt:
-            raise ReportContextError("report_scoring_link_unverified")
+        link = object.__new__(cls)
+        object.__setattr__(link, "href", href)
+        object.__setattr__(link, "revision", receipt["revision"])
+        object.__setattr__(link, "content_sha256", receipt["content_sha256"])
         return link
 
 

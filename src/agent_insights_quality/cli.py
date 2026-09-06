@@ -2,7 +2,8 @@
 
 Run commands construct qualification ports; private-report-flush opens only storage.
 Email commands cannot send.
-Test injection is Python-only; there is no CLI runtime-root or recipient override.
+Test injection is Python-only; there is no CLI runtime-root or official-recipient override.
+An explicit single-recipient TEST input is validated and frozen before provider work.
 """
 
 from __future__ import annotations
@@ -18,6 +19,9 @@ import sys
 import uuid
 
 from .errors import QualityError
+from .delivery_recipient import (
+    configured_private_recipient, freeze_private_recipient, validate_test_recipient_input,
+)
 from .integration import RunIntegration, command_status
 from .integration import private_path as _private_path, read_object as _read_object
 from .performance import RunMetrics, begin_metrics, current_metrics, metric_session, scope
@@ -34,6 +38,11 @@ def parser() -> argparse.ArgumentParser:
     daily = commands.add_parser("run-daily", help="Run or resume today's Daily measurement")
     daily.add_argument("--test-run", action="store_true")
     daily.add_argument("--rerun", type=int, default=0)
+    daily.add_argument(
+        "--test-to", metavar="TEST_TO_ADDRESS",
+        help="One human-provided private TEST recipient; requires --test-run and positive --rerun. "
+             "Frozen before traffic; never an official recipient override",
+    )
     daily.add_argument(
         "--fresh-traffic", action="store_true", default=None,
         help="Start a NEW private --test-run --rerun identity without reusing prior traffic; "
@@ -61,6 +70,11 @@ def parser() -> argparse.ArgumentParser:
         help="Render current presentation from this delivery's frozen result; no remeasurement",
     )
     preview.add_argument(
+        "--rescore", action="store_true",
+        help="With --restyle, derive a private preview under the current scoring policy; "
+             "keep original results, judgments and email unchanged",
+    )
+    preview.add_argument(
         "--scoring-revision",
         help="Verify a published GitHub commit's QUALITY_BAR.md against the reviewed local file",
     )
@@ -77,16 +91,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _recipient(runtime) -> str:
-    from .email import TEAM_RECIPIENT, _address
-    value = _read_object(_private_path(runtime, runtime.root / "config" / "email-recipient.json"))
-    if set(value) != {"schema_version", "purpose", "recipient"} or (
-        value["schema_version"] != "1.0.0" or value["purpose"] != "daily_test"
-    ):
-        raise QualityError("private_recipient_config_invalid")
-    address = _address(value["recipient"])
-    if address.casefold() == TEAM_RECIPIENT:
-        raise QualityError("email_recipient_isolation")
-    return address
+    return configured_private_recipient(runtime)
 
 
 def _official_source(root: Path) -> None:
@@ -276,6 +281,14 @@ async def _run(
         run_id = active["run_id"]
         targets = tuple(item.target for item in selections)
     records = runtime.run(run_id)
+    private_recipient = freeze_private_recipient(
+        runtime, run_id, test_run=test_run, test_to=getattr(args, "test_to", None),
+    ) if is_daily else None
+    if is_daily and (
+        records.read_completed("delivery-inputs", missing_ok=True) is None
+        and runtime.outbox("email").read(run_id, missing_ok=True) is not None
+    ):
+        raise QualityError("delivery_inputs_missing")
     traffic_intent = None
     if is_daily:
         reuse_run_id = None
@@ -303,7 +316,6 @@ async def _run(
         return _staging_status(runtime, records, active, records.read("staging-result"))
     frozen = records.read_completed("delivery-inputs", missing_ok=True) if is_daily else None
     assessment = _assessment_for_run(runtime, records)
-    recipient = _recipient(runtime) if is_daily and frozen is None else None
     if frozen is None:
         settings_path = catalog.root / "config" / "runtime.json"
         settings = load_settings(settings_path if settings_path.is_file() else None)
@@ -330,7 +342,7 @@ async def _run(
                     integration.warn("logging_failed")
                 email = integration.prepare_delivery(
                     result, environment, frozen["source_revision"], rerun=args.rerun,
-                    recipient=lambda: frozen["recipient"], assessment_settings=assessment,
+                    recipient=lambda: private_recipient, assessment_settings=assessment,
                 )
             return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
         async with ports(catalog, runtime, run_id, assessment) as (cloud, sol, registry):
@@ -355,7 +367,8 @@ async def _run(
                         if metrics and metrics.health_warnings:
                             integration.warn("logging_failed")
                         email = integration.prepare_delivery(
-                            result, cloud.environment, revision, rerun=args.rerun, recipient=lambda: recipient,
+                            result, cloud.environment, revision, rerun=args.rerun,
+                            recipient=lambda: private_recipient,
                             assessment_settings=assessment,
                         )
                     if test_run:
@@ -492,6 +505,10 @@ def main(
     ports = production_ports if ports is None else ports
     integrations = RunIntegration if integrations is None else integrations
     try:
+        if args.command == "run-daily":
+            if (args.rerun < 1 if args.test_run else args.rerun != 0):
+                raise QualityError("runner_test_identity_invalid")
+            validate_test_recipient_input(test_run=args.test_run, test_to=args.test_to)
         if staging_policy_migration is not None and args.command != "run-staging":
             raise QualityError("staging_policy_migration_invalid")
         if args.command in {"validate", "generate-docs"}:
@@ -544,7 +561,7 @@ def main(
                 from .email_preview import export_email_preview
                 preview = export_email_preview(
                     runtime, args.delivery_id, root=root, restyle=args.restyle,
-                    scoring_revision=args.scoring_revision,
+                    scoring_revision=args.scoring_revision, rescore=args.rescore,
                 )
                 value, code = preview.to_dict(), 0
             elif args.command == "email-claim":

@@ -10,9 +10,9 @@ from types import SimpleNamespace
 import pytest
 
 from agent_insights_quality import catalogs, cli, runner
-from agent_insights_quality.email import read_email
+from agent_insights_quality.email import TEAM_RECIPIENT, read_email
 from agent_insights_quality.errors import QualityError
-from agent_insights_quality.state import RuntimeStore
+from agent_insights_quality.state import CheckpointError, RecordStore, RuntimeStore
 import test_runner as fake
 
 
@@ -122,6 +122,108 @@ def test_cli_test_pipeline_and_claim_actual_outcome_no_raw_stdout(app, capsys):
     assert "synthetic_provider" not in json.dumps(status)
 
 
+def test_explicit_test_to_is_frozen_before_work_and_not_redirected_by_defaults(app, capsys, monkeypatch):
+    address = "explicit-test@example.invalid"
+    config = app.store.root / "config" / "email-recipient.json"
+    config.unlink()
+    begin = cli.begin_metrics
+    observed = []
+
+    def before_work(records):
+        recipient = records.read_completed("delivery-recipient")
+        assert recipient["recipient"] == address and recipient["source"] == "explicit_input"
+        observed.append(True)
+        config.write_text(json.dumps({
+            "schema_version": "1.0.0", "purpose": "daily_test",
+            "recipient": "changed-default@example.invalid",
+        }))
+        return begin(records)
+
+    monkeypatch.setattr(cli, "begin_metrics", before_work)
+    assert app.cli(
+        "run-daily", "--test-run", "--rerun", "1", "--fresh-traffic", "--test-to", address,
+    ) == 0
+    value, errors = last_json(capsys)
+    assert not errors and observed
+    delivery = value["delivery_id"]
+    original = read_email(app.store.outbox("email"), delivery)
+    assert original.request.recipient == address
+    assert app.store.run(delivery).read_completed("delivery-inputs")["recipient"] == address
+    counts = len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)
+    config.unlink()
+    monkeypatch.setattr(cli, "begin_metrics", begin)
+    assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
+    resumed, _ = last_json(capsys)
+    assert read_email(app.store.outbox("email"), delivery) == original
+    assert app.cli(
+        "run-daily", "--test-run", "--rerun", "1", "--test-to", "different@example.invalid",
+    ) == 2
+    error = capsys.readouterr()
+    assert "delivery_recipient_conflict" in error.err
+    assert (len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)) == counts
+    assert address not in json.dumps(value) + json.dumps(resumed) + error.out + error.err
+    logs = app.store.run(delivery).directory
+    assert address not in (logs / "runner.log").read_text() + (logs / "events.jsonl").read_text()
+
+
+@pytest.mark.parametrize("address", [
+    "", "<TEST_TO_ADDRESS>", "a@example.invalid,b@example.invalid",
+    "a@example.invalid; b@example.invalid", "Name <a@example.invalid>",
+    "a@example.invalid\r\nBcc: other@example.invalid", TEAM_RECIPIENT,
+])
+def test_invalid_explicit_test_recipient_fails_before_runtime_creation(app, monkeypatch, capsys, address):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Invalid recipient reached runtime creation")
+
+    assert cli.main(
+        ["run-daily", "--test-run", "--rerun", "1", "--test-to", address],
+        root=app.catalog.root, runtime_factory=forbidden,
+    ) == 2
+    assert not app.port_calls
+    error = capsys.readouterr()
+    assert "email_recipient" in error.err or "placeholder" in error.err
+
+
+def test_official_recipient_override_is_rejected_before_source_or_runtime(app, capsys):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Official TEST override reached runtime")
+
+    assert cli.main(
+        ["run-daily", "--test-to", "private@example.invalid"],
+        root=app.catalog.root, runtime_factory=forbidden,
+    ) == 2
+    assert "test_to_requires_test_run" in capsys.readouterr().err
+
+
+def test_recipient_checkpoint_failure_prevents_provider_work(app, capsys, monkeypatch):
+    save = RecordStore.save_completed
+
+    def fail(records, key, value):
+        if key == "delivery-recipient":
+            raise CheckpointError()
+        return save(records, key, value)
+
+    monkeypatch.setattr(RecordStore, "save_completed", fail)
+    assert app.cli(
+        "run-daily", "--test-run", "--rerun", "1", "--test-to", "private@example.invalid",
+    ) == 2
+    assert not app.port_calls and not app.cloud.invocations
+    assert "checkpoint" in capsys.readouterr().err
+
+
+def test_legacy_email_without_delivery_inputs_cannot_trigger_remeasurement(app, capsys):
+    assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
+    value, _ = last_json(capsys)
+    delivery = value["delivery_id"]
+    original = read_email(app.store.outbox("email"), delivery)
+    app.store.run(delivery)._path("completed", "delivery-inputs").unlink()
+    counts = len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)
+    assert app.cli("run-daily", "--test-run", "--rerun", "1") == 2
+    assert "delivery_inputs_missing" in capsys.readouterr().err
+    assert read_email(app.store.outbox("email"), delivery) == original
+    assert (len(app.cloud.invocations), len(app.cloud.starts), len(app.sol.calls), len(app.port_calls)) == counts
+
+
 def test_publication_only_cli_recovers_without_ports_assessment_or_email_change(app, capsys, monkeypatch):
     app.report_blobs.fail_key = "report.html"
     assert app.cli("run-daily", "--test-run", "--rerun", "1") == 0
@@ -203,8 +305,11 @@ def test_fresh_traffic_is_explicit_private_nonzero_identity_only(app, arguments)
 
 
 def test_fresh_help_explains_new_identity_and_resume():
-    help_text = cli.parser()._subparsers._group_actions[0].choices["run-daily"].format_help()
+    help_text = " ".join(
+        cli.parser()._subparsers._group_actions[0].choices["run-daily"].format_help().split()
+    )
     assert "--fresh-traffic" in help_text and "NEW private" in help_text and "frozen intent" in help_text
+    assert "--test-to" in help_text and "never an official recipient override" in help_text
 
 
 def test_fresh_trial_runs_all_25_units_without_reusing_or_rewriting_prior_run(app, capsys):

@@ -73,8 +73,11 @@ staging/Daily fallbacks or stale procedural docs/skills as new authority.
 - Noise is a confirmed core-incorrect card; Duplicate is an extra distinct correct card for the
   same root cause. Never count one card as both. Page copies and same-ID updates are not duplicates.
   An unexpected real finding is neither Noise nor an extra correct expected issue.
-- Score: `100 * C / (E_scored + N_scored + 0.25 * D_scored)`. Noise weighs 1; Duplicate weighs 0.25.
+- New-score policy v2: `100 * C / (C + N_scored + 0.5 * D_scored + 0.25 * M)`,
+  where `M = E_scored - C`. Noise weighs 1, Duplicate 0.5 and Miss 0.25.
   Scorable baselines contribute penalties but no healthy bonus. Display one decimal, no threshold.
+  Preserve v1 results under their recorded policy; explicit rescoring creates a separate derived
+  result/report without new judgments, changed coverage or replacement of a prepared email.
 - Full covers all planned units. Partial permits at most two unscorable baseline/issue units:
   exclude each wholly from score counts; show coverage, exclusions/reasons and unscored findings.
   More than two, no scorable issue or systemic integrity failure means no quality score/team

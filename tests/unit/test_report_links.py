@@ -41,6 +41,42 @@ def test_unpublished_revision_does_not_manufacture_a_link():
         VerifiedScoringLink(ROOT, REVISION, fetch=missing)
 
 
+def test_retained_guide_survives_a_new_local_scoring_policy(tmp_path):
+    documents = tmp_path / "docs"
+    documents.mkdir()
+    guide = documents / "QUALITY_BAR.md"
+    legacy = b"# Legacy scoring guide\n"
+    guide.write_bytes(legacy)
+    link = VerifiedScoringLink(tmp_path, REVISION, fetch=lambda _: legacy)
+    guide.write_bytes(b"# New scoring guide\n")
+    urls = []
+
+    def fetch(url):
+        urls.append(url)
+        return legacy.replace(b"\n", b"\r\n")
+
+    assert VerifiedScoringLink.from_retained(tmp_path, link.to_dict(), fetch=fetch) == link
+    assert urls == [
+        f"https://raw.githubusercontent.com/ninghu/agent-insights-quality/{REVISION}/docs/QUALITY_BAR.md"
+    ]
+    with pytest.raises(ReportContextError, match="content_mismatch"):
+        VerifiedScoringLink.from_retained(tmp_path, link.to_dict(), fetch=lambda _: b"changed")
+
+
+@pytest.mark.parametrize("change", [
+    {"revision": "main"}, {"content_sha256": "wrong"},
+    {"href": "https://unexpected.invalid/scoring"},
+])
+def test_malformed_retained_guide_is_rejected_before_fetch(change):
+    content = (ROOT / "docs" / "QUALITY_BAR.md").read_bytes()
+    receipt = VerifiedScoringLink(ROOT, REVISION, fetch=lambda _: content).to_dict()
+    receipt.update(change)
+    with pytest.raises(ReportContextError, match="unverified"):
+        VerifiedScoringLink.from_retained(
+            ROOT, receipt, fetch=lambda _: pytest.fail("Untrusted receipt requested network"),
+        )
+
+
 @pytest.mark.parametrize("href", [
     "https://example.invalid/agents/synthetic", "https://ai.azure.com/api/projects/synthetic",
     "javascript:alert(1)", "https://ai.azure.com.evil.invalid/nextgen/r/synthetic",

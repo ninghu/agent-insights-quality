@@ -302,7 +302,10 @@ def test_matched_plus_distinct_correct_extras_and_wrong_cards_survive_one_review
         data, sol, after=tuple({"id": name} for name in ("a", "b", "c")),
     ))
     assert (result.counts.correct_issues, result.counts.duplicate_cards, result.counts.noise_cards) == (1, 1, 1)
-    assert result.score == 44.4
+    assert result.score == 40.0
+    from agent_insights_quality.results import rescore_result
+    from agent_insights_quality.scoring import LEGACY_SCORING_POLICY
+    assert rescore_result(result, LEGACY_SCORING_POLICY).score == 44.4
     assert len(sol.calls) == 2
     assert set(sol.calls[1]["review"]["candidate_reasons"]) == {"duplicate_root", "core_incorrect"}
     assert sol.calls[0]["snapshot"] == sol.calls[1]["snapshot"]

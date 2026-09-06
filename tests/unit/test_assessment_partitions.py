@@ -404,7 +404,10 @@ def test_daily_lossless_transport_preserves_holistic_noise_and_duplicate_root_co
     assert (
         result.counts.correct_issues, result.counts.noise_cards, result.counts.duplicate_cards,
     ) == (1, 1, 1)
-    assert result.score == 44.4
+    assert result.score == 40.0
+    from agent_insights_quality.results import rescore_result
+    from agent_insights_quality.scoring import LEGACY_SCORING_POLICY
+    assert rescore_result(result, LEGACY_SCORING_POLICY).score == 44.4
     assert [
         expand_payload(call) for call in bounded_sol.calls
     ] == unbounded_sol.calls

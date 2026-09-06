@@ -39,7 +39,8 @@ Every baseline/issue owns complete deployable source; no runtime issue selectors
   versions run sequentially, with six attributable trace-present attempts required out of ten.
 - Sol assesses raw evidence directly. Correctness, Noise and Duplicate classification are separate
   from execution failure. Candidate gaps receive a bounded no-new-traffic evidence review.
-- The score is `100 * C / (E_scored + N_scored + 0.25 * D_scored)`. Baseline penalties count;
+- New scoring v2 uses `100 * C / (C + N_scored + 0.5 * D_scored + 0.25 * M)`,
+  where `M = E_scored - C`. Historical results keep their recorded policy. Baseline penalties count;
   severity and suggested fixes are diagnostic. At most two unscorable version units permit a
   report with numeric coverage and exclusion reasons, without visible Full/Partial labels.
 - Python owns orchestration and checkpoints. Copilot app automation launches it and performs only

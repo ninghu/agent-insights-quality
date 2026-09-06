@@ -43,9 +43,10 @@ class EmailPreview:
     directory: Path
     restyled: bool
     blockers: tuple[str, ...] = ()
+    rescored: bool = False
 
     def to_dict(self) -> dict:
-        return {
+        value = {
             "delivery_id": self.delivery_id, "presentation_id": self.presentation_id,
             "status": "local_preview", "restyled": self.restyled,
             "blockers": list(self.blockers),
@@ -55,6 +56,9 @@ class EmailPreview:
                 ("report_html", "report.html"), ("manifest", "manifest.json"),
             )},
         }
+        if self.rescored:
+            value.update(rescored=True, result_path=str(self.directory / "result.json"))
+        return value
 
 
 class _SafeHTML(HTMLParser):
@@ -299,15 +303,26 @@ def _renderer_provenance(root: Path) -> dict:
     }
 
 
-def _banner(html: str, *, delivery_id: str, attachment: bool = False) -> str:
+def _banner(
+    html: str, *, delivery_id: str, attachment: bool = False, scoring_derivation: dict | None = None,
+) -> str:
+    label = "LOCAL SCORING PREVIEW" if scoring_derivation else "LOCAL PRESENTATION PREVIEW"
+    scoring_notice = ""
+    if scoring_derivation:
+        scoring_notice = (
+            "<br>Scoring policy changed; counts, judgments and coverage are unchanged. "
+            f"Score: {escape(str(scoring_derivation['source_score']))} &rarr; "
+            f"{escape(str(scoring_derivation['derived_score']))}."
+        )
     notice = (
         '<div role="note" style="box-sizing:border-box;max-width:960px;margin:16px auto 0;'
         'padding:14px 20px;background:#fff5e4;color:#704c16;'
         'font:14px/21px Segoe UI,Arial,sans-serif;border-left:4px solid #c47f15;'
         'overflow-wrap:anywhere;">'
-        "<strong>LOCAL PRESENTATION PREVIEW &mdash; NOT SENT</strong><br>"
+        f"<strong>{label} &mdash; NOT SENT</strong><br>"
         f"Delivery: {escape(delivery_id)}. Same frozen measurement; no remeasurement.<br>"
         "The prepared email is unchanged. Measurement and renderer provenance are in manifest.json."
+        + scoring_notice
         + ("<br>Open the attached report.md; its per-Agent headings contain human validation."
            if attachment else "")
         + "</div>"
@@ -318,12 +333,17 @@ def _banner(html: str, *, delivery_id: str, attachment: bool = False) -> str:
     return html[:match.end()] + notice + html[match.end():]
 
 
-def _mime(request: EmailRequest, subject: str, html: str, report: str | None, *, restyle: bool) -> bytes:
+def _mime(
+    request: EmailRequest, subject: str, html: str, report: str | None, *,
+    restyle: bool, rescore: bool = False,
+) -> bytes:
     message = EmailMessage(policy=policy.SMTP)
     message["To"] = request.recipient
     message["Subject"] = subject
     message["X-Unsent"] = "1"
-    message["X-AIQ-Local-Preview"] = "presentation-restyle" if restyle else "exact-prepared-request"
+    message["X-AIQ-Local-Preview"] = (
+        "scoring-rescore" if rescore else "presentation-restyle" if restyle else "exact-prepared-request"
+    )
     # Byte content avoids the newline normalization in set_content(str), so the
     # decoded exact-export body remains identical to the prepared HTML.
     message.set_content(html.encode("utf-8"), maintype="text", subtype="html", cte="base64")
@@ -366,13 +386,15 @@ def _save_export(runtime, directory, files, manifest):
 
 def export_email_preview(
     runtime: RuntimeStore, delivery_id: str, *, root: Path, restyle: bool = False,
-    scoring_revision: str | None = None,
+    scoring_revision: str | None = None, rescore: bool = False,
 ) -> EmailPreview:
     """Export only beneath Daily/previews; no arbitrary output or recipient."""
     if runtime.environment != "daily":
         raise PreviewError("email_preview_daily_only")
-    if type(restyle) is not bool or len(_parts(delivery_id)) != 1:
+    if type(restyle) is not bool or type(rescore) is not bool or len(_parts(delivery_id)) != 1:
         raise PreviewError("email_preview_identity_invalid")
+    if rescore and not restyle:
+        raise PreviewError("email_preview_rescore_requires_restyle")
     if not runtime._owned:
         raise StateError("state_not_owned")
     record = read_email(runtime.outbox("email"), delivery_id)
@@ -395,11 +417,27 @@ def export_email_preview(
     blockers, agent_links, scoring_link = [], {}, None
     review = None
     assignments = None
+    scoring_derivation = None
+    derived_result = None
     if scoring_revision is not None:
         scoring_link = VerifiedScoringLink(root, scoring_revision)
     if restored is not None:
         frozen, plan, result, metadata = restored
-        if request.report_access is not None:
+        if rescore:
+            from .results import rescore_result
+
+            original = result.to_dict()
+            result = rescore_result(result)
+            derived_result = result.to_dict()
+            scoring_derivation = {
+                "source_policy": original["scoring_policy"],
+                "derived_policy": derived_result["scoring_policy"],
+                "source_score": original["score"], "derived_score": derived_result["score"],
+                "source_result_sha256": sha256(_encode(original)).hexdigest(),
+                "derived_result_sha256": sha256(_encode(derived_result)).hexdigest(),
+                "classifications_changed": False, "coverage_changed": False,
+            }
+        if request.report_access is not None and not rescore:
             from .report_access import read_report_access
             access = read_report_access(runtime, request.report_access, delivery_id=delivery_id)
             if access.expired():
@@ -413,7 +451,7 @@ def export_email_preview(
             agent_links, missing_links = foundry_links(runtime, delivery_id, plan)
             blockers.extend(missing_links)
             if scoring_link is None:
-                retained = frozen.get("presentation", {}).get("scoring_link")
+                retained = None if rescore else frozen.get("presentation", {}).get("scoring_link")
                 if retained:
                     scoring_link = VerifiedScoringLink.from_retained(root, retained)
                 else:
@@ -473,15 +511,25 @@ def export_email_preview(
             )
             if subject != eml_subject:
                 raise PreviewError("email_preview_subject_mismatch")
-            subject = "[LOCAL PRESENTATION PREVIEW] " + subject
-            html = _banner(html, delivery_id=delivery_id)
+            label = "LOCAL SCORING PREVIEW" if rescore else "LOCAL PRESENTATION PREVIEW"
+            subject = f"[{label}] " + subject
+            html = _banner(html, delivery_id=delivery_id, scoring_derivation=scoring_derivation)
             eml_html = _banner(
-                eml_html, delivery_id=delivery_id, attachment=True,
+                eml_html, delivery_id=delivery_id, attachment=True, scoring_derivation=scoring_derivation,
             )
-            markdown = (
-                "# Local presentation preview - not sent\n\n"
-                "The original prepared request and frozen measurement are unchanged.\n\n" + markdown
-            )
+            if rescore:
+                detail_kind = "rescored_frozen_private_markdown"
+                markdown = (
+                    "# Local scoring preview - not sent\n\n"
+                    "Derived with a new scoring policy from unchanged saved counts, judgments and coverage. "
+                    "The original result and prepared email are unchanged.\n\n"
+                    f"Scoring policy: {result.scoring_policy.version}.\n\n" + markdown
+                )
+            else:
+                markdown = (
+                    "# Local presentation preview - not sent\n\n"
+                    "The original prepared request and frozen measurement are unchanged.\n\n" + markdown
+                )
     report = markdown_view(markdown)
     _validate_html(html, local_links=True)
     _validate_html(report, local_links=False)
@@ -491,14 +539,19 @@ def export_email_preview(
     files = {
         "email.html": html.encode("utf-8"),
         "email.eml": _mime(
-            request, subject, eml_html, markdown, restyle=restyle,
+            request, subject, eml_html, markdown, restyle=restyle, rescore=rescore,
         ),
         "report.md": markdown.encode("utf-8"),
         "report.html": report.encode("utf-8"),
     }
+    if derived_result is not None:
+        files["result.json"] = _encode(derived_result)
     manifest = {
         "schema_version": "1.0", "delivery_id": delivery_id,
-        "export_kind": "local_presentation_preview" if restyle else "exact_prepared_request",
+        "export_kind": (
+            "local_scoring_preview" if rescore
+            else "local_presentation_preview" if restyle else "exact_prepared_request"
+        ),
         "local_only": True, "send_authorized": False, "measurement_changed": False,
         "prepared_request_sha256": sha256(_encode(request.to_private_dict())).hexdigest(),
         "prepared_status_observed": record.status,
@@ -520,8 +573,10 @@ def export_email_preview(
         "files": {name: {"sha256": sha256(content).hexdigest(), "bytes": len(content)}
                   for name, content in files.items()},
     }
+    if scoring_derivation is not None:
+        manifest["scoring_derivation"] = scoring_derivation
     presentation_id = sha256(_encode(manifest)).hexdigest()
     manifest["presentation_id"] = presentation_id
     directory = _inside(runtime.root, runtime.directory / "previews" / delivery_id / presentation_id)
     _save_export(runtime, directory, files, manifest)
-    return EmailPreview(delivery_id, presentation_id, directory, restyle, tuple(blockers))
+    return EmailPreview(delivery_id, presentation_id, directory, restyle, tuple(blockers), rescore)

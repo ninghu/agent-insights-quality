@@ -121,6 +121,7 @@ requiring no Agent change. This presentation never changes retained judgments or
 python -m agent_insights_quality email-preview --delivery-id <existing-delivery-id>
 python -m agent_insights_quality email-preview --delivery-id <existing-delivery-id> --restyle
 python -m agent_insights_quality email-preview --delivery-id <existing-delivery-id> --restyle --scoring-revision <published-40-character-commit>
+python -m agent_insights_quality email-preview --delivery-id <existing-delivery-id> --restyle --rescore --scoring-revision <published-current-guide-commit>
 ```
 
 The first command preserves the exact prepared recipient, subject and HTML. Explicit `--restyle`
@@ -138,6 +139,15 @@ hashes, retained assessment references, assignment provenance and link blockers.
 Neither command claims, sends, changes the original request, invokes Agent/Sol/Insights or publishes data.
 EML is marked unsent, not delivered. Normal runtime ownership applies; do not bypass an active
 runner's lock to export a preview.
+
+`--restyle --rescore` explicitly derives a **LOCAL SCORING PREVIEW**, using the current
+approved scoring policy and the original frozen classifications, counts and coverage.
+It also exports `result.json` and records the source/derived policies, scores and result hashes.
+The original result, prepared email and all invocation/assessment records remain unchanged.
+This is not another measurement, claim or send. The local email links to its newly derived
+detail report, not the original archive's older-policy SAS pages. It does not overwrite or
+republish that archive or mint access links. Use the newly published current scoring guide
+for this preview; historical ordinary restyles keep their retained guide revision.
 
 The preview CLI returns `report_markdown_path`, `report_html_path`, `email_html_path`,
 `email_eml_path`, `manifest_path` and `blockers`, alongside the content-addressed presentation ID.
@@ -279,6 +289,8 @@ For new preparation or restyle without an existing receipt, an operator can prov
 `config/report-links.json` under the private runtime root containing
 `{"scoring_revision":"<published-40-character-commit>"}`. Successful verification is frozen
 with the presentation; resume uses the retained receipt, not a mutable branch.
+If the local guide has since changed, a historical restyle can verify the retained immutable
+revision against its saved content hash; it never substitutes the new policy's guide.
 Without a correct published version, `scoring_link_publication_required` is an explicit
 publication blocker and the row says the link is pending. This does not block eligible inline
 email, authorize publication, change credentials, or expose TEST content publicly. Historical
