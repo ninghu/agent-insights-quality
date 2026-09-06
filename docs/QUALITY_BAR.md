@@ -22,6 +22,48 @@ proven behavioral failure. Eight healthy observations cannot hide a proven basel
 Record the policy with each assessment. Historical six-of-ten judgments remain historical;
 apply the new policy to retained valid evidence without overwriting the original result.
 
+### Scoped single-root hygiene
+
+`staging-root-hygiene-v3` retains the eight-of-ten observation minimum and adds a separate
+root-hygiene judgment in the same bounded staging assessment calls. Expected activation
+still requires probe proof. Additional findings may cite a paired endpoint and attributable
+trace from the same setup or probe turn, only within their owned attempt and partition.
+Unowned or sibling rows do not become proof by sharing an operation ID; attributable
+causal child-Agent work remains context.
+
+An issue must adequately exhibit its expected causal defect without an independently proven
+additional Agent defect in the scoped runtime evidence. Baselines have zero injected roots.
+Multiple symptoms, exceptions or categories do not mean multiple causes. A separate proven
+Agent defect fails hygiene even when the expected defect is observed and even for
+model-mediated issues. A missed expected activation is not renamed an additional defect.
+
+Private `additional_findings` records retain relation, central cause, actual behavior,
+violated healthy contract, causal-independence explanation, affected component/surface,
+material impact, unresolved evidence and current citations. Relations distinguish independent
+Agent defects, consequences of the expected root, handled behavior/operational observations,
+and genuinely unresolved additional roots. Correct fallback with real dependency errors can
+be a true operational observation without an Agent-contract violation. Internal quality defects
+need demonstrated surface and material impact; fewer selected options alone is not proof.
+Model self-labels, catalog claims and diagnoses' own prose are not independent evidence.
+
+Only proven independent Agent defects fail hygiene. A credible material additional-root
+candidate with cited behavior but essential unresolved evidence makes it INCOMPLETE, not
+a failure or silent pass. Generic improvement ideas and uncited assertions are not candidates.
+An empty finding list cannot establish hygiene when fewer than eight attempts have
+adequate attributable evidence; hygiene remains INCOMPLETE alongside the evidence gap.
+All partition records remain private with their input/output provenance; repeated observations
+of one root earn no bonus or separate score. No extra unconditional AI pass, resampling,
+deployed paired baseline, Insights run or public/team finding publication is added.
+
+`root_hygiene_status` is separate from overall status and expected observation counts.
+Historical `staging-observations-v2` (eight) and older six-observation records keep their actual
+policy/status/date. Their absent hygiene fields mean `NOT_EVALUATED`, never a v3 hygiene PASS.
+A pure threshold reaggregation cannot establish the new causal contract: new v3 eligibility
+needs assessment of retained valid evidence under the new schema/prompt, without rewriting
+history or automatically repeating traffic. Offline fakes verify schema, policy, ownership,
+merge and recovery mechanics, not semantic model accuracy. Deployed staging acceptance of
+these causal/materiality judgments remains required.
+
 ## Daily readiness and assessment
 
 Daily plans 20 issues and five baselines. Six distinct attributable probe attempts out of ten
