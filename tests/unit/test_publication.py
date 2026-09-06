@@ -28,7 +28,9 @@ from agent_insights_quality.publication import (
 )
 from agent_insights_quality.results import (
     CardVerdict, CoreVerdict, ExclusionReason, PlannedUnit, UnitId, UnitResult, aggregate_results,
+    rescore_result,
 )
+from agent_insights_quality.scoring import LEGACY_SCORING_POLICY, SCORING_POLICY
 from agent_insights_quality.state import CheckpointError, RuntimeStore, StateConflict
 
 
@@ -36,7 +38,7 @@ RUN = "daily-2026-09-04-r0"
 METADATA = {"report_date": "2026-09-04", "source_commit": "a" * 40, "region": "Sweden Central"}
 
 
-def quality(excluded=0):
+def quality(excluded=0, *, scoring_policy=SCORING_POLICY):
     plan = [PlannedUnit(UnitId("synthetic-agent", "v0"))]
     actual = [UnitResult(plan[0].unit_id, (CardVerdict("card-0001", CoreVerdict.INCORRECT),))]
     for number in range(1, 4):
@@ -49,7 +51,7 @@ def quality(excluded=0):
         actual.append(UnitResult(planned.unit_id, cards))
     for index in range(excluded):
         actual[index] = replace(actual[index], exclusion_reasons=(ExclusionReason.INCOMPLETE_EVIDENCE,))
-    return aggregate_results(plan, actual), tuple(plan)
+    return aggregate_results(plan, actual, scoring_policy=scoring_policy), tuple(plan)
 
 
 def event(number=0):
@@ -109,8 +111,11 @@ class FakeClient:
 
 @pytest.mark.parametrize("excluded,status", [(0, "Full"), (1, "Partial"), (2, "Partial")])
 @pytest.mark.parametrize("region", ["Sweden Central", "SwedenCentral", "swedencentral"])
-def test_one_envelope_and_same_result_reach_adx_without_rescoring(tmp_path, excluded, status, region):
-    result, plan = quality(excluded)
+@pytest.mark.parametrize("policy", [LEGACY_SCORING_POLICY, SCORING_POLICY])
+def test_one_envelope_and_same_result_reach_adx_without_rescoring(
+    tmp_path, excluded, status, region, policy,
+):
+    result, plan = quality(excluded, scoring_policy=policy)
     metadata = METADATA | {"region": region}
     envelope = build_public_report(result, allowed_units=plan, framework_run_id=RUN, **metadata)
     assert set(envelope) == {"schema_version", "report_date", "source_commit", "region", "framework_run_id", "report"}
@@ -118,7 +123,8 @@ def test_one_envelope_and_same_result_reach_adx_without_rescoring(tmp_path, excl
     assert envelope["report"]["status"] == status
     assert envelope["report"]["coverage"]["planned_issues"] == 3
     assert envelope["report"]["scoring_policy"]["noise_weight"] == 1
-    assert envelope["report"]["scoring_policy"]["duplicate_weight"] == 0.25
+    assert envelope["report"]["scoring_policy"] == policy.to_dict()
+    assert ("miss_weight" in envelope["report"]["scoring_policy"]) is (policy == SCORING_POLICY)
     assert envelope["report"]["coverage"]["excluded_units"] == excluded
     copied = validate_public_report(envelope, allowed_units=plan)
     copied["report"]["counts"]["noise_cards"] = 999
@@ -138,6 +144,32 @@ def test_one_envelope_and_same_result_reach_adx_without_rescoring(tmp_path, excl
     assert row["ReportDate"] == envelope["report_date"]
     assert row["FrameworkRunId"] == envelope["framework_run_id"]
     assert not client.closed
+
+
+def test_legacy_publication_replays_unchanged_and_rescore_cannot_overwrite_it(tmp_path):
+    legacy, plan = quality(scoring_policy=LEGACY_SCORING_POLICY)
+    original = build_public_report(
+        legacy, allowed_units=plan, framework_run_id=RUN, **METADATA,
+    )
+    before = json.dumps(original)
+    assert legacy.score == 47.1
+    assert validate_public_report(json.loads(before), allowed_units=plan) == original
+    updated = rescore_result(legacy)
+    assert updated.score == 53.3
+    assert updated.units is legacy.units
+    runtime, client = RuntimeStore("daily", root=tmp_path), FakeClient()
+    with runtime.ownership():
+        box = outbox(runtime)
+        box.queue_report(legacy, **METADATA)
+        stored = deepcopy(box.read_request("report"))
+        assert outbox(runtime).queue_report(legacy, **METADATA) == "report"
+        with pytest.raises(StateConflict):
+            box.queue_report(updated, **METADATA)
+        assert box.read_request("report") == stored
+        assert box.flush(client).delivered == 1
+        assert client.rows[0]["Payload"] == original["report"]
+    assert json.dumps(original) == before
+    assert original["source_commit"] == METADATA["source_commit"]
 
 
 @pytest.mark.parametrize("metadata", [

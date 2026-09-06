@@ -8,7 +8,7 @@ No catalog, provider, trace-count, or per-card run-ID contract is assumed here.
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import re
 
@@ -261,8 +261,11 @@ class QualityResult:
     status: DeliveryStatus
     team_report_eligible: bool
     failure_reasons: tuple[FailureReason, ...]
-    scoring_policy: ScoringPolicy = field(default=SCORING_POLICY, init=False)
+    scoring_policy: ScoringPolicy
     coverage_policy: CoveragePolicy = field(default=COVERAGE_POLICY, init=False)
+
+    def __post_init__(self) -> None:
+        _require_type(self.scoring_policy, ScoringPolicy, "scoring_policy")
 
     @property
     def excluded_units(self) -> tuple[ScoredUnit, ...]:
@@ -274,13 +277,7 @@ class QualityResult:
         Alias/summary approval is a precondition, not established by this method.
         """
         return {
-            "scoring_policy": {
-                "version": self.scoring_policy.version,
-                "formula": self.scoring_policy.formula,
-                "noise_weight": self.scoring_policy.noise_weight,
-                "duplicate_weight": self.scoring_policy.duplicate_weight,
-                "rounding": self.scoring_policy.rounding,
-            },
+            "scoring_policy": self.scoring_policy.to_dict(),
             "coverage_policy": {
                 "version": self.coverage_policy.version,
                 "max_excluded_units": self.coverage_policy.max_excluded_units,
@@ -360,6 +357,7 @@ def aggregate_results(
     planned_units: Iterable[PlannedUnit],
     unit_results: Iterable[UnitResult],
     *,
+    scoring_policy: ScoringPolicy = SCORING_POLICY,
     systemic_failure: bool = False,
     integrity_failure: bool = False,
 ) -> QualityResult:
@@ -369,6 +367,7 @@ def aggregate_results(
     identities, duplicate actual units, unplanned results, and unreconciled card
     revisions are invalid inputs, not measured quality failures.
     """
+    _require_type(scoring_policy, ScoringPolicy, "scoring_policy")
     if type(systemic_failure) is not bool or type(integrity_failure) is not bool:
         raise TypeError("Failure flags must be booleans")
     plan = tuple(planned_units)
@@ -423,6 +422,24 @@ def aggregate_results(
         else DeliveryStatus.PARTIAL if coverage.excluded_units else DeliveryStatus.FULL
     )
     return QualityResult(
-        units, counts, coverage, None if failures else score_percentage(counts),
-        status, not failures, tuple(failures),
+        units, counts, coverage, None if failures else score_percentage(counts, scoring_policy),
+        status, not failures, tuple(failures), scoring_policy,
+    )
+
+
+def rescore_result(
+    result: QualityResult, scoring_policy: ScoringPolicy = SCORING_POLICY,
+) -> QualityResult:
+    """Create a policy comparison without reclassifying or mutating source results."""
+    _require_type(result, QualityResult, "result")
+    _require_type(scoring_policy, ScoringPolicy, "scoring_policy")
+    eligible = (
+        result.team_report_eligible
+        and result.status is not DeliveryStatus.FAILED
+        and not result.failure_reasons
+    )
+    return replace(
+        result,
+        score=score_percentage(result.counts, scoring_policy) if eligible else None,
+        scoring_policy=scoring_policy,
     )

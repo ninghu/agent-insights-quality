@@ -1,6 +1,6 @@
 """Small synthetic score/result contracts, without catalogs or external boundaries."""
 
-from dataclasses import asdict, replace
+from dataclasses import FrozenInstanceError, asdict, replace
 import json
 
 import pytest
@@ -18,8 +18,11 @@ from agent_insights_quality.results import (
     UnitId,
     UnitResult,
     aggregate_results,
+    rescore_result,
 )
-from agent_insights_quality.scoring import ScoreCounts, score_percentage
+from agent_insights_quality.scoring import (
+    LEGACY_SCORING_POLICY, SCORING_POLICY, ScoreCounts, score_percentage,
+)
 
 
 def issue(number=1, agent="agent-demo"):
@@ -43,18 +46,19 @@ def incorrect(alias="card-noise", **kwargs):
 
 
 @pytest.mark.parametrize(
-    "correct_count,noise_count,duplicate_count,expected_score",
+    "correct_count,noise_count,duplicate_count,legacy_score,v2_score",
     [
-        (20, 0, 0, 100.0),
-        (0, 0, 0, 0.0),
-        (19, 0, 0, 95.0),
-        (19, 1, 0, 90.5),
-        (20, 0, 4, 95.2),
-        (20, 2, 2, 88.9),
+        (20, 0, 0, 100.0, 100.0),
+        (0, 0, 0, 0.0, 0.0),
+        (19, 0, 0, 95.0, 98.7),
+        (19, 1, 0, 90.5, 93.8),
+        (20, 0, 4, 95.2, 90.9),
+        (20, 2, 2, 88.9, 87.0),
     ],
 )
+@pytest.mark.parametrize("policy", [LEGACY_SCORING_POLICY, SCORING_POLICY])
 def test_approved_daily_score_examples(
-    correct_count, noise_count, duplicate_count, expected_score
+    correct_count, noise_count, duplicate_count, legacy_score, v2_score, policy,
 ):
     plan = tuple(issue(number) for number in range(20))
     actual = []
@@ -66,9 +70,10 @@ def test_approved_daily_score_examples(
         if number == 0:
             cards += tuple(correct(unit, f"duplicate-{n}") for n in range(duplicate_count))
         actual.append(UnitResult(unit.unit_id, cards))
-    result = aggregate_results(plan, actual)
+    result = aggregate_results(plan, actual, scoring_policy=policy)
     assert result.counts == ScoreCounts(correct_count, 20, noise_count, duplicate_count)
-    assert result.score == expected_score
+    assert result.score == (legacy_score if policy == LEGACY_SCORING_POLICY else v2_score)
+    assert result.scoring_policy == policy
     assert type(result.score) is float
     assert result.status is DeliveryStatus.FULL
     assert result.team_report_eligible
@@ -91,7 +96,8 @@ def test_real_daily_plan_has_five_baselines_and_twenty_issues_without_catalogs()
     assert result.score == 100.0
 
 
-def test_baseline_noise_and_correct_duplicates_penalize_without_healthy_bonus():
+@pytest.mark.parametrize("policy,score", [(LEGACY_SCORING_POLICY, 44.4), (SCORING_POLICY, 40.0)])
+def test_baseline_noise_and_correct_duplicates_penalize_without_healthy_bonus(policy, score):
     planned_issue, planned_baseline = issue(), baseline()
     real = CardVerdict(
         "baseline-real", CoreVerdict.CORRECT, "unexpected-root"
@@ -105,9 +111,10 @@ def test_baseline_noise_and_correct_duplicates_penalize_without_healthy_bonus():
                 (real, replace(real, card_alias="baseline-copy"), incorrect()),
             ),
         ),
+        scoring_policy=policy,
     )
     assert result.counts == ScoreCounts(1, 1, 1, 1)
-    assert result.score == 44.4
+    assert result.score == score
     assert result.units[1].counts == ScoreCounts(0, 0, 1, 1)
     assert result.coverage.scored_baselines == 1
 
@@ -190,15 +197,16 @@ def test_current_contributions_do_not_inherit_historical_counts_or_uncertainty()
 
 @pytest.mark.parametrize("severity", tuple(DiagnosticVerdict))
 @pytest.mark.parametrize("proposed_fix", tuple(DiagnosticVerdict))
-def test_diagnostic_fields_neither_block_nor_change_score(severity, proposed_fix):
+@pytest.mark.parametrize("policy,score", [(LEGACY_SCORING_POLICY, 80.0), (SCORING_POLICY, 66.7)])
+def test_diagnostic_fields_neither_block_nor_change_score(severity, proposed_fix, policy, score):
     unit = issue()
     cards = (
         correct(unit, severity=severity, proposed_fix=proposed_fix),
         correct(unit, "another", severity=severity, proposed_fix=proposed_fix),
     )
-    result = aggregate_results((unit,), (UnitResult(unit.unit_id, cards),))
+    result = aggregate_results((unit,), (UnitResult(unit.unit_id, cards),), scoring_policy=policy)
     assert result.counts == ScoreCounts(1, 1, 0, 1)
-    assert result.score == 80.0
+    assert result.score == score
     assert result.status is DeliveryStatus.FULL
     assert all(finding.card.severity is severity for finding in result.units[0].findings)
 
@@ -410,7 +418,8 @@ def test_approved_summary_still_requires_concise_single_line_shape(summary):
         CardVerdict("card", CoreVerdict.UNKNOWN, summary=summary)
 
 
-def test_json_projection_matches_dataclass_counts_coverage_and_unscored_findings():
+@pytest.mark.parametrize("policy", [LEGACY_SCORING_POLICY, SCORING_POLICY])
+def test_json_projection_matches_dataclass_counts_coverage_and_unscored_findings(policy):
     plan = (issue(1), issue(2), baseline())
     actual = (
         UnitResult(
@@ -424,19 +433,19 @@ def test_json_projection_matches_dataclass_counts_coverage_and_unscored_findings
         ),
         UnitResult(plan[2].unit_id),
     )
-    result = aggregate_results(plan, actual)
+    result = aggregate_results(plan, actual, scoring_policy=policy)
     payload = json.loads(json.dumps(result.to_dict(), allow_nan=False))
     assert payload["counts"] == asdict(result.counts)
     assert payload["coverage"] == {
         **asdict(result.coverage), "excluded_units": result.coverage.excluded_units,
     }
-    assert payload["scoring_policy"] == asdict(result.scoring_policy)
+    assert payload["scoring_policy"] == policy.to_dict()
     assert payload["coverage_policy"] == asdict(result.coverage_policy)
     assert payload["scoring_policy"]["noise_weight"] == 1
-    assert payload["scoring_policy"]["duplicate_weight"] == 0.25
-    assert payload["scoring_policy"]["version"] == "unique-issues-noise-1-duplicate-025-v1"
+    assert payload["scoring_policy"]["duplicate_weight"] == policy.duplicate_weight
+    assert ("miss_weight" in payload["scoring_policy"]) is (policy == SCORING_POLICY)
     assert payload["coverage_policy"]["version"] == "whole-unit-max-two-exclusions-v1"
-    assert payload["score"] == result.score == score_percentage(result.counts)
+    assert payload["score"] == result.score == score_percentage(result.counts, policy)
     assert payload["status"] == result.status.value == "Partial"
     assert payload["team_report_eligible"] == result.team_report_eligible
     for model, serialized in zip(result.units, payload["units"], strict=True):
@@ -452,3 +461,130 @@ def test_json_projection_matches_dataclass_counts_coverage_and_unscored_findings
     }
     payload["counts"]["correct_issues"] = 999
     assert result.counts.correct_issues == 1
+
+
+def test_n7_counts_rescore_to_v2_without_mutating_or_reclassifying_the_legacy_result():
+    plan = tuple(issue(n, f"agent-{n // 4}") for n in range(20)) + tuple(
+        baseline(f"agent-{n}") for n in range(5)
+    )
+    actual = [
+        UnitResult(unit.unit_id, (correct(unit),) if number < 14 else ())
+        for number, unit in enumerate(plan)
+    ]
+    actual[19] = UnitResult(
+        plan[19].unit_id,
+        (
+            correct(plan[19]),
+            incorrect(),
+            CardVerdict("uncertain", CoreVerdict.UNKNOWN),
+            incorrect("historical-noise", contribution=Contribution.HISTORICAL),
+        ),
+        (ExclusionReason.INCOMPLETE_EVIDENCE,),
+        "Synthetic evidence coverage is incomplete.",
+    )
+    legacy = aggregate_results(plan, actual, scoring_policy=LEGACY_SCORING_POLICY)
+    before = json.dumps(legacy.to_dict())
+    assert legacy.counts == ScoreCounts(14, 19)
+    assert legacy.score == 73.7
+    assert legacy.status is DeliveryStatus.PARTIAL
+    assert legacy.coverage.excluded_units == 1
+    updated = rescore_result(legacy)
+    assert updated is not legacy
+    assert updated.score == 91.8
+    assert updated.scoring_policy == SCORING_POLICY
+    assert updated == aggregate_results(plan, actual)
+    assert updated.units is legacy.units
+    assert updated.counts is legacy.counts
+    assert updated.coverage is legacy.coverage
+    assert updated.coverage_policy is legacy.coverage_policy
+    assert updated.failure_reasons is legacy.failure_reasons
+    assert updated.team_report_eligible is legacy.team_report_eligible
+    assert updated.status is legacy.status
+    assert updated.excluded_units == legacy.excluded_units
+    assert json.dumps(legacy.to_dict()) == before
+    for name, value in legacy.to_dict().items():
+        if name not in ("score", "scoring_policy"):
+            assert updated.to_dict()[name] == value
+    assert rescore_result(updated, LEGACY_SCORING_POLICY) == legacy
+    assert rescore_result(updated) is not updated
+    with pytest.raises(FrozenInstanceError):
+        updated.score = 100.0
+
+
+def test_rescoring_mixed_penalties_keeps_two_whole_exclusions_and_historical_context():
+    plan = (issue(1), issue(2), issue(3), issue(4), baseline(), baseline("other-agent"))
+    real = CardVerdict("baseline-real", CoreVerdict.CORRECT, "unexpected-root")
+    actual = (
+        UnitResult(plan[0].unit_id, (
+            correct(plan[0]), correct(plan[0], "duplicate"), incorrect(),
+            incorrect("old-noise", contribution=Contribution.HISTORICAL),
+        )),
+        UnitResult(plan[1].unit_id, (correct(plan[1]),)),
+        UnitResult(plan[2].unit_id),
+        UnitResult(plan[3].unit_id, (correct(plan[3]), incorrect()),
+                   (ExclusionReason.INCOMPLETE_EVIDENCE,)),
+        UnitResult(plan[4].unit_id, (real, replace(real, card_alias="baseline-copy"), incorrect())),
+    )
+    legacy = aggregate_results(plan, actual, scoring_policy=LEGACY_SCORING_POLICY)
+    updated = rescore_result(legacy)
+    assert legacy.counts == updated.counts == ScoreCounts(2, 3, 2, 2)
+    assert legacy.score == 36.4
+    assert updated.score == 38.1
+    assert legacy.units[4].counts == ScoreCounts(0, 0, 1, 1)
+    assert updated.coverage.excluded_units == 2
+    assert updated.status is DeliveryStatus.PARTIAL
+    assert updated.team_report_eligible
+    assert updated.units is legacy.units
+    assert updated == aggregate_results(plan, actual)
+
+
+@pytest.mark.parametrize("failure", [
+    "systemic_failure", "integrity_failure", "too_many_exclusions", "no_scorable_issues",
+])
+@pytest.mark.parametrize("policy", [LEGACY_SCORING_POLICY, SCORING_POLICY])
+def test_rescoring_failed_results_preserves_flags_counts_exclusions_and_no_score(failure, policy):
+    plan = tuple(issue(n) for n in range(4))
+    actual = tuple(UnitResult(unit.unit_id, (correct(unit),)) for unit in plan)
+    flags = {}
+    if failure in ("systemic_failure", "integrity_failure"):
+        flags[failure] = True
+    else:
+        actual = actual[:1] if failure == "too_many_exclusions" else ()
+    result = aggregate_results(plan, actual, scoring_policy=LEGACY_SCORING_POLICY, **flags)
+    before = result.to_dict()
+    updated = rescore_result(result, policy)
+    assert updated is not result
+    assert updated.score is None
+    assert updated.status is DeliveryStatus.FAILED
+    assert not updated.team_report_eligible
+    assert updated.failure_reasons == result.failure_reasons
+    assert FailureReason(failure) in updated.failure_reasons
+    assert updated.units is result.units
+    assert updated.counts is result.counts
+    assert updated.coverage is result.coverage
+    assert updated.to_dict() == before | {"scoring_policy": policy.to_dict()}
+    assert result.to_dict() == before
+
+
+def test_rescoring_never_grants_eligibility_or_treats_a_measured_miss_as_unmeasured():
+    unit = issue()
+    result = aggregate_results((unit,), (UnitResult(unit.unit_id),))
+    assert rescore_result(result).score == 0.0
+    ineligible = replace(result, team_report_eligible=False, score=None)
+    assert rescore_result(ineligible).score is None
+    assert not rescore_result(ineligible).team_report_eligible
+
+
+@pytest.mark.parametrize("policy", [None, "v2", SCORING_POLICY.to_dict(), True])
+def test_aggregation_and_rescoring_reject_nonpolicy_objects(policy):
+    unit = issue()
+    actual = (UnitResult(unit.unit_id),)
+    with pytest.raises(TypeError):
+        aggregate_results((unit,), actual, scoring_policy=policy)
+    result = aggregate_results((unit,), actual)
+    with pytest.raises(TypeError):
+        rescore_result(result, policy)
+    with pytest.raises(TypeError):
+        replace(result, scoring_policy=policy)
+    with pytest.raises(TypeError):
+        rescore_result(result.to_dict())

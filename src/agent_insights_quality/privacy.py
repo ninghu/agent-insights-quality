@@ -24,7 +24,7 @@ from .results import (
     PlannedUnit,
     QualityResult,
 )
-from .scoring import SCORING_POLICY
+from .scoring import LEGACY_SCORING_POLICY, SCORING_POLICY, ScoringPolicy
 
 
 class PrivacyError(QualityError):
@@ -96,13 +96,13 @@ _UNIT = _object({
     "summary": _SUMMARY,
 })
 PUBLIC_RESULT_SCHEMA = _object({
-    "scoring_policy": {"const": {
-        "version": SCORING_POLICY.version,
-        "formula": SCORING_POLICY.formula,
-        "noise_weight": 1,
-        "duplicate_weight": 0.25,
-        "rounding": SCORING_POLICY.rounding,
-    }},
+    "scoring_policy": {"oneOf": [
+        _object({
+            name: {"type": "string" if isinstance(item, str) else "number", "const": item}
+            for name, item in policy.to_dict().items()
+        })
+        for policy in (LEGACY_SCORING_POLICY, SCORING_POLICY)
+    ]},
     "coverage_policy": {"const": {
         "version": "whole-unit-max-two-exclusions-v1",
         "max_excluded_units": 2, "minimum_scored_issues": 1,
@@ -212,6 +212,7 @@ def _rebuild_result(value, plan):
     ) for unit in value["units"])
     return aggregate_results(
         plan, units,
+        scoring_policy=ScoringPolicy.from_dict(value["scoring_policy"]),
         systemic_failure="systemic_failure" in value["failure_reasons"],
         integrity_failure="integrity_failure" in value["failure_reasons"],
     )
