@@ -64,7 +64,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
@@ -130,7 +137,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
@@ -196,7 +210,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
@@ -262,7 +283,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
@@ -328,7 +356,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
@@ -394,7 +429,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
@@ -460,7 +502,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
@@ -526,7 +575,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
@@ -592,7 +648,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
@@ -658,7 +721,14 @@
         "semantic_assertions": {
           "exact_text": "The request stopped after repeated no-progress states."
         },
-        "trace_assertions": [],
+        "trace_assertions": [
+          {
+            "name": "no_progress_guard_missing_before_safety_cap",
+            "kind": "tool_call_count",
+            "tool_name": "poll_ticket",
+            "count": 4
+          }
+        ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"

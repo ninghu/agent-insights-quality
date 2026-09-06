@@ -162,8 +162,51 @@ def test_waiting_polls_do_real_work_and_stop_at_their_bound(version, polls):
     results = [call["result"] for call in calls(session, "poll_ticket")]
     assert [result["poll"] for result in results] == list(range(1, polls + 1))
     assert all(result["ticket_id"] == "ticket-demo-2" and result["state"] == "waiting" for result in results)
+    assert len({(result["state"], result["revision"]) for result in results}) == 1
     assert "stopped" in output
+    if version == "v0":
+        assert "after two polls" in output
+    else:
+        assert output == "The request stopped after repeated no-progress states."
     assert not model_calls
+
+
+def test_healthy_no_progress_guard_allows_actual_revision_progress():
+    module = load_domain("v0")
+    class ProgressingSession(module.TicketSession):
+        def poll_ticket(self, ticket_id):
+            result = super().poll_ticket(ticket_id)
+            result["revision"] += self.poll_attempts
+            if self.poll_attempts == 3:
+                result["state"] = "ready"
+            return result
+    async def model(prompt, limit):
+        return module.ModelReply("Worker ready after actual progress.")
+    session = ProgressingSession(
+        module.parse_request("Wait for ticket-demo-2 while waiting on an unavailable worker."),
+        model,
+    )
+    output = asyncio.run(module.run(session, 120))
+    assert session.poll_attempts == 3
+    assert "Worker ready" in output
+    assert "no progress" not in output
+
+
+def test_issue031_contract_distinguishes_the_guard_from_the_global_safety_cap():
+    from agent_insights_quality.catalogs import load_catalog
+    from agent_insights_quality.traffic import load_attempts
+    target = load_catalog(ROOT.parents[1]).target("support-ticket-agent/issue-031")
+    assert target.validation_mode == "deterministic"
+    assert "second identical result" in target.expectation["root_cause"]
+    assert "poll counter is not task progress" in target.expectation["root_cause"]
+    assert "independent four-poll safety cap" in target.expectation["expected_fix"]
+    for attempt in load_attempts(target):
+        for step in attempt.steps:
+            if step.phase == "probe":
+                assert {
+                    "name": "no_progress_guard_missing_before_safety_cap",
+                    "kind": "tool_call_count", "tool_name": "poll_ticket", "count": 4,
+                } in step.expected["trace_assertions"]
 
 
 def test_ready_worker_makes_progress_even_in_issue031():

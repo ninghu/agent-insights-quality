@@ -280,8 +280,8 @@ issues:
     severity: medium
     implementation: agents/support-ticket-agent/issues/issue-031
     validation_mode: deterministic
-    root_cause: The orchestration repeats the same state without progress until the loop bound.
-    expected_fix: Detect no-progress states and terminate with a bounded explicit failure.
+    root_cause: "The no-progress guard is missing: poll_ticket keeps returning the same waiting state and revision, but orchestration consumes the four-poll safety cap instead of stopping after the second identical result. An incrementing poll counter is not task progress."
+    expected_fix: Compare consecutive state and revision values and stop with an explicit failure on the first unchanged pair (two polls here), before the independent four-poll safety cap; permit genuine state or revision progress.
   - id: issue-032
     title: Valid ticket request rejected before work
     agent: support-ticket-agent
