@@ -37,10 +37,13 @@ VERSIONS = ["v0", *(f"issue-{number:03}" for number in range(21, 29))]
 
 
 def test_travel_host_dependencies_match_deployable_requirements():
-    for requirement in (ROOT / "v0" / "requirements.txt").read_text().splitlines():
-        name, expected = requirement.split("==")
+    requirements = dict(
+        requirement.split("==")
+        for requirement in (ROOT / "v0" / "requirements.txt").read_text().splitlines()
+    )
+    assert requirements["azure-ai-agentserver-responses"] == "1.0.0b9"
+    for name, expected in requirements.items():
         assert installed_version(name.split("[")[0]) == expected
-    assert installed_version("azure-ai-agentserver-responses").startswith("1.")
 
 
 def version_path(version):
@@ -869,6 +872,55 @@ def test_multi_itinerary_proposal_does_not_authorize_an_ambiguous_booking(runtim
         assert runtime.ledger.records[explicit["booking_id"]]["trip"] == "trip-beta"
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("runtime", VERSIONS, indirect=True)
+def test_actual_host_request_and_completion_sdk_boundary(runtime, monkeypatch):
+    boundary = {}
+    handle_create = runtime.app.TravelResponsesHostServer.handle_create
+
+    async def observe(self, request, context, cancellation_signal):
+        boundary["request"] = request
+        async for event in handle_create(self, request, context, cancellation_signal):
+            if event["type"] == "response.completed":
+                boundary["completed"] = event
+            yield event
+
+    monkeypatch.setattr(runtime.app.TravelResponsesHostServer, "handle_create", observe)
+    payload = {
+        "input": [{
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": "Synthetic conversation context acknowledged.",
+            }],
+        }],
+        "agent_session_id": "synthetic-sdk-boundary",
+        "store": False,
+    }
+
+    async def run():
+        host = runtime.app.TravelResponsesHostServer(
+            runtime.graph, identity=runtime.app.RUNTIME_IDENTITY,
+            store=InMemoryResponseProvider(),
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=host._app),
+            base_url="http://synthetic.test",
+        ) as client:
+            response = await client.post("/responses", json=payload)
+            assert response.status_code == 200
+            return response.json()
+
+    result = asyncio.run(run())
+    assert result["status"] == "completed"
+    request, completed = boundary["request"], boundary["completed"]
+    assert not isinstance(request, dict) and callable(getattr(request, "as_dict", None))
+    assert request.as_dict()["input"] == payload["input"]
+    assert request.previous_response_id is None
+    assert callable(getattr(completed, "as_dict", None))
+    assert completed.as_dict()["response"]["output"] == result["output"]
+    assert not runtime.calls and not runtime.ledger.records
 
 
 @pytest.mark.parametrize("fail_model", [False, True])
