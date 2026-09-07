@@ -26,6 +26,8 @@ DASHBOARD = json.loads(
 KQL = (ROOT / "infra" / "quality-analytics.kql").read_text(encoding="utf-8")
 FUNCTIONS = dict(re.findall(r"\) (AIQ\w+)\([^\n]*\) \{\n(.*?)\n\}", KQL, re.DOTALL))
 VARIABLES = re.compile(r"\b_[a-zA-Z]\w*\b")
+FIXED_POLICY = "unique-issues-noise-1-duplicate-05-miss-025-v2"
+FIXED_SCOPE = f"_startTime, _endTime, 'swedencentral', '{FIXED_POLICY}'"
 
 
 def visible_pages(parameter):
@@ -38,7 +40,7 @@ def visible_pages(parameter):
 
 def test_dashboard_references_layout_and_visual_contracts():
     assert [page["name"] for page in DASHBOARD["pages"]] == [
-        "Overview", "Explain change", "Legacy history (read-only)",
+        "Overview", "Explain change",
     ]
     assert DASHBOARD["schema_version"] == "20"
     assert DASHBOARD["autoRefresh"] == {"enabled": False}
@@ -71,7 +73,7 @@ def test_dashboard_references_layout_and_visual_contracts():
         else:
             assert tile["visualType"] == "table"
             assert options["table__enableRenderLinks"] is False
-    assert [len(per_page[page["id"]]) for page in DASHBOARD["pages"]] == [4, 4, 3]
+    assert [len(per_page[page["id"]]) for page in DASHBOARD["pages"]] == [4, 4]
 
 
 def test_filters_exist_only_on_pages_that_consume_them_and_use_matching_contracts():
@@ -85,30 +87,23 @@ def test_filters_exist_only_on_pages_that_consume_them_and_use_matching_contract
             consuming = {tile["pageId"] for tile in DASHBOARD["tiles"]
                          if variable in tile["usedParamVariables"]}
             assert consuming == visible_pages(parameter)
-    legacy = DASHBOARD["pages"][-1]["id"]
     for parameter in DASHBOARD["parameters"]:
         if parameter["kind"] == "duration":
             continue
         source = parameter["dataSource"]
-        if source["kind"] == "static":
-            assert parameter["defaultValue"]["value"] in {
-                choice["value"] for choice in source["values"]
-            }
-            continue
+        assert source["kind"] == "query"
         assert set(source["consumedVariables"]) == set(VARIABLES.findall(source["query"]))
         assert source["dataSourceId"] == DASHBOARD["dataSources"][0]["id"]
         for dependency in source["consumedVariables"]:
             assert visible_pages(parameter) <= visible_pages(by_variable[dependency])
-        assert ("AIQDaily" in source["query"]) == (visible_pages(parameter) == {legacy})
-    assert by_variable["_policy"]["defaultValue"]["value"] == SCORING_POLICY.version
-    assert by_variable["_policy"]["selectionType"] == "single"
-    assert by_variable["_region"]["selectionType"] == "single"
+        assert "AIQDaily" not in source["query"]
+        assert visible_pages(parameter) == {DASHBOARD["pages"][1]["id"]}
+    assert set(by_variable) == {"_startTime", "_endTime", "_snapshot", "_currentAgent"}
     for tile in DASHBOARD["tiles"]:
         assert set(tile["usedParamVariables"]) <= by_variable.keys()
-        if tile["pageId"] != legacy:
-            assert "AIQDaily" not in tile["query"]
-            assert "CoverageStatus" not in tile["query"]
-            assert "_startTime, _endTime, _region, _policy" in tile["query"]
+        assert "AIQDaily" not in tile["query"]
+        assert "CoverageStatus" not in tile["query"]
+        assert FIXED_SCOPE in tile["query"]
 
 
 def test_query_dependencies_are_defined_current_read_models_not_raw_or_legacy_data():
@@ -329,40 +324,31 @@ def test_comparison_limits_distinguish_rotation_exclusion_identity_and_baselines
     assert "DeltaM = M - PreviousM" in units
 
 
-def test_fourteen_day_defaults_and_static_choices_are_valid_without_publications():
+def test_fourteen_day_defaults_and_v2_only_scope_remain_valid_without_publications():
     parameters = {item.get("variableName", "_dates"): item for item in DASHBOARD["parameters"]}
     assert parameters["_dates"]["defaultValue"] == {"count": 14, "kind": "dynamic", "unit": "days"}
-    assert parameters["_region"]["dataSource"] == {
-        "kind": "static", "values": [{"value": "swedencentral", "displayText": "Sweden Central"}],
-    }
-    policy = parameters["_policy"]
-    assert policy["dataSource"]["kind"] == "static"
-    assert {item["value"] for item in policy["dataSource"]["values"]} == {
-        SCORING_POLICY.version, LEGACY_SCORING_POLICY.version,
-    }
-    assert policy["defaultValue"] == {"kind": "value", "value": SCORING_POLICY.version}
-    assert policy["selectionType"] == "single"
+    assert set(parameters) == {"_dates", "_snapshot", "_currentAgent"}
     for variable in ("_snapshot", "_currentAgent"):
         assert parameters[variable]["defaultValue"] == {"kind": "all"}
         query = parameters[variable]["dataSource"]["query"]
-        assert "AIQSnapshotRunsV1(_startTime, _endTime, _region, _policy" in query
+        assert f"AIQSnapshotRunsV1({FIXED_SCOPE}" in query
         assert "AIQSnapshotChangesV1" not in query and "AIQSnapshotsV1" not in query
     assert snapshot_spec([]) == {}
     existing_v1 = row(4, policy=LEGACY_SCORING_POLICY)
     assert not [value for value in snapshot_spec([existing_v1]).values()
-                if value["ScoringPolicy"] == policy["defaultValue"]["value"]]
+                if value["ScoringPolicy"] == FIXED_POLICY]
 
 
 def test_empty_state_keeps_score_null_and_does_not_hide_missing_function_errors():
     latest = DASHBOARD["tiles"][0]["query"]
-    assert "Publication = 'No official public-safe publications" in latest
+    assert "Publication = 'No official public-safe v2 publications" in latest
     assert "QualityScore = real(null)" in latest and "M = long(null)" in latest
     assert "where toscalar(Latest | count) == 0" in latest
     metadata = next(tile["query"] for tile in DASHBOARD["tiles"]
                     if "Metadata = bag_pack" in tile["query"])
     assert "where toscalar(Selected | count) == 0" in metadata
     assert "Metadata = dynamic(null)" in metadata
-    for tile in DASHBOARD["tiles"][:-3]:
+    for tile in DASHBOARD["tiles"]:
         query = tile["query"]
         assert "isfuzzy" not in query and "AIQDaily" not in query
         assert "best_effort" not in query
@@ -404,7 +390,7 @@ def test_only_selected_run_ids_are_expanded_and_empty_selection_is_not_all_histo
     assert "materialize(AIQUnitsV1(pack_array(frameworkRunId, previousRunId)))" in pair
     assert "let Current = PairUnits" in pair and "let Previous = PairUnits" in pair
     assert "AIQSnapshotChangesV1" not in pair and "AIQSnapshotsV1" not in pair
-    queries = [tile["query"] for tile in DASHBOARD["tiles"][:-3]]
+    queries = [tile["query"] for tile in DASHBOARD["tiles"]]
     queries += [parameter["dataSource"]["query"] for parameter in DASHBOARD["parameters"]
                 if parameter.get("variableName") in ("_snapshot", "_currentAgent")]
     for query in queries:
@@ -449,39 +435,25 @@ def test_bounded_cohorts_retain_exact_predecessor_outside_fourteen_day_window():
     assert changes.index("prev(PlannedCohort)") < changes.index("| where isnull(startDate)")
 
 
-@pytest.mark.parametrize("optional,expected", [
-    ({}, (None, None, "Legacy formula not recorded")),
-    ({"QualityScoreFormula": ""}, (None, None, "Legacy formula not recorded")),
-    ({"IssuesMissing": 2, "DuplicateCards": 3, "QualityScoreFormula": "stored-legacy-formula"},
-     (2, 3, "stored-legacy-formula")),
-])
-def test_legacy_optional_columns_preserve_missing_values_without_inventing_counts(optional, expected):
-    trend, daily, _ = DASHBOARD["tiles"][-3:]
-    formula = "coalesce(tostring(column_ifexists('QualityScoreFormula', '')), 'Legacy formula not recorded')"
-    assert formula in trend["query"] and formula in daily["query"]
-    for field in ("IssuesMissing", "DuplicateCards"):
-        assert f"{field} = tolong(column_ifexists('{field}', long(null)))" in daily["query"]
-    source = {
-        "IssuesCorrect": 4, "IssuesExpected": 10, "IssuesPartial": 3,
-        "QualityFailures": 2, "UnverifiedCards": 7, **optional,
-    }
-    # Synthetic schema reference, not KQL execution: older statistics are not substitutes.
-    assert (
-        source.get("IssuesMissing"), source.get("DuplicateCards"),
-        source.get("QualityScoreFormula") or "Legacy formula not recorded",
-    ) == expected
-    assert "IssuesExpected -" not in daily["query"]
-    assert all(field not in daily["query"] for field in (
-        "IssuesPartial", "QualityFailures", "UnverifiedCards", "IssuesIncorrect",
-    ))
+def test_every_tile_and_query_filter_is_explicitly_bound_to_sweden_and_exact_v2():
+    queries = [tile["query"] for tile in DASHBOARD["tiles"]]
+    queries += [parameter["dataSource"]["query"] for parameter in DASHBOARD["parameters"]
+                if "dataSource" in parameter]
+    assert len(queries) == 10
+    for query in queries:
+        calls = re.findall(r"\bAIQSnapshot(?:Runs|Changes)V1\(([^)]*)\)", query)
+        assert calls and all(args in (FIXED_SCOPE, FIXED_SCOPE + ", true") for args in calls)
+        assert "AIQDaily" not in query and LEGACY_SCORING_POLICY.version not in query
+    serialized = json.dumps(DASHBOARD)
+    obsolete = {"_region", "_policy", "_reportDate", "_agent", "_issue", "_result", "_ownership"}
+    assert not obsolete.intersection(VARIABLES.findall(serialized))
+    assert "Legacy" not in serialized
 
 
-@pytest.mark.parametrize("source,expected", [
-    ({"Result": "legacy-recorded-result"}, "legacy-recorded-result"),
-    ({"Outcome": "recorded-outcome", "Result": "older-result"}, "recorded-outcome"),
-    ({}, "Not recorded"),
-])
-def test_legacy_outcome_column_rename_preserves_recorded_meaning(source, expected):
-    issues = DASHBOARD["tiles"][-1]
-    assert "OutcomeOrResult = tostring(column_ifexists('Outcome', column_ifexists('Result', 'Not recorded')))" in issues["query"]
-    assert source.get("Outcome", source.get("Result", "Not recorded")) == expected
+def test_removing_legacy_ui_preserves_backend_history_and_operations():
+    assert {
+        "AIQDailyPublications", "AIQDailyRuns", "AIQDailyAgents", "AIQDailyIssues",
+        "AIQDailyFields", "AIQDailyBaselines", "AIQDailyCards", "AIQDailyHighlights",
+        "AIQOperationsV1", "AIQPublicationConflictsV1",
+    } <= FUNCTIONS.keys()
+    assert ".create-merge table DailyQualityPublications" in KQL

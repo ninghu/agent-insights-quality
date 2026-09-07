@@ -5,23 +5,26 @@ It is a **read-only view of published, public-safe results**, not a second score
 an evidence browser, or a deployment. Private TEST runs, including acceptance
 trials, must never be published to ADX to populate it.
 
-## Three pages
+## Two pages, v2 only
 
 | Page | What to read |
 | --- | --- |
 | **Overview** | Latest stored score and C/E, M, N, D, exclusions; score trend; current/previous count and weighted-penalty changes; scored/planned issue and baseline coverage with comparison limits. |
 | **Explain change** | Choose a snapshot (All means latest) and optionally an Agent. The top row identifies both dates and comparison limits; expand `Metadata` for source/run aliases and recorded policy. Agent counts, paired unit outcomes and grouped scored/unscored findings explain the gaps. |
-| **Legacy history (read-only)** | Historical stored scores, daily counts and issue outcomes, with legacy-only date/Agent filters. Historical meanings are not rewritten as current-policy results. |
 
 Overview and Explain change use current `AIQRunsV1`, `AIQUnitsV1` and
-`AIQFindingsV1` contracts through the dashboard read models. Their region and
-scoring-policy selectors are static, reviewed choices that default to Sweden
-Central and v2; they do not need published rows or a successful query to be valid.
-The default range is **last 14 days**. A selected policy with
-no publications yields no score, not a fallback to another policy or to legacy
-data. Overview and Explain change explicitly explain an empty official dataset;
-no zero score or placeholder traffic is manufactured. The Agent selector includes previous-only Agents so rotated-out units
-remain inspectable. It does not change the global score or comparison.
+`AIQFindingsV1` contracts through the dashboard read models. All eight tiles and
+both query-backed filters explicitly bind **Sweden Central** (`swedencentral`)
+and **`unique-issues-noise-1-duplicate-05-miss-025-v2`** in their queries.
+There are no region, policy or legacy filters/pages. Removing those selectors
+does not broaden the query scope.
+
+The only filters are **Report dates**, defaulting to **last 14 days**, and
+**Snapshot** / **Agent** on Explain change. No official v2 publications means
+no score—not a hidden v1/legacy fallback, a fabricated zero or placeholder traffic.
+Both pages explain this empty state. The Agent selector includes previous-only
+Agents so rotated-out units remain inspectable. It does not change the global
+score or comparison.
 
 No overall PASS/FAIL threshold, healthy-baseline score bonus, per-Agent quality
 score, Full/Partial badge, raw card prose, HTML, or model/provider/recipient URLs
@@ -47,15 +50,15 @@ invented by the dashboard.
 `QualityScore` is read directly from the unified result's stored, one-decimal
 score. It is never recomputed by a tile or function:
 
-| Recorded policy | Historical/current formula | Weighted columns |
+| Recorded policy | Formula | Weighted columns |
 | --- | --- | --- |
-| `unique-issues-noise-1-duplicate-025-v1` | `100*C/(E_scored+N_scored+0.25*D_scored)` | N × 1, D × 0.25; separate miss weight/term stays null, because M is already part of E. |
 | `unique-issues-noise-1-duplicate-05-miss-025-v2` | `100*C/(C+N_scored+0.5*D_scored+0.25*(E_scored-C))` | N × 1, D × 0.5, M × 0.25. |
 
 Weight displays require the recorded version, formula, weights and rounding to
 match a reviewed policy. Unrecognized combinations get null weighted values and
 a comparison warning, not guessed weights. `MissWeight` is projected from the
-existing dynamic payload; absent v1 values stay null. No table-column migration,
+existing dynamic payload. Historical backend v1 values remain unchanged and are
+not selected by this dashboard. No table-column migration,
 publication DTO change or privacy-allowlist expansion is required.
 
 ## Exact snapshot and comparison rules
@@ -105,8 +108,8 @@ absence of a dashboard row is not a successful run.
 ## Bounded reads, not a shortened comparison history
 
 The filters, latest-score tile and trend use run metadata rather than unit
-rollups. Region and policy choices make **zero ADX requests**. Snapshot selectors
-read only the requested date/region/policy metadata. The Agent selector expands
+rollups. Fixed region/policy scope requires no dropdown queries. Snapshot selectors
+read only the requested dates within that scope. The Agent selector expands
 only the current and previous run's units; it never loads all historic Agents.
 
 For comparisons, metadata may still be searched **before the start date** to
@@ -196,37 +199,34 @@ change Azure resources. After review, an authorized operator must:
    ```
 
 3. Render the template with the approved `ADX_CLUSTER_URI`, `ADX_DATABASE` and
-   `ADX_CLUSTER_NAME` placeholders using private configuration, then import it.
-   Never commit the rendered resource locations or IDs.
-4. Verify selected-policy empty states, filters, layout, prior-date selection,
+   `ADX_CLUSTER_NAME` placeholders using private configuration, then update the
+   existing authorized dashboard rather than creating a duplicate.
+   Never commit the rendered resource locations or IDs. Old saved URLs can
+   contain removed page/filter parameters; use the updated Overview link and
+   do not carry forward obsolete region, policy or legacy filter parameters.
+4. Verify the fixed-v2 empty states, both query filters, eight tiles, prior-date selection,
    replay/revision behavior and numeric/null rendering against authorized
    **official public-safe** publications. Do not publish private TEST data for
    this check. No automatic refresh/deployment was enabled by this change.
 
 For red filter marks or tiles stuck loading, inspect the query error in the
-intended database and the function/schema checks above. Static region/policy
-choices fix invalid no-data defaults; they do **not** hide missing functions,
+intended database and the function/schema checks above. Fixed Sweden/v2 query
+scope removes invalid dropdown defaults but does **not** hide missing functions,
 authorization failures, or a wrong data source. Missing-function failures must
 be repaired by the operator's reviewed function installation, not swallowed by
 an empty-data fallback. Valid empty datasets explain that only official
 public-safe publications populate this view; private TEST N7/N8 must stay private.
 
-Legacy `DailyQualityPublications`, all `AIQDaily*` functions, old reports and
-legacy West US resources remain untouched. The compact legacy page is not a
-migration; the original card/baseline/field/highlight functions remain queryable
-for deeper historical maintenance. `AIQOperationsV1()` remains a separate
-operational view rather than a wall of score-dashboard tiles.
+The Legacy history page, its tiles and its filters are removed **only from the
+UI**. Legacy `DailyQualityPublications`, all `AIQDaily*` functions, historical
+reports, legacy West US resources and backend v1 support remain untouched.
+Their original meanings are not rewritten or inferred. `AIQOperationsV1()`
+and performance telemetry remain separate operational data; this UI cleanup
+does not remove latency measurements or Daily email fields.
 
-Older deployed legacy views can expose fewer columns than the repository's
-historical definitions. Legacy tiles use `column_ifexists`: absent
-`IssuesMissing` and `DuplicateCards` stay null, and absent/empty formulas are
-labeled **Legacy formula not recorded**. These scores are not labeled v1 or v2.
-No missing or incorrect count is inferred from older partial/failure statistics
-or from `IssuesExpected - IssuesCorrect`. The issue table's `OutcomeOrResult`
-column preserves `Outcome` when present, otherwise the older `Result` value;
-neither is reinterpreted as a current classification. This JSON-only
-compatibility adjustment does not alter legacy functions or data and needs no
-function reinstall.
+The two-page/fixed-scope change is JSON-only plus documentation/tests. It changes
+no KQL function definitions and requires no function reinstall once the bounded
+read models above are installed.
 
 Offline checks live in `tests/unit/test_dashboard.py` and
 `tests/unit/test_publication.py`: JSON references/layout/filter scope, query
