@@ -548,6 +548,14 @@ Staging uses `aiq-staging-swedencentral`; Daily uses `aiq-daily-swedencentral`. 
 objects and separate g30 telemetry. The canonical deployment registry is in the dedicated
 Sweden private `deployment-registries` blob container. There is no legacy-region/storage fallback.
 
+Terra capacity is profile-specific in `infra/main.bicep`: `dailyInsightGenerationCapacity`
+defaults to 1000 (1,000,000 TPM), while `stagingInsightGenerationCapacity` defaults to 100
+(100,000 TPM). Both retain the existing `DataZoneStandard` model deployment and pinned version.
+The former shared `insightGenerationCapacity` parameter is replaced by these two parameters;
+update private deployment parameter files explicitly rather than applying one value to both
+profiles. These are configured rate limits, not guaranteed achieved throughput. Changing or
+compiling the template does not deploy it; infrastructure updates remain separately scoped.
+
 Staging never runs Agent Insights, scores Daily cards or sends a report email. It may emit safe
 operational events. A TEST Daily still performs qualification, but keeps evidence, previews,
 logs and approved report archives private; its email is only for the configured private

@@ -6,7 +6,8 @@ param automationOwner string
 param automationPrincipalId string
 param telemetryGeneration string
 param testAgentCapacity int
-param insightGenerationCapacity int
+param dailyInsightGenerationCapacity int
+param stagingInsightGenerationCapacity int
 param assessmentCapacity int
 param storageAccountPrefix string
 param storageResourceRole string
@@ -120,7 +121,7 @@ resource dailyInsightGenerationModel 'Microsoft.CognitiveServices/accounts/deplo
   name: 'terra-insight-generation'
   sku: {
     name: 'DataZoneStandard'
-    capacity: insightGenerationCapacity
+    capacity: dailyInsightGenerationCapacity
   }
   properties: {
     model: {
@@ -175,7 +176,7 @@ resource stagingInsightGenerationModel 'Microsoft.CognitiveServices/accounts/dep
   name: 'terra-insight-generation'
   sku: {
     name: 'DataZoneStandard'
-    capacity: insightGenerationCapacity
+    capacity: stagingInsightGenerationCapacity
   }
   properties: {
     model: {
