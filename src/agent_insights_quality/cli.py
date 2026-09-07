@@ -34,7 +34,11 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("generate-docs", help="Generate reviewed catalog views; never alter traffic")
     staging = commands.add_parser("run-staging", help="Run or resume incremental staging")
     staging.add_argument("--full", action="store_true")
-    staging.add_argument("--new-run", action="store_true", help="Start a new full run after the previous full run completed")
+    staging.add_argument("--new-run", action="store_true", help="Explicit fresh full or single-target measurement")
+    staging.add_argument("--target", action="append", metavar="AGENT/VERSION",
+                         help="Exactly one canonical catalog target; no inventory expansion")
+    staging.add_argument("--after-run", metavar="RUN_ID",
+                         help="With --target --new-run, explicitly replace that terminal targeted request")
     daily = commands.add_parser("run-daily", help="Run or resume today's Daily measurement")
     daily.add_argument("--report-mode", choices=("test", "official"),
                        help="Unified launch: automatic private TEST identity or official date singleton")
@@ -199,9 +203,11 @@ def _staging_plan(args, catalog, runtime, revision: str, today: date):
     from .runner import choose_staging, reconcile_staging_work
     from .selection import Selection
     from .state import StateError
+    from .staging_target import argument_target, plan
 
-    if args.new_run and not args.full:
-        raise QualityError("staging_new_run_requires_full")
+    target = argument_target(args, catalog)
+    if target is not None:
+        return plan(args, catalog, runtime, revision, today, target)
     reconcile_staging_work(catalog, runtime)
     key = "full" if args.full else "incremental"
     active = runtime.outbox("staging").read(key, missing_ok=True)
@@ -237,15 +243,27 @@ def _staging_plan(args, catalog, runtime, revision: str, today: date):
     return active, today, selections
 
 
-def _staging_status(runtime, records, active, result, warnings=()):
+def _staging_status(runtime, records, active, result, warnings=(), *, catalog=None):
     statuses = [item["status"] for item in result["results"]]
     complete = "INCOMPLETE" not in statuses and not result["integrity_failure"]
+    targeted = "target" in active
+    terminal = complete
+    if targeted:
+        from .staging_target import measurement_terminal
+        # Terminal measurement is independent of its qualification outcome.
+        target = catalog.target(active["target"])
+        terminal = measurement_terminal(runtime, target, records.read(
+            f"targets/{target.key}/source", missing_ok=True,
+        ))
     runtime.outbox("staging").save_progress(
-        "full" if active["full"] else "incremental", {**active, "completed": complete},
+        "targeted" if targeted else "full" if active["full"] else "incremental",
+        {**active, "completed": terminal},
     )
     return {
         "run_id": active["run_id"], "profile": "staging", "selected": len(statuses),
         "report_date": active["report_date"],
+        **({"scope": "single-target", "target": active["target"], "measurement_terminal": terminal}
+           if targeted else {}),
         "statuses": {status: statuses.count(status) for status in ("PASS", "FAIL", "INCOMPLETE")},
         "result_path": str(records._path("progress", "staging-result")), "warnings": sorted(warnings),
     }, 0 if complete else 2
@@ -361,7 +379,7 @@ async def _run(
                 raise QualityError("staging_session_trial_frozen_off")
         if metrics:
             metrics.reuse("run", "staging")
-        return _staging_status(runtime, records, active, records.read("staging-result"))
+        return _staging_status(runtime, records, active, records.read("staging-result"), catalog=catalog)
     frozen = records.read_completed("delivery-inputs", missing_ok=True) if is_daily else None
     assessment = _assessment_for_run(runtime, records)
     if frozen is None:
@@ -373,7 +391,7 @@ async def _run(
             raise QualityError("staging_session_trial_requires_fresh_travel")
         value = {"profile": "staging", "selected": 0, "status": "unchanged", "results": [], "integrity_failure": False}
         records.save_progress("staging-result", value)
-        return _staging_status(runtime, records, active, value)
+        return _staging_status(runtime, records, active, value, catalog=catalog)
     async with integrations(
         catalog.root, runtime, run_id, allowed_units=planned_units(targets),
         report_date=today, test_run=test_run,
@@ -424,7 +442,7 @@ async def _run(
                     return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
                 result = await runner.run_staging(selections)
                 await integration.finish_publication()
-                return _staging_status(runtime, records, active, result, integration.warnings)
+                return _staging_status(runtime, records, active, result, integration.warnings, catalog=catalog)
             finally:
                 runner.logger.close()
 

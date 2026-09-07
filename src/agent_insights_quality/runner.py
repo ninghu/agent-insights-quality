@@ -159,7 +159,7 @@ def _staging_history(
     targets = catalog.targets if targets is None else targets
     control = store.outbox("staging")
     active = []
-    for mode in ("full", "incremental"):
+    for mode in ("full", "incremental", "targeted"):
         value = control.read(mode, missing_ok=True)
         if value is not None:
             if not isinstance(value.get("run_id"), str):
@@ -429,6 +429,15 @@ class Runner:
         self.logger.emit(kind, unit=target.unit_id if target else None, **fields)
 
     def initialize(self, targets: tuple[Target, ...], report_date: date, *, kind: str) -> None:
+        from .staging_target import read_intent
+
+        intent = read_intent(self.run)
+        if intent is not None and (
+            kind != "staging" or [target.key for target in targets] != [intent["target"]]
+            or report_date.isoformat() != intent["report_date"]
+            or self.revision != intent["source_revision"]
+        ):
+            raise StateError("staging_target_intent_mismatch")
         if kind != self.runtime.environment:
             raise QualityError("run_profile_mismatch")
         if not targets and kind == "daily":
@@ -536,9 +545,22 @@ class Runner:
         return self._source_comparisons[revision]
 
     def _binding(self, target: Target, selection: Selection | None = None) -> _Work:
+        from .staging_target import read_intent, reference, REASONS
+
         key = f"targets/{target.key}/source"
+        intent = read_intent(self.run)
+        if intent is not None and (
+            self.runtime.environment != "staging" or target.key != intent["target"]
+            or self.revision != intent["source_revision"] or selection is None
+            or selection.action != "traffic" or selection.reasons != REASONS
+        ):
+            raise StateError("staging_target_intent_mismatch")
         old = self.run.read(key, missing_ok=True)
         own = old is not None
+        if intent is not None and own and (
+            old.get("work_key") != intent["work_key"] or old.get("traffic_run_id") != self.run_id
+        ):
+            raise StateError("staging_target_intent_mismatch")
         if not own and any(
             any((self.run.directory / collection / "targets" / target.key).glob("work-*"))
             for collection in ("progress", "completed", "artifacts")
@@ -551,7 +573,9 @@ class Runner:
                 newer = self.runtime.run(latest["binding_run_id"]).read_completed("run")
                 if own or _datetime(current["started_at"]) < _datetime(newer["started_at"]):
                     raise StateError("staging_target_superseded")
-            if old is None and selection is not None and "full" not in selection.reasons:
+            if intent is not None and not own and reference(latest) != intent["prior"]:
+                raise StateError("staging_target_superseded")
+            if old is None and intent is None and selection is not None and "full" not in selection.reasons:
                 old = latest
         if old is None and self.reuse_run_id:
             old = self.runtime.run(self.reuse_run_id).read(key, missing_ok=True)
@@ -630,7 +654,7 @@ class Runner:
             binding = {
                 "source_revision": self.revision, "traffic_source_revision": self.revision,
                 "traffic_run_id": self.run_id,
-                "work_key": f"targets/{target.key}/work-{uuid.uuid4().hex}",
+                "work_key": intent["work_key"] if intent else f"targets/{target.key}/work-{uuid.uuid4().hex}",
                 "tested_at": self.now().isoformat(),
             }
             if selection and selection.action == "reassess":
@@ -1589,7 +1613,9 @@ class Runner:
     async def run_staging(self, selections: tuple[Selection, ...]) -> dict[str, Any]:
         from .assessment import assess_staging, reassess_staging_policy
 
-        if not self._initialized or self.runtime.environment != "staging":
+        if not self._initialized or self.runtime.environment != "staging" or (
+            tuple(item.target for item in selections) != self.targets
+        ):
             raise QualityError("runner_not_initialized")
         trial_work = {}
         if self.settings.staging_travel_session_lookahead:
@@ -1616,6 +1642,7 @@ class Runner:
                     policy_reassessment = work.binding.get("policy_reassessment")
                     if recovered or prior and (
                         prior["status"] in {"PASS", "FAIL"}
+                        or self.run.read_completed("staging-target-intent", missing_ok=True) is not None
                         or policy_reassessment and prior.get("policy_version") == STAGING_POLICY.version
                     ):
                         invocations = self._load_traffic(target, work, attempts)
