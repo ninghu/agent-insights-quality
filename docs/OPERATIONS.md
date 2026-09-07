@@ -495,7 +495,8 @@ initial response whose attempts, cards and citations validate before a local
 
 Correction uses the same frozen evidence, assessor and schema, with the invalid response
 and validation feedback treated as data. The invalid initial remains saved, is not a vote
-and earns no credit. The corrected response must fully validate. Any remaining review
+and earns no credit. Root correction cannot clear unrelated initial review requirements.
+The corrected response must fully validate. Any remaining review
 candidate, including Unknown, keeps the unit unscorable when the second slot is exhausted;
 an oversized correction also cannot earn partial credit or authorize a third call.
 
