@@ -90,6 +90,27 @@ Retained categories are not remediation instructions. Human review must distingu
 Agent defect from an ambiguous claim and from correctly handled recovery (no Agent change needed).
 Disagreement found during report review is documented for review, not silently rescored.
 
+Daily distinguishes outer Agent response instrumentation from actual model/tool work.
+An `invoke_agent` wrapper can record input, assistant text and successful completion
+around an early application return; `genAIContent` is not independent proof of inference.
+Conversely, absent child spans or zero token usage alone do not prove a failure or no model
+work. Ground the claimed component and cause in attributable operation types, actual responses
+and independent current evidence, not an assumed platform fault.
+
+An unestablished requirement is not automatically a proven wrong core. A factual omission
+needs an applicable obligation or independently established impact to become a real defect;
+explicit requirements and valid implicit business obligations remain authoritative.
+Essential unresolved authority means Unconfirmed, not automatic Noise or Unexpected.
+Confirmed Noise still requires independent contradiction of the central claim.
+Meaningful failure disclosure and honest aggregate scope matter, not the literal word
+“partial”; proposed-fix wording is neither independent defect evidence nor a core verdict.
+
+The bounded review remains fail-closed. Opposing activation judgments with sufficient
+pre-Insights proof exclude the whole unit as assessment disagreement, not fabricated missing
+raw evidence. Actual query, execution, attribution and visibility gaps remain disclosed
+alongside disagreement. This diagnostic distinction changes neither coverage limits nor
+score counts and never rejudges or rewrites a saved result.
+
 ### Contract authority and benchmark fairness
 
 Separate configured-policy noncompliance from a claim of business-outcome failure. A
