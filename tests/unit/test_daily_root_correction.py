@@ -1,7 +1,9 @@
 """Synthetic completed responses, never provider/semantic-accuracy acceptance."""
 
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
+from datetime import timedelta
 
 import pytest
 
@@ -83,6 +85,90 @@ def test_preexisting_current_unknown_survives_consistency_correction_without_thi
     assert fake.aggregate(data, assessed).counts.correct_issues == 0
     for phase in ("initial", "correction", "resolved"):
         assert assessed.private_detail[phase]["cards"][2]["core"] == "unknown"
+
+
+@pytest.mark.parametrize("unreviewed_core", ["unknown", "incorrect"])
+def test_root_correction_cannot_promote_an_unrelated_unreviewed_core(unreviewed_core):
+    def initial(payload):
+        value = conflict(payload)
+        value["cards"][2].update(core=unreviewed_core, root_group=None, expected_match=False)
+        return value
+    def promotion(payload):
+        value = corrected(payload)
+        value["cards"][2].update(core="correct", root_group="unrelated", expected_match=False)
+        return value
+    data, sol = fake.evidence(), fake.Sol(initial, promotion)
+    assessed = fake.daily(data, sol, after=(*CARDS, {"id": "c"}))
+    detail = assessed.private_detail
+    assert len(sol.calls) == 2
+    assert detail["initial"]["cards"][2]["core"] == unreviewed_core
+    assert detail["correction"]["cards"][2]["core"] == "correct"
+    assert detail["resolved"]["cards"][2]["core"] == "unknown"
+    assert detail["correction_scope"]["unreviewed_core_aliases"] == ["card-0003"]
+    assert ExclusionReason.UNKNOWN_CORE in assessed.unit_result.exclusion_reasons
+    assert "focused_review_budget_exhausted" in assessed.reasons
+    assert "focused_review_disagreement" not in assessed.reasons
+    assert fake.aggregate(data, assessed).score is None
+    assert fake.aggregate(data, assessed).counts.correct_issues == 0
+
+
+def test_root_correction_cannot_move_expected_detection_to_an_unrelated_root():
+    def initial(payload):
+        value = conflict(payload)
+        value["cards"][2].update(root_group="unrelated", expected_match=False)
+        return value
+    def reassignment(payload):
+        value = corrected(payload)
+        value["cards"][0]["expected_match"] = False
+        value["cards"][2].update(root_group="unrelated", expected_match=True)
+        return value
+    data, sol = fake.evidence(), fake.Sol(initial, reassignment)
+    assessed = fake.daily(data, sol, after=(*CARDS, {"id": "c"}))
+    assert len(sol.calls) == 2
+    assert assessed.private_detail["correction"]["cards"][2]["expected_match"] is True
+    assert assessed.private_detail["resolved"]["cards"][2]["core"] == "unknown"
+    assert "independent_expected_match_changed" in assessed.private_detail["unreviewed_candidates"]
+    assert fake.aggregate(data, assessed).counts.correct_issues == 0
+
+
+@pytest.mark.parametrize("obligation,candidate", [
+    ("duplicate", "duplicate_root"),
+    ("activation", "expected_activation_unconfirmed"),
+    ("gap", "evidence_linkage_or_completeness"),
+])
+def test_correction_does_not_discharge_other_independent_review_obligations(obligation, candidate):
+    def build(payload, *, invalid):
+        value = conflict(payload) if invalid else corrected(payload)
+        for index in (2, 3):
+            value["cards"][index].update(
+                expected_match=False,
+                root_group="independent" if invalid else f"independent-{index}",
+            )
+        if obligation == "activation" and invalid:
+            for attempt in value["attempts"]:
+                attempt["observed"] = False
+        if obligation == "gap" and invalid:
+            value["limitations"] = ["incomplete_evidence"]
+        if obligation != "duplicate":
+            value["cards"][3]["root_group"] += "-different"
+        return value
+    sol = fake.Sol(lambda p: build(p, invalid=True), lambda p: build(p, invalid=False))
+    data = fake.evidence()
+    assessed = fake.daily(data, sol, after=(*CARDS, {"id": "c"}, {"id": "d"}))
+    assert len(sol.calls) == 2
+    assert candidate in assessed.private_detail["correction_scope"]["candidate_reasons"]
+    assert candidate in assessed.private_detail["unreviewed_candidates"]
+    assert ExclusionReason.INCOMPLETE_ASSESSMENT in assessed.unit_result.exclusion_reasons
+    assert fake.aggregate(data, assessed).counts.correct_issues == 0
+
+
+def test_historical_unknown_does_not_create_an_unrelated_current_review_obligation():
+    history = {"id": "z"}
+    assessed = fake.daily(
+        fake.evidence(), fake.Sol(conflict, corrected), before=(history,), after=(*CARDS, history),
+    )
+    assert assessed.private_detail["correction_scope"]["unreviewed_core_aliases"] == []
+    assert not assessed.unit_result.exclusion_reasons
 
 
 @pytest.mark.parametrize("remaining", ["unknown", "duplicate", "noise", "activation", "gap"])
@@ -191,6 +277,7 @@ def test_journal_freezes_intent_invalid_output_feedback_and_correction_separatel
     assert request["mode"] == "correction"
     assert request["payload"]["correction"] == {
         "initial": initial, "validation_error": {"code": "assessment_root_conflict"},
+        "scope": first.private_detail["correction_scope"],
     }
     assert "untrusted data" in request["instructions"]
     assert "not an additional independent vote" in request["instructions"]
@@ -372,14 +459,135 @@ def test_runner_correction_survives_final_save_crash_and_freezes_excluded_result
         original(records, key, value)
     monkeypatch.setattr(RecordStore, "save_artifact", crash)
     with pytest.raises(CheckpointError):
-        h.daily()
+        h.daily(test_run=True, rerun=1)
     counts = len(h.sol.calls), len(h.cloud.invocations), len(h.cloud.starts)
+    events = len(h.cloud.events)
+    target = h.catalog.targets[1]
+    pending = h.store.run("trial").read(f"targets/{target.key}/assessment")
     monkeypatch.setattr(RecordStore, "save_artifact", original)
-    first, second = h.daily(), h.daily()
+    for changes in ((), ("src/agent_insights_quality/assessment.py",)):
+        with pytest.raises(StateError, match="assessment_pending_binding_mismatch"):
+            h.daily(test_run=True, rerun=1, revision="source-two", changes=changes)
+        assert len(h.cloud.events) == events and len(h.sol.calls) == counts[0]
+        assert h.store.run("trial").read(f"targets/{target.key}/assessment") == pending
+    first, second = h.daily(test_run=True, rerun=1), h.daily(test_run=True, rerun=1)
     assert first.to_dict() == second.to_dict()
     assert (first.score is None) == (remaining != "none")
     assert (len(h.sol.calls), len(h.cloud.invocations), len(h.cloud.starts)) == counts
     assert counts == (3, 40, 2)
+    assert h.store.run("trial").read(f"targets/{target.key}/assessment")["artifact"] == pending["artifact"]
+
+
+@pytest.mark.parametrize("legacy_binding", [False, True])
+def test_evidence_recovery_pending_initial_resumes_frozen_snapshot_without_queries(
+    tmp_path, monkeypatch, legacy_binding,
+):
+    runner_fake.fake_storage(monkeypatch)
+    h = runner_fake.Harness(tmp_path)
+    h.cloud.query_complete = False
+    assert h.daily(test_run=True, rerun=1).score is None
+    target = h.catalog.targets[1]
+    records = h.store.run("trial")
+    original_source = records.read(f"targets/{target.key}/source")
+    original_visible = records.read_completed(original_source["work_key"] + "/insights")["visible_snapshot"]
+    if legacy_binding:
+        progress = RecordStore.save_progress
+        init = DailyAssessmentCalls.__init__
+        def legacy_progress(self, key, value):
+            if key.endswith("/assessment"):
+                value = {k: v for k, v in value.items() if k not in {"evidence_key", "evidence_run_id"}}
+            progress(self, key, value)
+        def legacy_init(self, sol, records, key, binding, save):
+            binding = {k: v for k, v in binding.items() if k not in {"evidence_key", "evidence_run_id"}}
+            init(self, sol, records, key, binding, save)
+        monkeypatch.setattr(RecordStore, "save_progress", legacy_progress)
+        monkeypatch.setattr(DailyAssessmentCalls, "__init__", legacy_init)
+    completed = RecordStore.save_completed
+    def crash(self, key, value):
+        if key.startswith(f"targets/{target.key}/assessments/") and key.endswith("/calls/initial"):
+            raise CheckpointError()
+        completed(self, key, value)
+    monkeypatch.setattr(RecordStore, "save_completed", crash)
+    h.cloud.query_complete = True
+    h.clock.value += timedelta(seconds=30)
+    with pytest.raises(CheckpointError):
+        h.daily(test_run=True, rerun=1)
+    pending = records.read(f"targets/{target.key}/assessment")
+    current_source = records.read(f"targets/{target.key}/source")
+    assert current_source["result"] == original_source["result"]
+    assert current_source["evidence_key"] != original_source["evidence_key"]
+    assert records.read_artifact(pending["artifact"] + "/calls/initial/output")
+    frozen = records.read_artifact(current_source["evidence_key"])
+    counts = len(h.sol.calls), len(h.cloud.events), len(h.cloud.invocations), len(h.cloud.starts)
+    h.clock.value += timedelta(seconds=60)
+    monkeypatch.setattr(RecordStore, "save_completed", completed)
+    result = h.daily(test_run=True, rerun=1)
+    assert result.score == 100
+    assert (len(h.sol.calls), len(h.cloud.events), len(h.cloud.invocations), len(h.cloud.starts)) == counts
+    assert counts[0] == 4
+    reference = records.read(f"targets/{target.key}/assessment")
+    assert reference["artifact"] == pending["artifact"]
+    detail = records.read_artifact(reference["artifact"])["private_detail"]
+    assert detail["input"]["snapshot"] == frozen
+    assert records.read_completed(current_source["work_key"] + "/insights")["visible_snapshot"] == original_visible
+
+
+@pytest.mark.parametrize("corruption", [
+    "work", "assessor", "evidence", "phase", "applied", "applied_output", "journal", "input",
+    "target_mode", "expectation",
+])
+def test_runner_pending_binding_corruption_stops_before_any_provider(
+    tmp_path, monkeypatch, corruption,
+):
+    runner_fake.fake_storage(monkeypatch)
+    h = runner_fake.Harness(tmp_path, issues=0)
+    target = h.catalog.targets[0]
+    completed = RecordStore.save_completed
+    def crash(self, key, value):
+        if key.endswith("/calls/initial"):
+            raise CheckpointError()
+        completed(self, key, value)
+    monkeypatch.setattr(RecordStore, "save_completed", crash)
+    with pytest.raises(CheckpointError):
+        h.daily(test_run=True, rerun=1)
+    monkeypatch.setattr(RecordStore, "save_completed", completed)
+    records = h.store.run("trial")
+    key = f"targets/{target.key}/assessment"
+    pending = records.read(key)
+    counts = len(h.sol.calls), len(h.cloud.events)
+    if corruption in {"work", "assessor", "evidence", "phase", "applied", "applied_output"}:
+        broken = deepcopy(pending)
+        if corruption == "work":
+            broken["work_key"] += "-other"
+        elif corruption == "assessor":
+            broken["configured_assessor"]["deployment_name"] = "other"
+        elif corruption in {"phase", "applied"}:
+            broken["status"] = "invalid" if corruption == "phase" else "applied"
+        elif corruption == "applied_output":
+            broken.update(status="applied", artifact=pending["artifact"] + "/calls/initial/output")
+        else:
+            broken["evidence_key"] += "-other"
+        with h.store.ownership():
+            records.save_progress(key, broken)
+    elif corruption == "expectation":
+        h.catalog = replace(h.catalog, targets=(
+            replace(target, expectation={"root_cause": "Changed without changing the frozen source."}),
+        ))
+    else:
+        read = RecordStore.read_artifact
+        def corrupted(self, key, **kwargs):
+            value = read(self, key, **kwargs)
+            if corruption == "journal" and key.endswith("/calls/binding"):
+                value["source_revision"] = "different"
+            elif corruption == "input" and key.endswith("/calls/initial/request"):
+                value["payload"]["snapshot"]["observed_at"] = "2026-09-04T13:00:00+00:00"
+            elif corruption == "target_mode" and key.endswith("/calls/initial/request"):
+                value["payload"]["target"]["validation_mode"] = "deterministic"
+            return value
+        monkeypatch.setattr(RecordStore, "read_artifact", corrupted)
+    with pytest.raises(StateError, match="assessment_pending_"):
+        h.daily(test_run=True, rerun=1)
+    assert (len(h.sol.calls), len(h.cloud.events)) == counts
 
 
 def test_legacy_unfinished_calls_without_journal_fail_closed(tmp_path, monkeypatch):

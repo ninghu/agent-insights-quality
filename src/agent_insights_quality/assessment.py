@@ -543,7 +543,9 @@ async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
             "their actual causal identity and expected match from independent evidence; "
             "do not propagate a label, take a majority/last vote, or force a favorable verdict. "
             "The invalid initial output is not a valid judgment or independent proof. "
-            "Preserve Unknown and all real gaps. No further model review is available."
+            "Correct only the conflicting root grouping/match consistency. Unrelated core "
+            "uncertainty and other independent review obligations are not resolved by this "
+            "correction. Preserve Unknown and all real gaps. No further model review is available."
         )
     output = await sol.complete_json(
         instructions=instructions, payload=deepcopy(payload), schema=request_schema,
@@ -939,6 +941,35 @@ def _candidates(output: dict, cards: tuple[dict, ...], *, baseline: bool) -> lis
     return sorted(reasons)
 
 
+def _correction_scope(output: dict, cards: tuple[dict, ...], *, baseline: bool) -> dict:
+    """Retain unmet review obligations, not verdict votes from invalid output."""
+    groups: dict[str, set[bool]] = {}
+    for card in output["cards"]:
+        if card["root_group"] is not None:
+            groups.setdefault(card["root_group"], set()).add(card["expected_match"])
+    conflicts = {
+        card["card_alias"] for card in output["cards"]
+        if len(groups.get(card["root_group"], set())) > 1
+    }
+    independent = tuple(card for card in cards if card["card_alias"] not in conflicts)
+    unreviewed = _candidates({
+        **output, "cards": [card for card in output["cards"] if card["card_alias"] not in conflicts],
+    }, independent, baseline=baseline)
+    # Expected matching of a current conflicted root is within the correction's
+    # scope. Other cores, activation, gaps and independent duplicates are not.
+    if any(card["card_alias"] in conflicts and card["contribution"] == "current" for card in cards):
+        unreviewed = [reason for reason in unreviewed if reason != "missing_expected_detection"]
+    current = {card["card_alias"] for card in independent if card["contribution"] == "current"}
+    return {
+        "conflicting_card_aliases": sorted(conflicts),
+        "candidate_reasons": unreviewed,
+        "unreviewed_core_aliases": sorted(
+            card["card_alias"] for card in output["cards"]
+            if card["card_alias"] in current and card["core"] in {"unknown", "incorrect"}
+        ),
+    }
+
+
 def _merge_review(initial: dict, reviewed: dict, cards: tuple[dict, ...]) -> tuple[dict, bool]:
     """A disputed core/activation remains unknown; a review is not a new vote."""
     merged = deepcopy(reviewed)
@@ -1117,6 +1148,8 @@ async def assess_daily(
         _retain_error(error, detail)
         raise
     corrected = False
+    correction_scope = None
+    reassigned = []
     try:
         _validate_daily(evidence, output, cards, baseline=target.is_baseline)
     except AssessmentError as error:
@@ -1124,9 +1157,12 @@ async def assess_daily(
             _retain_error(error, detail)
             raise
         detail["initial_validation_error"] = {"code": error.code}
+        correction_scope = _correction_scope(output, cards, baseline=target.is_baseline)
+        detail["correction_scope"] = correction_scope
         correction_payload = {**payload, "correction": {
             "initial": output,
             "validation_error": detail["initial_validation_error"],
+            "scope": correction_scope,
         }}
         detail["correction_input"] = correction_payload
         correction_transport = _daily_transport(correction_payload, max_payload_bytes)
@@ -1144,7 +1180,30 @@ async def assess_daily(
             _retain_error(correction_error, detail)
             raise
         corrected = True
+        # A correction is not the missing independent review. Withhold these
+        # cores without adopting either the invalid initial or correction vote.
+        current = {card["card_alias"] for card in cards if card["contribution"] == "current"}
+        initial = {card["card_alias"]: card for card in detail["initial"]["cards"]}
+        reassigned = [
+            card["card_alias"] for card in output["cards"]
+            if card["card_alias"] in current
+            and card["card_alias"] not in correction_scope["conflicting_card_aliases"]
+            and initial[card["card_alias"]]["core"] == "correct"
+            and initial[card["card_alias"]]["expected_match"] != card["expected_match"]
+        ]
+        if reassigned:
+            detail["unreviewed_correction_aliases"] = reassigned
+        for card in output["cards"]:
+            if card["card_alias"] in correction_scope["unreviewed_core_aliases"] or card["card_alias"] in reassigned:
+                card.update(
+                    core="unknown", root_group=None, expected_match=False,
+                    reason="Independent core review remains unavailable after root correction.",
+                )
     candidates = _candidates(output, cards, baseline=target.is_baseline)
+    if correction_scope is not None:
+        candidates = sorted(set(candidates) | set(correction_scope["candidate_reasons"]))
+    if reassigned:
+        candidates = sorted({*candidates, "independent_expected_match_changed"})
     activation_disputed = False
     if candidates and corrected:
         exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
