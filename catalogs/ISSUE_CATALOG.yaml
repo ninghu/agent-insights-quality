@@ -58,14 +58,14 @@ issues:
     root_cause: The agent repeatedly produces verbose filler despite an explicit concise response bound.
     expected_fix: Honor the concise response contract without dropping required weather facts.
   - id: issue-007
-    title: Scheduling handoff fields omitted
-    agent: healthcare-agent
+    title: Support handoff fields omitted
+    agent: support-ticket-agent
     category: output_quality
     severity: medium
-    implementation: agents/healthcare-agent/issues/issue-007
-    validation_mode: model_mediated
-    root_cause: The scheduling handoff omits a required owner, next action, deadline, or validation field.
-    expected_fix: Require every named handoff field in the response contract.
+    implementation: agents/support-ticket-agent/issues/issue-007
+    validation_mode: deterministic
+    root_cause: The final handoff JSON field projection drops deadline and validation although the caller explicitly requires all four operational fields and the upstream prepare_handoff tool collected their supplied values.
+    expected_fix: Serialize all collected handoff fields, preserving owner, next_action, deadline, and validation without changing the ticket or calling a model.
   - id: issue-008
     title: Appointment action envelope lacks approval scope
     agent: healthcare-agent

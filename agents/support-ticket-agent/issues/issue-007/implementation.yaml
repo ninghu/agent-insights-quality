@@ -1,0 +1,18 @@
+contract_version: '1.0'
+issue_id: issue-007
+agent_name: support-ticket-agent
+framework: custom-python-responses
+deployment:
+  kind: foundry_hosted_custom_container
+  baseline: ../../v0
+  protocol: responses
+  port: 8088
+  build_file: ../../v0/Dockerfile
+category: output_quality
+severity: medium
+expected_behavior:
+  desired: Preserve caller-supplied owner, next_action, deadline, and validation in the read-only ticket handoff JSON.
+  injected: Final JSON contains ticket_id, owner, and next_action but omits deadline and validation present in the upstream handoff tool result.
+injected_defect:
+  single_root: The final handoff field projection drops deadline and validation after complete typed facts have been collected.
+  activation: all_matching_endpoint_requests

@@ -1,0 +1,1771 @@
+{
+  "contract_version": "2.0",
+  "agent_name": "support-ticket-agent",
+  "logical_version": "issue-007",
+  "data_class": "synthetic_public_safe",
+  "traffic_source": "endpoint_requests",
+  "requests": [
+    {
+      "id": "issue-007-setup-01-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 01. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-01-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 01. Prepare a read-only handoff for ticket-demo-1. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"Printer desk\", \"next_action\": \"confirm the test page result\", \"deadline\": \"2026-10-05T09:00:00Z\", \"validation\": \"compare the printed page with the synthetic sample\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-1",
+            "owner": "Printer desk",
+            "next_action": "confirm the test page result"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    },
+    {
+      "id": "issue-007-setup-02-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 02. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-02-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 02. Prepare a read-only handoff for ticket-demo-2. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"Access desk\", \"next_action\": \"check the demo sign-in result\", \"deadline\": \"2026-10-06T10:30:00Z\", \"validation\": \"verify the synthetic account can open the demo app\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-2",
+            "owner": "Access desk",
+            "next_action": "check the demo sign-in result"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    },
+    {
+      "id": "issue-007-setup-03-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 03. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-03-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 03. Prepare a read-only handoff for ticket-demo-1. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"Device coordinator\", \"next_action\": \"review the cable checklist\", \"deadline\": \"2026-10-07T11:00:00Z\", \"validation\": \"confirm both synthetic checklist items are complete\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-1",
+            "owner": "Device coordinator",
+            "next_action": "review the cable checklist"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    },
+    {
+      "id": "issue-007-setup-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-04-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 04. Prepare a read-only handoff for ticket-demo-2. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"App coordinator\", \"next_action\": \"review the demo role mapping\", \"deadline\": \"2026-10-08T12:30:00Z\", \"validation\": \"compare the synthetic role with the access request\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-2",
+            "owner": "App coordinator",
+            "next_action": "review the demo role mapping"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    },
+    {
+      "id": "issue-007-setup-05-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 05. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-05-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 05. Prepare a read-only handoff for ticket-demo-1. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"Print queue desk\", \"next_action\": \"check the sample queue status\", \"deadline\": \"2026-10-09T13:00:00Z\", \"validation\": \"verify the demo queue contains no pending sample job\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-1",
+            "owner": "Print queue desk",
+            "next_action": "check the sample queue status"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    },
+    {
+      "id": "issue-007-setup-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-06-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 06. Prepare a read-only handoff for ticket-demo-2. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"Demo onboarding desk\", \"next_action\": \"confirm the sample workspace opens\", \"deadline\": \"2026-10-12T14:30:00Z\", \"validation\": \"record the synthetic workspace check result\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-2",
+            "owner": "Demo onboarding desk",
+            "next_action": "confirm the sample workspace opens"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    },
+    {
+      "id": "issue-007-setup-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-07-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 07. Prepare a read-only handoff for ticket-demo-1. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"Hardware desk\", \"next_action\": \"review the sample driver version\", \"deadline\": \"2026-10-13T15:00:00Z\", \"validation\": \"compare the synthetic driver version with the checklist\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-1",
+            "owner": "Hardware desk",
+            "next_action": "review the sample driver version"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    },
+    {
+      "id": "issue-007-setup-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-08-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 08. Prepare a read-only handoff for ticket-demo-2. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"Permissions desk\", \"next_action\": \"check the demo group membership\", \"deadline\": \"2026-10-14T16:30:00Z\", \"validation\": \"verify the synthetic group matches the approved demo role\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-2",
+            "owner": "Permissions desk",
+            "next_action": "check the demo group membership"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    },
+    {
+      "id": "issue-007-setup-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-09-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 09. Prepare a read-only handoff for ticket-demo-1. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"Device follow-up desk\", \"next_action\": \"confirm the second test page result\", \"deadline\": \"2026-10-15T17:00:00Z\", \"validation\": \"compare both synthetic test page results\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-1",
+            "owner": "Device follow-up desk",
+            "next_action": "confirm the second test page result"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    },
+    {
+      "id": "issue-007-setup-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Acknowledge this fixed synthetic conversation context without external action."
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_text": "Acknowledged. No external action was taken."
+        },
+        "trace_assertions": [],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        }
+      }
+    },
+    {
+      "id": "issue-007-probe-10-01",
+      "request": {
+        "method": "POST",
+        "path": "/responses",
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "input": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fixed synthetic case 10. Prepare a read-only handoff for ticket-demo-2. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"App follow-up desk\", \"next_action\": \"review the sample access checklist\", \"deadline\": \"2026-10-16T18:30:00Z\", \"validation\": \"confirm all synthetic access checks have recorded results\"}"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "http_status": 200,
+        "semantic_assertions": {
+          "exact_json": {
+            "ticket_id": "ticket-demo-2",
+            "owner": "App follow-up desk",
+            "next_action": "review the sample access checklist"
+          }
+        },
+        "trace_assertions": [
+          {
+            "name": "handoff_operation_sequence",
+            "kind": "operation_sequence",
+            "operations": [
+              "invoke_agent",
+              "execute_tool",
+              "execute_tool"
+            ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "excludes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
+          }
+        ],
+        "identity_assertions": {
+          "agent_name": "$runtime_agent_name",
+          "agent_version": "$runtime_agent_version"
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. Only the final serialized JSON drops deadline and validation; the output must retain the correct ticket_id, owner and next_action. A complete handoff is a nonobservation, not a separate defect. Labels and expected assertions alone are not proof. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
+      }
+    }
+  ],
+  "attempts": [
+    {
+      "index": 1,
+      "setup_steps": [
+        "issue-007-setup-01-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-01-01"
+      ],
+      "parameters": {
+        "case_id": "case-01"
+      }
+    },
+    {
+      "index": 2,
+      "setup_steps": [
+        "issue-007-setup-02-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-02-01"
+      ],
+      "parameters": {
+        "case_id": "case-02"
+      }
+    },
+    {
+      "index": 3,
+      "setup_steps": [
+        "issue-007-setup-03-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-03-01"
+      ],
+      "parameters": {
+        "case_id": "case-03"
+      }
+    },
+    {
+      "index": 4,
+      "setup_steps": [
+        "issue-007-setup-04-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-04-01"
+      ],
+      "parameters": {
+        "case_id": "case-04"
+      }
+    },
+    {
+      "index": 5,
+      "setup_steps": [
+        "issue-007-setup-05-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-05-01"
+      ],
+      "parameters": {
+        "case_id": "case-05"
+      }
+    },
+    {
+      "index": 6,
+      "setup_steps": [
+        "issue-007-setup-06-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-06-01"
+      ],
+      "parameters": {
+        "case_id": "case-06"
+      }
+    },
+    {
+      "index": 7,
+      "setup_steps": [
+        "issue-007-setup-07-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-07-01"
+      ],
+      "parameters": {
+        "case_id": "case-07"
+      }
+    },
+    {
+      "index": 8,
+      "setup_steps": [
+        "issue-007-setup-08-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-08-01"
+      ],
+      "parameters": {
+        "case_id": "case-08"
+      }
+    },
+    {
+      "index": 9,
+      "setup_steps": [
+        "issue-007-setup-09-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-09-01"
+      ],
+      "parameters": {
+        "case_id": "case-09"
+      }
+    },
+    {
+      "index": 10,
+      "setup_steps": [
+        "issue-007-setup-10-01"
+      ],
+      "probe_steps": [
+        "issue-007-probe-10-01"
+      ],
+      "parameters": {
+        "case_id": "case-10"
+      }
+    }
+  ]
+}

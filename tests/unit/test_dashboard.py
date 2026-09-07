@@ -24,8 +24,10 @@ DASHBOARD = json.loads(
     (ROOT / "dashboards" / "agent-insights-quality.template.json").read_text(encoding="utf-8")
 )
 KQL = (ROOT / "infra" / "quality-analytics.kql").read_text(encoding="utf-8")
-FUNCTIONS = dict(re.findall(r"\) (AIQ\w+)\([^)]*\) \{\n(.*?)\n\}", KQL, re.DOTALL))
+FUNCTIONS = dict(re.findall(r"\) (AIQ\w+)\([^\n]*\) \{\n(.*?)\n\}", KQL, re.DOTALL))
 VARIABLES = re.compile(r"\b_[a-zA-Z]\w*\b")
+FIXED_POLICY = "unique-issues-noise-1-duplicate-05-miss-025-v2"
+FIXED_SCOPE = f"_startTime, _endTime, 'swedencentral', '{FIXED_POLICY}'"
 
 
 def visible_pages(parameter):
@@ -38,7 +40,7 @@ def visible_pages(parameter):
 
 def test_dashboard_references_layout_and_visual_contracts():
     assert [page["name"] for page in DASHBOARD["pages"]] == [
-        "Overview", "Explain change", "Legacy history (read-only)",
+        "Overview", "Explain change",
     ]
     assert DASHBOARD["schema_version"] == "20"
     assert DASHBOARD["autoRefresh"] == {"enabled": False}
@@ -71,7 +73,7 @@ def test_dashboard_references_layout_and_visual_contracts():
         else:
             assert tile["visualType"] == "table"
             assert options["table__enableRenderLinks"] is False
-    assert [len(per_page[page["id"]]) for page in DASHBOARD["pages"]] == [4, 4, 3]
+    assert [len(per_page[page["id"]]) for page in DASHBOARD["pages"]] == [4, 4]
 
 
 def test_filters_exist_only_on_pages_that_consume_them_and_use_matching_contracts():
@@ -85,37 +87,35 @@ def test_filters_exist_only_on_pages_that_consume_them_and_use_matching_contract
             consuming = {tile["pageId"] for tile in DASHBOARD["tiles"]
                          if variable in tile["usedParamVariables"]}
             assert consuming == visible_pages(parameter)
-    legacy = DASHBOARD["pages"][-1]["id"]
     for parameter in DASHBOARD["parameters"]:
         if parameter["kind"] == "duration":
             continue
         source = parameter["dataSource"]
+        assert source["kind"] == "query"
         assert set(source["consumedVariables"]) == set(VARIABLES.findall(source["query"]))
         assert source["dataSourceId"] == DASHBOARD["dataSources"][0]["id"]
         for dependency in source["consumedVariables"]:
             assert visible_pages(parameter) <= visible_pages(by_variable[dependency])
-        assert ("AIQDaily" in source["query"]) == (visible_pages(parameter) == {legacy})
-    assert by_variable["_policy"]["defaultValue"]["value"] == SCORING_POLICY.version
-    assert by_variable["_policy"]["selectionType"] == "single"
-    assert by_variable["_region"]["selectionType"] == "single"
+        assert "AIQDaily" not in source["query"]
+        assert visible_pages(parameter) == {DASHBOARD["pages"][1]["id"]}
+    assert set(by_variable) == {"_startTime", "_endTime", "_snapshot", "_currentAgent"}
     for tile in DASHBOARD["tiles"]:
         assert set(tile["usedParamVariables"]) <= by_variable.keys()
-        if tile["pageId"] != legacy:
-            assert "AIQDaily" not in tile["query"]
-            assert "CoverageStatus" not in tile["query"]
-            assert "RegionKey == _region and ScoringPolicy == _policy" in tile["query"]
+        assert "AIQDaily" not in tile["query"]
+        assert "CoverageStatus" not in tile["query"]
+        assert FIXED_SCOPE in tile["query"]
 
 
 def test_query_dependencies_are_defined_current_read_models_not_raw_or_legacy_data():
     queries = [tile["query"] for tile in DASHBOARD["tiles"]]
     queries += [parameter["dataSource"]["query"] for parameter in DASHBOARD["parameters"]
-                if "dataSource" in parameter]
+                if "query" in parameter.get("dataSource", {})]
     queries += list(FUNCTIONS.values())
     for query in queries:
         assert set(re.findall(r"\b(AIQ\w+)\(", query)) <= FUNCTIONS.keys()
     current = KQL.split("// Current framework data", 1)[1]
     assert "DailyQualityPublications" not in current
-    for name in ("AIQSnapshotsV1", "AIQSnapshotChangesV1", "AIQUnitChangesV1"):
+    for name in ("AIQSnapshotRunsV1", "AIQSnapshotsV1", "AIQSnapshotChangesV1", "AIQUnitPairV1", "AIQUnitChangesV1"):
         assert "QualityReportsV1" not in FUNCTIONS[name]
         assert "AIQDaily" not in FUNCTIONS[name]
         assert "_startTime" not in FUNCTIONS[name]
@@ -262,7 +262,7 @@ def test_snapshot_selection_deduplicates_replays_and_same_date_revisions():
     assert "arg_min(PublishedAt, *) by FrameworkRunId" in report
     assert "ContentHashes = make_set(ContentHash, 2)" in report
     assert "array_length(ContentHashes) == 1" in report
-    snapshot = FUNCTIONS["AIQSnapshotsV1"]
+    snapshot = FUNCTIONS["AIQSnapshotRunsV1"]
     assert "SnapshotOrder = strcat(format_datetime(PublishedAt, 'yyyyMMddHHmmssfffffff'), '/', FrameworkRunId)" in snapshot
     assert "arg_max(SnapshotOrder, *) by ReportDate, RegionKey, ScoringPolicy, CoveragePolicy" in snapshot
 
@@ -286,7 +286,7 @@ def test_previous_snapshot_never_crosses_region_or_policy_and_precedes_date_filt
     assert "RegionKey == prev(RegionKey) and ScoringPolicy == prev(ScoringPolicy)" in changes
     assert "CoveragePolicy == prev(CoveragePolicy)" in changes
     assert "PreviousRunId = iff(SameSeries, prev(FrameworkRunId), '')" in changes
-    assert "| where" not in changes
+    assert changes.index("| where isnull(startDate)") > changes.index("PreviousRunId = iff")
 
 
 def cohort_spec(payload, predicate=lambda unit: True):
@@ -316,9 +316,144 @@ def test_comparison_limits_distinguish_rotation_exclusion_identity_and_baselines
     changes = FUNCTIONS["AIQSnapshotChangesV1"]
     for name in ("PlannedCohort", "ScoredCohort", "BaselineCohort"):
         assert f"{name} != prev({name})" in changes
-    units = FUNCTIONS["AIQUnitChangesV1"]
+    units = FUNCTIONS["AIQUnitPairV1"]
     assert "join kind=fullouter Previous on Agent, LogicalVersion, Kind, ExpectedIssueAlias" in units
     assert "M = iff(Scorable and Kind == 'issue', ExpectedIssues - CorrectIssues, long(null))" in units
     assert "isnull(CurrentPresent), 'not planned'" in units
     assert "not(CurrentScorable), 'excluded'" in units
     assert "DeltaM = M - PreviousM" in units
+
+
+def test_fourteen_day_defaults_and_v2_only_scope_remain_valid_without_publications():
+    parameters = {item.get("variableName", "_dates"): item for item in DASHBOARD["parameters"]}
+    assert parameters["_dates"]["defaultValue"] == {"count": 14, "kind": "dynamic", "unit": "days"}
+    assert set(parameters) == {"_dates", "_snapshot", "_currentAgent"}
+    for variable in ("_snapshot", "_currentAgent"):
+        assert parameters[variable]["defaultValue"] == {"kind": "all"}
+        query = parameters[variable]["dataSource"]["query"]
+        assert f"AIQSnapshotRunsV1({FIXED_SCOPE}" in query
+        assert "AIQSnapshotChangesV1" not in query and "AIQSnapshotsV1" not in query
+    assert snapshot_spec([]) == {}
+    existing_v1 = row(4, policy=LEGACY_SCORING_POLICY)
+    assert not [value for value in snapshot_spec([existing_v1]).values()
+                if value["ScoringPolicy"] == FIXED_POLICY]
+
+
+def test_empty_state_keeps_score_null_and_does_not_hide_missing_function_errors():
+    latest = DASHBOARD["tiles"][0]["query"]
+    assert "Publication = 'No official public-safe v2 publications" in latest
+    assert "QualityScore = real(null)" in latest and "M = long(null)" in latest
+    assert "where toscalar(Latest | count) == 0" in latest
+    metadata = next(tile["query"] for tile in DASHBOARD["tiles"]
+                    if "Metadata = bag_pack" in tile["query"])
+    assert "where toscalar(Selected | count) == 0" in metadata
+    assert "Metadata = dynamic(null)" in metadata
+    for tile in DASHBOARD["tiles"]:
+        query = tile["query"]
+        assert "isfuzzy" not in query and "AIQDaily" not in query
+        assert "best_effort" not in query
+
+
+def test_bounded_identity_reads_preserve_cross_filter_conflicts_and_replay_order():
+    reports = FUNCTIONS["AIQReportsV1"]
+    candidates, reconciliation = reports.split("    QualityReportsV1\n", 1)
+    for predicate in (
+        "ReportDate >= startofday(startDate)", "ReportDate <= startofday(endDate)",
+        "tolower(replace_string(Region, ' ', '')) == regionKey",
+        "tostring(Payload.scoring_policy.version) == scoringPolicy",
+        "isnull(runIds) or FrameworkRunId in (runIds)",
+    ):
+        assert predicate in candidates
+        assert predicate not in reconciliation
+    assert "FrameworkRunId in (Candidates)" in reconciliation
+    assert "arg_min(PublishedAt, *) by FrameworkRunId" in reconciliation
+    assert "array_length(ContentHashes) == 1" in reconciliation
+    requested = row(20)
+    outside_filter_conflict = dict(
+        requested, ReportDate="2026-09-01", Region="synthetic-other-region", ContentHash="c" * 64,
+    )
+    assert snapshot_spec([requested, outside_filter_conflict]) == {}
+
+
+def test_only_selected_run_ids_are_expanded_and_empty_selection_is_not_all_history():
+    runs = FUNCTIONS["AIQSnapshotRunsV1"]
+    assert "AIQRunsV1(iff(includePrevious, datetime(null), startDate), endDate, regionKey, scoringPolicy)" in runs
+    assert "mv-expand" not in runs and "AIQUnitsV1" not in runs
+    snapshots = FUNCTIONS["AIQSnapshotsV1"]
+    assert "let Runs = materialize(AIQSnapshotRunsV1(startDate, endDate, regionKey, scoringPolicy, includePrevious))" in snapshots
+    assert "let RunIds = toscalar(Runs | summarize make_set(FrameworkRunId))" in snapshots
+    assert "let Cohorts = AIQUnitsV1(RunIds)" in snapshots
+    units = FUNCTIONS["AIQUnitsV1"]
+    assert units.index("AIQReportsV1(datetime(null), datetime(null), '', '', runIds)") < units.index("mv-expand Unit")
+    assert "AIQUnitsV1(runIds)" in FUNCTIONS["AIQFindingsV1"]
+    pair = FUNCTIONS["AIQUnitPairV1"]
+    assert "materialize(AIQUnitsV1(pack_array(frameworkRunId, previousRunId)))" in pair
+    assert "let Current = PairUnits" in pair and "let Previous = PairUnits" in pair
+    assert "AIQSnapshotChangesV1" not in pair and "AIQSnapshotsV1" not in pair
+    queries = [tile["query"] for tile in DASHBOARD["tiles"]]
+    queries += [parameter["dataSource"]["query"] for parameter in DASHBOARD["parameters"]
+                if parameter.get("variableName") in ("_snapshot", "_currentAgent")]
+    for query in queries:
+        assert not re.search(r"\bAIQ(?:Reports|Runs|Units|Findings|Snapshots|SnapshotChanges|SnapshotRuns)V1\(\)", query)
+        if "AIQUnitsV1(RunIds)" in query:
+            assert "coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]))" in query
+    assert "AIQSnapshotChangesV1" not in DASHBOARD["tiles"][0]["query"]
+    assert "AIQSnapshotChangesV1" not in DASHBOARD["tiles"][1]["query"]
+    assert "AIQSnapshotRunsV1(CurrentDate, CurrentDate, CurrentRegion, CurrentPolicy, true)" in FUNCTIONS["AIQUnitChangesV1"]
+
+
+def window_spec(rows, start, end, *, include_previous):
+    """Reference selection before unit expansion; deliberately not KQL execution."""
+    daily = snapshot_spec(rows)
+    visible = {key: value for key, value in daily.items() if start <= key[-1] <= end}
+    if not include_previous:
+        return visible
+    for series in {key[:-1] for key in visible}:
+        previous = [key for key in daily if key[:-1] == series and key[-1] < start]
+        if previous:
+            key = max(previous)
+            visible[key] = daily[key]
+    return visible
+
+
+def test_bounded_cohorts_retain_exact_predecessor_outside_fourteen_day_window():
+    earlier, predecessor, first, latest = row(1), row(2), row(20), row(25)
+    no_visible_series = row(3, revision=1, policy=LEGACY_SCORING_POLICY)
+    rows = [earlier, predecessor, first, latest, no_visible_series]
+    bounded = window_spec(rows, "2026-09-12", "2026-09-25", include_previous=True)
+    assert [bounded[key]["ReportDate"] for key in sorted(bounded)] == [
+        "2026-09-02", "2026-09-20", "2026-09-25",
+    ]
+    assert len(window_spec(rows, "2026-09-12", "2026-09-25", include_previous=False)) == 2
+    assert window_spec(rows, "2026-09-26", "2026-09-30", include_previous=True) == {}
+    runs = FUNCTIONS["AIQSnapshotRunsV1"]
+    assert "ReportDate < startofday(startDate)" in runs
+    assert "arg_max(ReportDate, *) by RegionKey, ScoringPolicy, CoveragePolicy" in runs
+    assert "join kind=leftsemi (Visible | distinct RegionKey, ScoringPolicy, CoveragePolicy)" in runs
+    changes = FUNCTIONS["AIQSnapshotChangesV1"]
+    assert "AIQSnapshotsV1(startDate, endDate, regionKey, scoringPolicy, true)" in changes
+    assert changes.index("prev(PlannedCohort)") < changes.index("| where isnull(startDate)")
+
+
+def test_every_tile_and_query_filter_is_explicitly_bound_to_sweden_and_exact_v2():
+    queries = [tile["query"] for tile in DASHBOARD["tiles"]]
+    queries += [parameter["dataSource"]["query"] for parameter in DASHBOARD["parameters"]
+                if "dataSource" in parameter]
+    assert len(queries) == 10
+    for query in queries:
+        calls = re.findall(r"\bAIQSnapshot(?:Runs|Changes)V1\(([^)]*)\)", query)
+        assert calls and all(args in (FIXED_SCOPE, FIXED_SCOPE + ", true") for args in calls)
+        assert "AIQDaily" not in query and LEGACY_SCORING_POLICY.version not in query
+    serialized = json.dumps(DASHBOARD)
+    obsolete = {"_region", "_policy", "_reportDate", "_agent", "_issue", "_result", "_ownership"}
+    assert not obsolete.intersection(VARIABLES.findall(serialized))
+    assert "Legacy" not in serialized
+
+
+def test_removing_legacy_ui_preserves_backend_history_and_operations():
+    assert {
+        "AIQDailyPublications", "AIQDailyRuns", "AIQDailyAgents", "AIQDailyIssues",
+        "AIQDailyFields", "AIQDailyBaselines", "AIQDailyCards", "AIQDailyHighlights",
+        "AIQOperationsV1", "AIQPublicationConflictsV1",
+    } <= FUNCTIONS.keys()
+    assert ".create-merge table DailyQualityPublications" in KQL

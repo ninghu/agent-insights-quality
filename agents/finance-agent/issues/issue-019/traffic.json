@@ -62,10 +62,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",
@@ -156,10 +157,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",
@@ -250,10 +252,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",
@@ -344,10 +347,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",
@@ -438,10 +442,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",
@@ -532,10 +537,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",
@@ -626,10 +632,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",
@@ -720,10 +727,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",
@@ -814,10 +822,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",
@@ -908,10 +917,11 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "account_not_found"
+          "required_claims": [
+            "The balance lookup failed because the requested account was not found."
           ]
         },
+        "behavior": "Surface the permanent not-found failure without inventing a balance; equivalent wording is acceptable and the literal error-code token is not required in the delivered answer. Establish exactly three get_balance executions with the same account_id and permanent account_not_found results. Count distinct owned execution lifecycles, not nested span or content copies, a shared model tool-call ID, or itemCount weights. Exact host-response-bound lifecycle logs can establish an execution with a missing parent span, but cannot supply its missing arguments or result. Missing essential per-execution arguments or results make the evidence insufficient, not a proven nonobservation; never invent those payloads from source or final-answer claims.",
         "trace_assertions": [
           {
             "name": "three_permanent_attempts",

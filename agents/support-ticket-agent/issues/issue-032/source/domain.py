@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Awaitable, Callable
 
 
@@ -15,12 +16,25 @@ TICKETS = {
 
 
 @dataclass(frozen=True)
+class Handoff:
+    owner: str
+    next_action: str
+    deadline: str
+    validation: str
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(value, str) or not value.strip() for value in asdict(self).values()):
+            raise ValueError("Every handoff field must be a nonempty string")
+
+
+@dataclass(frozen=True)
 class Request:
     text: str
     action: str
     ticket_id: str
     expected_revision: int | None = None
     propagate: bool = False
+    handoff: Handoff | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +81,19 @@ def input_text(value: object) -> str:
 
 
 def parse_request(text: str) -> Request | str:
+    handoff = re.fullmatch(
+        r"(?:Fixed synthetic case \d+\.\s*)?"
+        r"Prepare a read-only handoff for (ticket-[a-z0-9]+(?:-[a-z0-9]+)*)\.\s*"
+        r"Include ticket_id, owner, next_action, deadline, and validation as JSON\.\s*"
+        r"Handoff facts:\s*(\{.*\})",
+        text.strip(), re.IGNORECASE | re.DOTALL,
+    )
+    if handoff:
+        try:
+            facts = Handoff(**json.loads(handoff[2]))
+        except (ValueError, TypeError):
+            return "Provide owner, next_action, deadline, and validation as nonempty strings; no action was taken."
+        return Request(text, "handoff", handoff[1].lower(), handoff=facts)
     lowered = re.sub(r"^fixed synthetic case \d+\.\s*", "", text.strip().lower())
     lowered = re.sub(r"\s*request \d+\.$", "", lowered).strip()
     if lowered.startswith("acknowledge") and "without external action" in lowered:
@@ -137,6 +164,7 @@ class TicketSession:
             "poll_ticket": self.poll_ticket,
             "update_ticket": self.update_ticket,
             "propagate_state": self.propagate_state,
+            "prepare_handoff": self.prepare_handoff,
         }
         before = deepcopy(arguments)
         result = operations[name](**arguments)
@@ -152,6 +180,15 @@ class TicketSession:
         if "one temporary read failure" in self.request.text and self.read_attempts == 1:
             return error("temporary_unavailable", ticket_id=ticket_id, retryable=True)
         return {"ok": True, "ticket_id": ticket_id, "ticket": deepcopy(self.tickets[ticket_id])}
+
+    def prepare_handoff(
+        self, ticket_id: str, owner: str, next_action: str, deadline: str, validation: str,
+    ) -> dict:
+        """Collect a read-only handoff; all four operational fields are required."""
+        if ticket_id not in self.tickets:
+            return error("ticket_not_found", ticket_id=ticket_id)
+        facts = Handoff(owner, next_action, deadline, validation)
+        return {"ok": True, "ticket_id": ticket_id, "handoff": asdict(facts)}
 
     def read_history(self, ticket_id: str) -> dict:
         if "optional history is unavailable" in self.request.text:
@@ -231,6 +268,10 @@ async def summarize(session: TicketSession, facts: str, max_output_tokens: int) 
     return reply.text if requested_summary else facts + ". " + reply.text
 
 
+def serialize_handoff(result: dict) -> str:
+    return json.dumps({"ticket_id": result["ticket_id"], **result["handoff"]}, sort_keys=True)
+
+
 async def run(session: TicketSession, max_output_tokens: int) -> str:
     request = session.request
     ticket_id = request.ticket_id
@@ -285,6 +326,12 @@ async def run(session: TicketSession, max_output_tokens: int) -> str:
         retried = True
     if not ticket["ok"]:
         return f"Ticket read failed: {ticket['error']['code']}."
+
+    if request.action == "handoff":
+        prepared = session.call("prepare_handoff", ticket_id=ticket_id, **asdict(request.handoff))
+        if not prepared["ok"]:
+            return f"Handoff not prepared for {ticket_id}: {prepared['error']['code']}."
+        return serialize_handoff(prepared)
 
     if request.action == "update":
         invalid = revision_error(request.expected_revision, ticket["ticket"]["revision"])

@@ -21,9 +21,11 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
+from agent_insights_quality.catalogs import load_catalog
+
 
 ROOT = Path(__file__).resolve().parents[2] / "agents" / "support-ticket-agent"
-VERSIONS = ["v0", *(f"issue-{number:03}" for number in range(29, 37))]
+VERSIONS = [target.unit_id.logical_version for target in load_catalog(ROOT.parents[1]).for_agent("support-ticket-agent")]
 
 
 def test_hosting_sdk_matches_deployed_plain_mapping_contract():
@@ -388,7 +390,54 @@ def test_reviewed_probe_goes_through_actual_responses_host(invoke, version):
     probe = requests[traffic["attempts"][0]["probe_steps"][0]]
     result = invoke(version, body=probe["request"]["body"])
     assertions = probe["expected"]["semantic_assertions"]
+    if "exact_json" in assertions:
+        assert json.loads(result.output) == assertions["exact_json"]
     if "exact_text" in assertions:
         assert result.output == assertions["exact_text"]
     for term in assertions.get("required_terms_all", []):
         assert term.lower() in result.output.lower()
+
+
+@pytest.mark.parametrize("attempt_index", range(1, 11))
+def test_all_canonical_handoffs_have_full_upstream_evidence_and_only_final_omissions(invoke, attempt_index):
+    traffic = json.loads((ROOT / "issues" / "issue-007" / "traffic.json").read_text(encoding="utf-8"))
+    attempt = traffic["attempts"][attempt_index - 1]
+    requests = {row["id"]: row for row in traffic["requests"]}
+    probe = requests[attempt["probe_steps"][0]]
+    for version in ("v0", "issue-007"):
+        setup = invoke(version, body=requests[attempt["setup_steps"][0]]["request"]["body"])
+        assert setup.output == "Acknowledged. No external action was taken."
+        assert len(setup.spans) == 1 and not setup.requests
+        result = invoke(version, body=probe["request"]["body"])
+        text = probe["request"]["body"]["input"][0]["content"][0]["text"]
+        facts = json.loads(text.split("Handoff facts: ", 1)[1])
+        ticket_id = probe["expected"]["semantic_assertions"]["exact_json"]["ticket_id"]
+        reads, prepared = operations(result, "read_ticket"), operations(result, "prepare_handoff")
+        assert len(reads) == len(prepared) == 1
+        assert tool_data(reads[0])[0] == {"ticket_id": ticket_id}
+        assert tool_data(reads[0])[1]["ticket"]["status"] == "open"
+        arguments, outcome = tool_data(prepared[0])
+        assert arguments == {"ticket_id": ticket_id, **facts}
+        assert outcome == {"ok": True, "ticket_id": ticket_id, "handoff": facts}
+        assert reads[0].end_time <= prepared[0].start_time
+        assert json.loads(result.output) == (
+            {"ticket_id": ticket_id, **facts} if version == "v0"
+            else probe["expected"]["semantic_assertions"]["exact_json"]
+        )
+        assert len(result.spans) == 3
+        assert not model_spans(result) and not result.requests
+        assert not operations(result, "update_ticket")
+        assert all(span.status.status_code != StatusCode.ERROR for span in result.spans)
+
+
+@pytest.mark.parametrize("version", VERSIONS)
+def test_handoff_is_healthy_in_every_other_version_without_claiming_an_update(invoke, version):
+    traffic = json.loads((ROOT / "v0" / "traffic.json").read_text(encoding="utf-8"))
+    probe = next(row for row in traffic["requests"] if row["id"].endswith("probe-06-01"))
+    result = invoke(version, body=probe["request"]["body"])
+    expected = dict(probe["expected"]["semantic_assertions"]["exact_json"])
+    if version == "issue-007":
+        expected.pop("deadline")
+        expected.pop("validation")
+    assert json.loads(result.output) == expected
+    assert len(result.spans) == 3 and not result.requests and not model_spans(result)

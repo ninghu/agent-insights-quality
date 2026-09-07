@@ -15,13 +15,12 @@
   "id": "d8396ea4-e60c-45e9-b705-68d88d0b25d8",
   "pages": [
     {"id": "d5313032-245b-4c3b-a7aa-6d55c7453e21", "name": "Overview"},
-    {"id": "2a7768b8-083b-4337-9835-c4812d5fafcd", "name": "Explain change"},
-    {"id": "8f04f149-93f7-47a3-9099-02a23a70a61f", "name": "Legacy history (read-only)"}
+    {"id": "2a7768b8-083b-4337-9835-c4812d5fafcd", "name": "Explain change"}
   ],
   "parameters": [
     {
       "beginVariableName": "_startTime",
-      "defaultValue": {"count": 90, "kind": "dynamic", "unit": "days"},
+      "defaultValue": {"count": 14, "kind": "dynamic", "unit": "days"},
       "displayName": "Report dates",
       "endVariableName": "_endTime",
       "id": "f2989ea6-67e6-4b58-82fd-c10fcacb82f4",
@@ -31,42 +30,10 @@
     {
       "dataSource": {
         "columns": {"label": "Label", "value": "Value"},
-        "consumedVariables": [],
+        "consumedVariables": ["_startTime", "_endTime"],
         "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
         "kind": "query",
-        "query": "AIQRunsV1()\n| extend Value = tolower(replace_string(Region, ' ', ''))\n| distinct Value\n| project Value, Label = Value\n| order by Value asc"
-      },
-      "defaultValue": {"kind": "value", "value": "swedencentral"},
-      "displayName": "Region",
-      "id": "776c0320-2f16-4e0d-9b35-9da5b33488d3",
-      "kind": "string",
-      "selectionType": "single",
-      "showOnPages": {"kind": "selection", "pageIds": ["d5313032-245b-4c3b-a7aa-6d55c7453e21", "2a7768b8-083b-4337-9835-c4812d5fafcd"]},
-      "variableName": "_region"
-    },
-    {
-      "dataSource": {
-        "columns": {"label": "Label", "value": "Value"},
-        "consumedVariables": ["_region"],
-        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-        "kind": "query",
-        "query": "AIQRunsV1()\n| where tolower(replace_string(Region, ' ', '')) == _region\n| project Value = ScoringPolicy, Label = ScoringPolicy\n| distinct Value, Label\n| order by Value asc"
-      },
-      "defaultValue": {"kind": "value", "value": "unique-issues-noise-1-duplicate-05-miss-025-v2"},
-      "displayName": "Recorded scoring policy",
-      "id": "d3b4d09d-c4e5-4a88-9eed-6a8d3d6622ed",
-      "kind": "string",
-      "selectionType": "single",
-      "showOnPages": {"kind": "selection", "pageIds": ["d5313032-245b-4c3b-a7aa-6d55c7453e21", "2a7768b8-083b-4337-9835-c4812d5fafcd"]},
-      "variableName": "_policy"
-    },
-    {
-      "dataSource": {
-        "columns": {"label": "Label", "value": "Value"},
-        "consumedVariables": ["_startTime", "_endTime", "_region", "_policy"],
-        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-        "kind": "query",
-        "query": "AIQSnapshotsV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| project Value = FrameworkRunId, Label = strcat(format_datetime(ReportDate, 'yyyy-MM-dd'), ' / ', FrameworkRunId), ReportDate\n| order by ReportDate desc\n| project Value, Label"
+        "query": "AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| project Value = FrameworkRunId, Label = strcat(format_datetime(ReportDate, 'yyyy-MM-dd'), ' / ', FrameworkRunId), ReportDate\n| order by ReportDate desc\n| project Value, Label"
       },
       "defaultValue": {"kind": "all"},
       "displayName": "Snapshot (All = latest)",
@@ -79,10 +46,10 @@
     {
       "dataSource": {
         "columns": {"label": "Label", "value": "Value"},
-        "consumedVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot"],
+        "consumedVariables": ["_startTime", "_endTime", "_snapshot"],
         "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
         "kind": "query",
-        "query": "let Selected = AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1;\nAIQUnitsV1()\n| where FrameworkRunId in (Selected | project FrameworkRunId) or FrameworkRunId in (Selected | project PreviousRunId)\n| project Value = Agent, Label = Agent\n| distinct Value, Label\n| order by Value asc"
+        "query": "let Selected = AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1;\nlet RunIds = coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]));\nAIQUnitsV1(RunIds)\n| project Value = Agent, Label = Agent\n| distinct Value, Label\n| order by Value asc"
       },
       "defaultValue": {"kind": "all"},
       "displayName": "Agent",
@@ -91,38 +58,6 @@
       "selectionType": "single-all",
       "showOnPages": {"kind": "selection", "pageIds": ["2a7768b8-083b-4337-9835-c4812d5fafcd"]},
       "variableName": "_currentAgent"
-    },
-    {
-      "dataSource": {
-        "columns": {"label": "Label", "value": "Value"},
-        "consumedVariables": ["_startTime", "_endTime"],
-        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-        "kind": "query",
-        "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| extend Value = format_datetime(ReportDate, 'yyyy-MM-dd')\n| project Value, Label = Value\n| distinct Value, Label\n| order by Value desc"
-      },
-      "defaultValue": {"kind": "all"},
-      "displayName": "Legacy report date",
-      "id": "250e0a32-9ae6-40c1-8d31-e663c13f01b7",
-      "kind": "string",
-      "selectionType": "single-all",
-      "showOnPages": {"kind": "selection", "pageIds": ["8f04f149-93f7-47a3-9099-02a23a70a61f"]},
-      "variableName": "_reportDate"
-    },
-    {
-      "dataSource": {
-        "columns": {"label": "Label", "value": "Value"},
-        "consumedVariables": ["_startTime", "_endTime", "_reportDate"],
-        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-        "kind": "query",
-        "query": "AIQDailyAgents()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| project Value = Agent, Label = Agent\n| distinct Value, Label\n| order by Value asc"
-      },
-      "defaultValue": {"kind": "all"},
-      "displayName": "Legacy Agent",
-      "id": "12351920-7e2e-4af3-980d-b8fbd5ff349d",
-      "kind": "string",
-      "selectionType": "single-all",
-      "showOnPages": {"kind": "selection", "pageIds": ["8f04f149-93f7-47a3-9099-02a23a70a61f"]},
-      "variableName": "_agent"
     }
   ],
   "schema_version": "20",
@@ -132,9 +67,9 @@
       "id": "5ba655b4-04a6-4a4d-9d3a-5240ffdf6881",
       "layout": {"height": 3, "width": 24, "x": 0, "y": 0},
       "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project ReportDate, QualityScore, C_E = strcat(CorrectIssues, '/', ExpectedIssues), M = MissedIssues, N = NoiseCards, D = DuplicateCards, ExcludedUnits",
-      "title": "Latest stored quality — C/E detected/scored issues; M misses; N Noise; D Duplicates",
-      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy"],
+      "query": "let Latest = materialize(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nunion\n(Latest | project ReportDate, QualityScore, C_E = strcat(CorrectIssues, '/', ExpectedIssues), M = MissedIssues, N = NoiseCards, D = DuplicateCards, ExcludedUnits, Publication = 'Published'),\n(print ReportDate = datetime(null), QualityScore = real(null), C_E = '', M = long(null), N = long(null), D = long(null), ExcludedUnits = long(null), Publication = 'No official public-safe v2 publications in Sweden Central for these dates. Select another range; never publish private TEST data to populate this dashboard.'\n| where toscalar(Latest | count) == 0)",
+      "title": "Latest stored v2 quality — C/E detected/scored; M misses; N Noise; D Duplicates",
+      "usedParamVariables": ["_startTime", "_endTime"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
@@ -143,9 +78,9 @@
       "id": "66f57b36-e671-4588-baf4-c88f9fe8e9c6",
       "layout": {"height": 8, "width": 24, "x": 0, "y": 3},
       "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| extend Series = strcat(PolicyLabel, ' / ', RegionKey, ' / ', CoveragePolicy)\n| project ReportDate, QualityScore, Series, ComparisonNote\n| order by ReportDate asc",
-      "title": "Stored quality trend — selected policy only; check coverage and rotation limits below",
-      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy"],
+      "query": "AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| extend Series = strcat('v2 / Sweden Central / ', CoveragePolicy)\n| project ReportDate, QualityScore, Series\n| order by ReportDate asc",
+      "title": "Stored v2 quality trend — Sweden Central; check coverage and rotation limits below",
+      "usedParamVariables": ["_startTime", "_endTime"],
       "visualOptions": {
         "hideLegend": false,
         "hideTileTitle": false,
@@ -162,9 +97,9 @@
       "id": "c5d97c0f-4f25-42a7-9441-ac0f83c88e73",
       "layout": {"height": 6, "width": 24, "x": 0, "y": 11},
       "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "let Latest = materialize(AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nunion\n(Latest | project Metric = 'C — detected issues', Previous = PreviousCorrect, Current = CorrectIssues, Change = DeltaCorrect, PreviousWeighted = real(null), CurrentWeighted = real(null)),\n(Latest | project Metric = 'M — missed scored issues', Previous = PreviousMissed, Current = MissedIssues, Change = DeltaMissed, PreviousWeighted = PreviousWeightedMisses, CurrentWeighted = WeightedMisses),\n(Latest | project Metric = 'N — Noise cards', Previous = PreviousNoise, Current = NoiseCards, Change = DeltaNoise, PreviousWeighted = PreviousWeightedNoise, CurrentWeighted = WeightedNoise),\n(Latest | project Metric = 'D — Duplicate cards', Previous = PreviousDuplicates, Current = DuplicateCards, Change = DeltaDuplicates, PreviousWeighted = PreviousWeightedDuplicates, CurrentWeighted = WeightedDuplicates)\n| extend WeightedChange = CurrentWeighted - PreviousWeighted\n| order by Metric asc",
+      "query": "let Latest = materialize(AIQSnapshotChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nunion\n(Latest | project Metric = 'C — detected issues', Previous = PreviousCorrect, Current = CorrectIssues, Change = DeltaCorrect, PreviousWeighted = real(null), CurrentWeighted = real(null)),\n(Latest | project Metric = 'M — missed scored issues', Previous = PreviousMissed, Current = MissedIssues, Change = DeltaMissed, PreviousWeighted = PreviousWeightedMisses, CurrentWeighted = WeightedMisses),\n(Latest | project Metric = 'N — Noise cards', Previous = PreviousNoise, Current = NoiseCards, Change = DeltaNoise, PreviousWeighted = PreviousWeightedNoise, CurrentWeighted = WeightedNoise),\n(Latest | project Metric = 'D — Duplicate cards', Previous = PreviousDuplicates, Current = DuplicateCards, Change = DeltaDuplicates, PreviousWeighted = PreviousWeightedDuplicates, CurrentWeighted = WeightedDuplicates)\n| extend WeightedChange = CurrentWeighted - PreviousWeighted\n| order by Metric asc",
       "title": "Latest vs previous snapshot — count changes and denominator penalties, not causal attribution",
-      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy"],
+      "usedParamVariables": ["_startTime", "_endTime"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
@@ -173,9 +108,9 @@
       "id": "0e9c2a34-5b08-4ea0-8f9f-11eb2caaf978",
       "layout": {"height": 7, "width": 24, "x": 0, "y": 17},
       "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| project ReportDate, PreviousDate, IssueCoverage = strcat(ScoredIssues, '/', PlannedIssues), PreviousIssues = iff(isempty(PreviousRunId), '', strcat(PreviousScoredIssues, '/', PreviousPlannedIssues)), BaselineCoverage = strcat(ScoredBaselines, '/', PlannedBaselines), PreviousBaselines = iff(isempty(PreviousRunId), '', strcat(PreviousScoredBaselines, '/', PreviousPlannedBaselines)), ExcludedUnits, PreviousExcluded, ComparisonNote\n| order by ReportDate desc",
+      "query": "AIQSnapshotChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| project ReportDate, PreviousDate, IssueCoverage = strcat(ScoredIssues, '/', PlannedIssues), PreviousIssues = iff(isempty(PreviousRunId), '', strcat(PreviousScoredIssues, '/', PreviousPlannedIssues)), BaselineCoverage = strcat(ScoredBaselines, '/', PlannedBaselines), PreviousBaselines = iff(isempty(PreviousRunId), '', strcat(PreviousScoredBaselines, '/', PreviousPlannedBaselines)), ExcludedUnits, PreviousExcluded, ComparisonNote\n| order by ReportDate desc",
       "title": "Coverage and comparison limits — scored/planned units; excluded units are not misses",
-      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy"],
+      "usedParamVariables": ["_startTime", "_endTime"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
@@ -184,9 +119,9 @@
       "id": "d16ff5a9-b5de-4f80-bc78-920c9d29284d",
       "layout": {"height": 7, "width": 24, "x": 0, "y": 4},
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "let Selected = materialize(AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet CurrentRun = toscalar(Selected | project FrameworkRunId);\nlet PreviousRun = toscalar(Selected | project PreviousRunId);\nAIQUnitsV1()\n| where FrameworkRunId in (CurrentRun, PreviousRun)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| summarize C = sumif(CorrectIssues, Scorable and Kind == 'issue'), E = sumif(ExpectedIssues, Scorable and Kind == 'issue'), N = sumif(NoiseCards, Scorable), D = sumif(DuplicateCards, Scorable), ExcludedUnits = countif(not(Scorable)), Issues = countif(Scorable and Kind == 'issue'), PlannedIssues = countif(Kind == 'issue'), Baselines = countif(Scorable and Kind == 'baseline'), PlannedBaselines = countif(Kind == 'baseline') by Agent, FrameworkRunId, ReportDate\n| project Agent, Snapshot = iff(FrameworkRunId == CurrentRun, 'Current', 'Previous'), ReportDate, C_E = strcat(C, '/', E), M = E - C, N, D, IssueCoverage = strcat(Issues, '/', PlannedIssues), BaselineCoverage = strcat(Baselines, '/', PlannedBaselines), ExcludedUnits\n| order by Agent asc, ReportDate asc",
+      "query": "let Selected = materialize(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet CurrentRun = toscalar(Selected | project FrameworkRunId);\nlet RunIds = coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]));\nAIQUnitsV1(RunIds)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| summarize C = sumif(CorrectIssues, Scorable and Kind == 'issue'), E = sumif(ExpectedIssues, Scorable and Kind == 'issue'), N = sumif(NoiseCards, Scorable), D = sumif(DuplicateCards, Scorable), ExcludedUnits = countif(not(Scorable)), Issues = countif(Scorable and Kind == 'issue'), PlannedIssues = countif(Kind == 'issue'), Baselines = countif(Scorable and Kind == 'baseline'), PlannedBaselines = countif(Kind == 'baseline') by Agent, FrameworkRunId, ReportDate\n| project Agent, Snapshot = iff(FrameworkRunId == CurrentRun, 'Current', 'Previous'), ReportDate, C_E = strcat(C, '/', E), M = E - C, N, D, IssueCoverage = strcat(Issues, '/', PlannedIssues), BaselineCoverage = strcat(Baselines, '/', PlannedBaselines), ExcludedUnits\n| order by Agent asc, ReportDate asc",
       "title": "Agent counts — current and previous snapshots; baselines add penalties, not a score bonus",
-      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot", "_currentAgent"],
+      "usedParamVariables": ["_startTime", "_endTime", "_snapshot", "_currentAgent"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
@@ -195,9 +130,9 @@
       "id": "e3c0d5b7-92b9-4cc2-9500-f8054965b338",
       "layout": {"height": 11, "width": 24, "x": 0, "y": 11},
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "let SelectedRun = toscalar(AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project FrameworkRunId);\nAIQUnitChangesV1(SelectedRun)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| project Agent, LogicalVersion, ExpectedIssueAlias, Kind, Previous = strcat(PreviousStatus, '; C/E ', PreviousC, '/', PreviousE, '; M/N/D ', PreviousM, '/', PreviousN, '/', PreviousD), Current = strcat(CurrentStatus, '; C/E ', C, '/', E, '; M/N/D ', M, '/', N, '/', D), DeltaC, DeltaM, DeltaN, DeltaD, CurrentReasons, PreviousReasons\n| order by Agent asc, LogicalVersion asc",
+      "query": "let Selected = materialize(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet CurrentRun = toscalar(Selected | project FrameworkRunId);\nlet PreviousRun = toscalar(Selected | project PreviousRunId);\nAIQUnitPairV1(CurrentRun, PreviousRun)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| project Agent, LogicalVersion, ExpectedIssueAlias, Kind, Previous = strcat(PreviousStatus, '; C/E ', PreviousC, '/', PreviousE, '; M/N/D ', PreviousM, '/', PreviousN, '/', PreviousD), Current = strcat(CurrentStatus, '; C/E ', C, '/', E, '; M/N/D ', M, '/', N, '/', D), DeltaC, DeltaM, DeltaN, DeltaD, CurrentReasons, PreviousReasons\n| order by Agent asc, LogicalVersion asc",
       "title": "Which units changed? — blank counts/deltas mean excluded, not planned, or no previous snapshot",
-      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot", "_currentAgent"],
+      "usedParamVariables": ["_startTime", "_endTime", "_snapshot", "_currentAgent"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
@@ -206,9 +141,9 @@
       "id": "9860f0cd-c6d1-453e-bceb-623af41b62ce",
       "layout": {"height": 7, "width": 24, "x": 0, "y": 22},
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "let SelectedRun = toscalar(AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project FrameworkRunId);\nAIQFindingsV1()\n| where FrameworkRunId == SelectedRun\n| where isempty(_currentAgent) or Agent == _currentAgent\n| summarize Cards = count() by Agent, LogicalVersion, Kind, Scored, Classification, ExclusionReasons = tostring(ExclusionReasons)\n| order by Scored asc, Agent asc, LogicalVersion asc, Classification asc",
+      "query": "let SelectedRun = toscalar(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project FrameworkRunId);\nAIQFindingsV1(pack_array(SelectedRun))\n| where isempty(_currentAgent) or Agent == _currentAgent\n| summarize Cards = count() by Agent, LogicalVersion, Kind, Scored, Classification, ExclusionReasons = tostring(ExclusionReasons)\n| order by Scored asc, Agent asc, LogicalVersion asc, Classification asc",
       "title": "Finding counts — scored and unscored stay separate; unexpected real findings are not Noise",
-      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot", "_currentAgent"],
+      "usedParamVariables": ["_startTime", "_endTime", "_snapshot", "_currentAgent"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
@@ -217,50 +152,9 @@
       "id": "cb06f7e0-b1e6-45b2-913e-1e56772f8e3a",
       "layout": {"height": 4, "width": 24, "x": 0, "y": 0},
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "AIQSnapshotChangesV1()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where RegionKey == _region and ScoringPolicy == _policy\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project ReportDate, PreviousDate, ComparisonNote, Metadata = bag_pack('FrameworkRunId', FrameworkRunId, 'PreviousRunId', PreviousRunId, 'SourceCommit', SourceCommit, 'PreviousSourceCommit', PreviousSourceCommit, 'Region', Region, 'ScoringPolicy', ScoringPolicy, 'ScoreFormula', ScoreFormula, 'NoiseWeight', NoiseWeight, 'DuplicateWeight', DuplicateWeight, 'MissWeight', MissWeight, 'CoveragePolicy', CoveragePolicy)",
+      "query": "let Selected = materialize(AIQSnapshotChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nunion\n(Selected | project ReportDate, PreviousDate, ComparisonNote, Metadata = bag_pack('FrameworkRunId', FrameworkRunId, 'PreviousRunId', PreviousRunId, 'SourceCommit', SourceCommit, 'PreviousSourceCommit', PreviousSourceCommit, 'Region', Region, 'ScoringPolicy', ScoringPolicy, 'ScoreFormula', ScoreFormula, 'NoiseWeight', NoiseWeight, 'DuplicateWeight', DuplicateWeight, 'MissWeight', MissWeight, 'CoveragePolicy', CoveragePolicy)),\n(print ReportDate = datetime(null), PreviousDate = datetime(null), ComparisonNote = 'No official public-safe v2 snapshot in Sweden Central matches these filters. Select All (latest) or another date range. Private TEST results are never published here.', Metadata = dynamic(null)\n| where toscalar(Selected | count) == 0)",
       "title": "Selected snapshot and comparison limits — expand Metadata for source and recorded policy",
-      "usedParamVariables": ["_startTime", "_endTime", "_region", "_policy", "_snapshot"],
-      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "9ed47f6f-a002-4d91-b45c-944b1fe01dbd",
-      "layout": {"height": 8, "width": 24, "x": 0, "y": 0},
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| project ReportDate, QualityScore, Series = QualityScoreFormula\n| order by ReportDate asc",
-      "title": "Legacy stored scores — historical formulas; never compare this line as a v2 Engine change",
-      "usedParamVariables": ["_startTime", "_endTime"],
-      "visualOptions": {
-        "hideLegend": false,
-        "hideTileTitle": false,
-        "xColumn": {"type": "specified", "value": "ReportDate"},
-        "yColumns": {"type": "specified", "value": ["QualityScore"]},
-        "seriesColumns": {"type": "specified", "value": ["Series"]},
-        "yAxisMinimumValue": {"type": "specified", "value": 0},
-        "yAxisMaximumValue": {"type": "specified", "value": 100}
-      },
-      "visualType": "line"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "4c6e01f0-1019-443d-a026-2c70a250ed82",
-      "layout": {"height": 6, "width": 24, "x": 0, "y": 8},
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| project ReportDate, QualityScore, IssuesCorrect, IssuesExpected, IssuesMissing, NoiseCards, DuplicateCards, QualityScoreFormula\n| order by ReportDate desc",
-      "title": "Legacy daily counts — original meanings and stored score retained",
-      "usedParamVariables": ["_startTime", "_endTime", "_reportDate"],
-      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
-      "visualType": "table"
-    },
-    {
-      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
-      "id": "8ec799b1-850f-4bed-954f-34820e7cf772",
-      "layout": {"height": 10, "width": 24, "x": 0, "y": 14},
-      "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyIssues()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| where isempty(_agent) or Agent == _agent\n| project ReportDate, Agent, IssueId, Outcome, CardCount, RuntimeEvidenceComplete\n| order by ReportDate desc, Agent asc, IssueId asc",
-      "title": "Legacy issue outcomes — read-only historical context",
-      "usedParamVariables": ["_startTime", "_endTime", "_reportDate", "_agent"],
+      "usedParamVariables": ["_startTime", "_endTime", "_snapshot"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     }

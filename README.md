@@ -15,15 +15,18 @@ qualification. Historical reports remain unchanged.
 | Agent | Implementation | Issues |
 | --- | --- | ---: |
 | Weather | Pure Prompt | 6 |
-| Healthcare | Pure Prompt | 6 |
+| Healthcare | Pure Prompt | 5 |
 | Finance | Microsoft Agent Framework | 8 |
 | Travel | LangGraph | 8 |
-| Support | Responses host | 8 |
+| Support | Responses host | 9 |
 
 The reviewed catalogs are [AGENT_CATALOG.yaml](catalogs/AGENT_CATALOG.yaml) and
 [ISSUE_CATALOG.yaml](catalogs/ISSUE_CATALOG.yaml). Their readable views are
 [Agent Catalog](AGENT_CATALOG.md) and [Issue Catalog](ISSUE_CATALOG.md).
 Every baseline/issue owns complete deployable source; no runtime issue selectors or source patches.
+Issue-007 is a Support handoff serialization defect, not a Healthcare Prompt-policy exception.
+The [maintenance contract](CONTRIBUTING.md#support-handoff-and-inventory-history) explains its
+visible healthy requirement, baseline coverage and preservation of older inventory snapshots.
 
 ## Qualification design
 

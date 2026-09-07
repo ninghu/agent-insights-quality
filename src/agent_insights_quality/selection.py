@@ -124,7 +124,6 @@ def evaluation_inputs(target: Target) -> tuple[Path, ...]:
         root / "src" / "agent_insights_quality" / "providers" / "sol.py",
         root / "src" / "agent_insights_quality" / "telemetry.py",
         root / "src" / "agent_insights_quality" / "prompts" / "staging.md",
-        root / "src" / "agent_insights_quality" / "prompts" / "daily.md",
     )
 
 

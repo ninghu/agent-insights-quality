@@ -90,6 +90,24 @@ Retained categories are not remediation instructions. Human review must distingu
 Agent defect from an ambiguous claim and from correctly handled recovery (no Agent change needed).
 Disagreement found during report review is documented for review, not silently rescored.
 
+### Contract authority and benchmark fairness
+
+Separate configured-policy noncompliance from a claim of business-outcome failure. A
+legitimate developer-defined privacy, authorization or conditional business rule can
+override an ordinary user request; satisfying that request alone does not prove healthy
+behavior. A specific applicable exception is not automatically an instruction conflict.
+
+Ground the applicable rule, scope, trigger and actual mismatch in evidence. Stronger
+business-failure claims require the governing business obligation or independent impact.
+Unresolved authority is uncertainty, not a reason to invent a defect or suppress a real
+compliance finding. An unnecessary proposed fix alone does not overturn a supported core.
+
+Revised synthetic cases must not require Insights to infer hidden injection intent. Keep
+the healthy obligation visible and distinguish flawed examples or implementation behavior
+from a mandatory contrary policy. Activation expectations describe the injected observation,
+not a new healthy requirement. A compliant healthy output is a nonobservation of that defect,
+not automatically another bug. These rules do not relabel historical assessments.
+
 ## Score and coverage
 
 New measurements use precision-first scoring v2:

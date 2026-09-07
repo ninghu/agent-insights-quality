@@ -2,6 +2,8 @@
 
 This public repository measures Foundry Agent Insights against five synthetic Agents, five
 baselines and 36 reviewed single-root issues. The goal is credible evidence, not a high score.
+Issue counts are Weather 6, Healthcare 5, Finance 8, Travel 8 and Support 9. Issue-007
+belongs to Support's Hosted implementation; Healthcare remains pure Prompt.
 
 ## Rewrite status
 

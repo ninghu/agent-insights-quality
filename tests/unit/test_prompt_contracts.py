@@ -419,13 +419,6 @@ def test_stale_correction_oracles_are_grounded_in_varied_earlier_turns():
     assert len(stale_selections) >= 3
 
 
-def test_handoff_fixture_supplies_the_fields_omitted_by_the_defect():
-    required = {"owner", "next_action", "deadline", "validation"}
-    for request in phase_steps(traffic("healthcare-agent", "issue-007"), "probe"):
-        assert all(field in text(request) for field in required)
-        assert required.isdisjoint(assertions(request)["exact_json"])
-
-
 def test_create_envelope_defect_omits_only_scope_and_approval_controls():
     for request in phase_steps(traffic("healthcare-agent", "issue-008"), "probe"):
         expected = assertions(request)["exact_json_fields"]

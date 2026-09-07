@@ -459,7 +459,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Fixed synthetic case 06. Read ticket-demo-1."
+                  "text": "Fixed synthetic case 06. Prepare a read-only handoff for ticket-demo-1. Include ticket_id, owner, next_action, deadline, and validation as JSON. Handoff facts: {\"owner\": \"Printer desk\", \"next_action\": \"confirm the test page result\", \"deadline\": \"2026-10-05T09:00:00Z\", \"validation\": \"compare the printed page with the synthetic sample\"}"
                 }
               ]
             }
@@ -469,27 +469,111 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "required_terms_all": [
-            "ticket-demo-1",
-            "revision 3",
-            "open"
-          ]
+          "exact_json": {
+            "ticket_id": "ticket-demo-1",
+            "owner": "Printer desk",
+            "next_action": "confirm the test page result",
+            "deadline": "2026-10-05T09:00:00Z",
+            "validation": "compare the printed page with the synthetic sample"
+          }
         },
         "trace_assertions": [
           {
-            "name": "required_operation_sequence",
+            "name": "handoff_operation_sequence",
             "kind": "operation_sequence",
             "operations": [
               "invoke_agent",
               "execute_tool",
-              "chat"
+              "execute_tool"
             ]
+          },
+          {
+            "name": "read_before_handoff",
+            "kind": "span_relation",
+            "first_tool": "read_ticket",
+            "second_tool": "prepare_handoff",
+            "relation": "ordered"
+          },
+          {
+            "name": "handoff_collected_once",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_handoff",
+            "count": 1
+          },
+          {
+            "name": "handoff_collection_succeeded",
+            "kind": "tool_result_class",
+            "tool_name": "prepare_handoff",
+            "result_class": "success"
+          },
+          {
+            "name": "supplied_owner_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "owner",
+            "present": true
+          },
+          {
+            "name": "supplied_next_action_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "next_action",
+            "present": true
+          },
+          {
+            "name": "supplied_deadline_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "deadline",
+            "present": true
+          },
+          {
+            "name": "supplied_validation_collected",
+            "kind": "tool_argument_presence",
+            "tool_name": "prepare_handoff",
+            "argument": "validation",
+            "present": true
+          },
+          {
+            "name": "delivered_owner_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.owner",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_next_action_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.next_action",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_deadline_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.deadline",
+            "relation": "includes_result"
+          },
+          {
+            "name": "delivered_validation_relation",
+            "kind": "terminal_claim_relation",
+            "tool_name": "prepare_handoff",
+            "result_path": "handoff.validation",
+            "relation": "includes_result"
+          },
+          {
+            "name": "no_ticket_update",
+            "kind": "tool_call_count",
+            "tool_name": "update_ticket",
+            "count": 0
           }
         ],
         "identity_assertions": {
           "agent_name": "$runtime_agent_name",
           "agent_version": "$runtime_agent_version"
-        }
+        },
+        "behavior": "The caller's healthy contract requires all four supplied operational fields. read_ticket and prepare_handoff must succeed in order, with the exact caller facts in prepare_handoff arguments and its full handoff result. The final JSON preserves all four supplied fields and the correct ticket_id. No ticket mutation, escalation, polling, model call, or fabricated model payload is needed."
       }
     },
     {

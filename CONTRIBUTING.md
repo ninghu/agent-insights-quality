@@ -30,6 +30,43 @@ Do not substitute removed legacy flows or enable an unproven candidate.
 Normal source review remains required, but staging-to-Daily promotion and digest approval
 ceremonies are not part of the design.
 
+## Support handoff and inventory history
+
+The explicitly approved issue-007 reassignment preserves five Agents, 36 issues and 41 targets:
+Healthcare owns issues 008–012 and Support owns 007 plus 029–036. Other identities are unchanged.
+Use catalog membership, not numeric ranges, for execution and test-version coverage. Daily still
+selects a baseline plus four distinct issues per Agent (25 units, 20 issues); Support's nine issues
+require three consecutive weekday plans for full rotation coverage rather than two. Private weekend
+planning remains date-bound, not a rewritten weekday run.
+
+Every Support source version accepts a read-only ticket handoff with caller-supplied `owner`,
+`next_action`, `deadline` and `validation`. `TicketSession` reads the ticket and collects a typed
+`prepare_handoff` result through `ObservedSession`, preserving tool arguments/results and actual
+root input/output spans. Only issue-007's final JSON field projection drops `deadline` and
+`validation`; other Support versions serialize all four fields. No contrary model instruction,
+discarded model work, ticket mutation or synthetic model payload is involved. Ordinary Support
+model, authorization, revision, retry and polling paths retain their existing contracts.
+
+The canonical `traffic.json` has ten ordered setup/probe attempts, two synthetic tickets and ten
+different owners/deadlines. Each probe visibly requires all four fields and supplies their values.
+Full upstream facts versus the incomplete delivered JSON establish the defect; labels do not.
+Its deterministic mode describes this unconditional code projection, not a qualification outcome.
+Assess all ten under the unchanged eight-observation/no-resampling policy. Local matched Hosted
+tests are not deployed acceptance.
+
+Baseline attempt 6 replaces a duplicate of attempt 1's read with the healthy handoff. It retains
+ten attempts and every prior coverage family, including ordinary model work and handled failures.
+Traffic for issues 029–036 is unchanged; their complete source copies gain only the healthy handoff.
+
+The new Support target needs fresh deployment and evidence. Changed Support source selects all ten
+Support targets for traffic. Catalog inventory edits currently conservatively select other completed
+targets for reassessment of retained usable evidence, not redeployment or automatic fresh traffic;
+missing/incomplete work is evaluated against its actual records. Preserve old Healthcare bindings,
+resources and failed results; a changed owner never transfers old evidence to the new target.
+Exact historical email exports and prepared private publications restore their frozen plans, dates,
+policies and bytes, without consulting current rotation. Restyling against incompatible current
+ownership may fail with `report_context_identity_mismatch`; do not rewrite the old plan to bypass it.
+
 ## Tests and artifacts
 
 Default pytest collection is `tests/unit`. Keep it offline and quick using small synthetic inputs,
