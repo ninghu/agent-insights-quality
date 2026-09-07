@@ -529,7 +529,7 @@ def test_collected_orphan_refs_reach_assessment_without_inferred_tool_results():
     class Sol:
         async def complete_json(self, *, instructions, payload, schema):
             captured.append(payload)
-            return {"attempts": [
+            return {"additional_findings": [], "attempts": [
                 {
                     "index": index, "sufficient": False, "observed": False,
                     "contract_violation": False,

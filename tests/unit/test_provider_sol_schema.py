@@ -53,7 +53,10 @@ def judgment(*, staging, duplicate=False):
         "reason": "Synthetic evidence",
         **({"contract_violation": False} if staging else {}),
     } for index in range(1, 11)]
-    return {"attempts": attempts, **({} if staging else {"cards": [], "limitations": []})}
+    return {
+        "attempts": attempts,
+        **({"additional_findings": []} if staging else {"cards": [], "limitations": []}),
+    }
 
 
 @pytest.mark.parametrize("schema", [STAGING_SCHEMA, DAILY_SCHEMA])
@@ -68,6 +71,10 @@ def test_actual_assessment_wire_omits_only_unsupported_unique_items(schema):
     if schema is DAILY_SCHEMA:
         expected["properties"]["cards"]["items"]["properties"]["citations"]["items"]["properties"]["refs"].pop("uniqueItems", None)
         expected["properties"]["limitations"].pop("uniqueItems")
+    else:
+        expected["properties"]["additional_findings"]["items"]["properties"]["citations"]["items"][
+            "properties"
+        ]["refs"].pop("uniqueItems")
     assert format["schema"] == expected
     assert schema == original
     assert value == result
