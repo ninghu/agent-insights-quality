@@ -17,10 +17,10 @@ ISSUES = yaml.safe_load(
 )["issues"]
 OWNERSHIP = {
     "weather-agent": range(1, 7),
-    "healthcare-agent": range(7, 13),
+    "healthcare-agent": range(8, 13),
     "finance-agent": range(13, 21),
     "travel-agent": range(21, 29),
-    "support-ticket-agent": range(29, 37),
+    "support-ticket-agent": (7, *range(29, 37)),
 }
 VERSIONS = [
     pytest.param(

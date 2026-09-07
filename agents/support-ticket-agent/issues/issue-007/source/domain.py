@@ -131,7 +131,7 @@ def error(code: str, **details: object) -> dict:
 def revision_error(expected: int | None, current: int) -> dict | None:
     if expected is None:
         return error("revision_missing")
-    if expected > current:
+    if expected != current:
         return error("revision_mismatch", expected_revision=expected, current_revision=current)
     return None
 
@@ -269,7 +269,11 @@ async def summarize(session: TicketSession, facts: str, max_output_tokens: int) 
 
 
 def serialize_handoff(result: dict) -> str:
-    return json.dumps({"ticket_id": result["ticket_id"], **result["handoff"]}, sort_keys=True)
+    return json.dumps({
+        "ticket_id": result["ticket_id"],
+        "owner": result["handoff"]["owner"],
+        "next_action": result["handoff"]["next_action"],
+    }, sort_keys=True)
 
 
 async def run(session: TicketSession, max_output_tokens: int) -> str:

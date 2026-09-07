@@ -419,28 +419,6 @@ def test_stale_correction_oracles_are_grounded_in_varied_earlier_turns():
     assert len(stale_selections) >= 3
 
 
-def test_handoff_fixture_supplies_the_fields_omitted_by_the_defect():
-    required = {"owner", "next_action", "deadline", "validation"}
-    healthy = {
-        "owner": "Scheduling desk", "next_action": "request alternative dates",
-        "deadline": "17:00 on the requested date",
-        "validation": "validate the selection against newly supplied schedule evidence",
-    }
-    for request in phase_steps(traffic("healthcare-agent", "issue-007"), "probe"):
-        assert all(field in text(request) for field in required)
-        semantic = assertions(request)
-        assert "exact_json" not in semantic
-        schema = semantic["json_schema"]
-        Draft202012Validator.check_schema(schema)
-        validator = Draft202012Validator(schema)
-        assert not validator.is_valid(healthy)
-        assert not validator.is_valid({**healthy, "handoff": "scheduling"})
-        assert validator.is_valid({"handoff": "scheduling", "status": "unavailable"})
-        for field in required:
-            assert validator.is_valid({key: value for key, value in healthy.items() if key != field})
-        assert not validator.is_valid("unavailable")
-
-
 def test_create_envelope_defect_omits_only_scope_and_approval_controls():
     for request in phase_steps(traffic("healthcare-agent", "issue-008"), "probe"):
         expected = assertions(request)["exact_json_fields"]

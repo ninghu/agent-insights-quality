@@ -5,6 +5,7 @@ import json
 import subprocess
 from dataclasses import replace
 from datetime import date, timedelta
+from math import ceil
 from pathlib import Path
 
 import pytest
@@ -31,10 +32,14 @@ def records(catalog):
 
 @pytest.mark.parametrize("start", [date(2026, 9, 3), date(2026, 9, 4), date(2026, 12, 31)])
 def test_rotation_covers_inventory_across_consecutive_weekdays(catalog, start):
-    following = start + timedelta(days=1)
-    while following.weekday() >= 5:
-        following += timedelta(days=1)
-    days = [select_daily(catalog, day) for day in (start, following)]
+    window = ceil(max(len(catalog.for_agent(name)) - 1 for name in catalog.agents) / 4)
+    dates = [start]
+    while len(dates) < window:
+        following = dates[-1] + timedelta(days=1)
+        while following.weekday() >= 5:
+            following += timedelta(days=1)
+        dates.append(following)
+    days = [select_daily(catalog, day) for day in dates]
     for selected in days:
         assert len(selected) == len({target.key for target in selected}) == 25
         for position, name in enumerate(catalog.agents):
@@ -53,8 +58,35 @@ def test_private_weekend_planning_does_not_rewrite_the_execution_date(catalog, d
         select_daily(catalog, day)
     planned = select_daily(catalog, day, test_run=True)
     assert len(planned) == 25
+    assert sum(not target.is_baseline for target in planned) == 20
+    for name in catalog.agents:
+        lane = [target for target in planned if target.unit_id.agent == name]
+        assert lane[0].is_baseline
+        assert len({target.key for target in lane[1:]}) == 4
+        assert all(target in catalog.for_agent(name) for target in lane)
     assert planned == select_daily(catalog, day, test_run=True)
     assert day in (date(2026, 9, 5), date(2026, 9, 6))
+
+
+def test_approved_handoff_reassignment_changes_only_the_two_catalog_lanes(catalog):
+    assert catalog.target("support-ticket-agent/issue-007").is_prompt is False
+    with pytest.raises(KeyError):
+        catalog.target("healthcare-agent/issue-007")
+    healthcare = catalog.for_agent("healthcare-agent")
+    support = catalog.for_agent("support-ticket-agent")
+    assert len(healthcare) == 6 and all(target.is_prompt for target in healthcare)
+    assert len(support) == 10
+    assert not list((ROOT / "agents" / "healthcare-agent" / "issues" / "issue-007").glob("*"))
+    seen = set()
+    for day, test_run in [
+        (date(2026, 9, 7), False), (date(2026, 9, 9), False), (date(2026, 9, 6), True),
+    ]:
+        planned = select_daily(catalog, day, test_run=test_run)
+        assert "healthcare-agent/issue-007" not in {target.key for target in planned}
+        seen.update(
+            target.key for target in planned if target.unit_id.logical_version == "issue-007"
+        )
+    assert seen == {"support-ticket-agent/issue-007"}
 
 
 def test_missing_full_incomplete_and_unchanged_failure(catalog):

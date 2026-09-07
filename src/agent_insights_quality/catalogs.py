@@ -120,19 +120,19 @@ def validate_catalog(catalog: Catalog) -> None:
         )
         Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(document)
-    ownership = {
-        "weather-agent": range(1, 7),
-        "healthcare-agent": range(7, 13),
-        "finance-agent": range(13, 21),
-        "travel-agent": range(21, 29),
-        "support-ticket-agent": range(29, 37),
-    }
-    if set(catalog.agents) != set(ownership) or len(catalog.targets) != 41:
+    if len(catalog.agents) != 5 or len(catalog.targets) != 41:
         raise ValueError("Expected five Agents and 36 issues")
-    for name, numbers in ownership.items():
-        expected = {"v0", *(f"issue-{number:03d}" for number in numbers)}
-        if {item.unit_id.logical_version for item in catalog.for_agent(name)} != expected:
-            raise ValueError("Reviewed issue inventory changed")
+    issue_ids = [
+        target.unit_id.logical_version for target in catalog.targets if not target.is_baseline
+    ]
+    if len(issue_ids) != 36 or set(issue_ids) != {
+        f"issue-{number:03d}" for number in range(1, 37)
+    }:
+        raise ValueError("Reviewed issue inventory changed")
+    # Ownership comes from the two agreeing catalogs, not numeric issue ranges.
+    if any(sum(not target.is_baseline for target in catalog.for_agent(name)) < 4
+           for name in catalog.agents):
+        raise ValueError("Daily lanes require at least four distinct issues")
     selection = catalog._documents[1]["selection"]
     if selection != {
         "issues_per_agent_daily": 4,

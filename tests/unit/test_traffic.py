@@ -93,7 +93,8 @@ def test_hosted_wire_bodies_omit_unsupported_budget_and_prompt_budgets_remain():
                 else:
                     assert set(step.body) == {"input"}
                     hosted_turns += 1
-    assert (hosted_targets, hosted_attempts, hosted_turns, prompt_turns) == (27, 270, 540, 294)
+    # Issue-007 moved its ten two-turn attempts from pure Prompt to Support Hosted.
+    assert (hosted_targets, hosted_attempts, hosted_turns, prompt_turns) == (28, 280, 560, 274)
 
 
 @pytest.mark.parametrize("violation", [

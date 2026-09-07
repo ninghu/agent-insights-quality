@@ -52,7 +52,9 @@ def test_container_projection_omits_only_platform_reserved_names():
 
 
 @pytest.mark.parametrize("profile", ["staging", "daily"])
-@pytest.mark.parametrize("version", ["v0", *(f"issue-{number:03d}" for number in range(29, 37))])
+@pytest.mark.parametrize("version", [
+    target.unit_id.logical_version for target in load_catalog(ROOT).for_agent("support-ticket-agent")
+])
 def test_real_support_deployment_post_uses_platform_environment_and_exact_source(profile, version):
     target = load_catalog(ROOT).target("support-ticket-agent/" + version)
     resolved = environment(profile)

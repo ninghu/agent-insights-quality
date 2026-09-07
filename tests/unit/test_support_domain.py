@@ -8,9 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from agent_insights_quality.catalogs import load_catalog
+
 
 ROOT = Path(__file__).resolve().parents[2] / "agents" / "support-ticket-agent"
-VERSIONS = ["v0", *(f"issue-{number:03}" for number in range(29, 37))]
+VERSIONS = [target.unit_id.logical_version for target in load_catalog(ROOT.parents[1]).for_agent("support-ticket-agent")]
 
 
 def load_domain(version):
@@ -335,6 +337,8 @@ def test_reviewed_executable_traffic_cases_execute(version):
             )
             output, _, _ = execute(module, text, model_reply=reply)
             assertions = probe["expected"]["semantic_assertions"]
+            if "exact_json" in assertions:
+                assert json.loads(output) == assertions["exact_json"]
             if "exact_text" in assertions:
                 assert output == assertions["exact_text"]
             for term in assertions.get("required_terms_all", []):
@@ -343,3 +347,106 @@ def test_reviewed_executable_traffic_cases_execute(version):
                 assert forbidden.lower() not in output.lower()
             if "max_words" in assertions:
                 assert len(output.split()) <= assertions["max_words"]
+
+
+def handoff_text(ticket_id, facts):
+    return (
+        f"Prepare a read-only handoff for {ticket_id}. "
+        "Include ticket_id, owner, next_action, deadline, and validation as JSON. "
+        "Handoff facts: " + json.dumps(facts)
+    )
+
+
+@pytest.mark.parametrize("ticket_id", ["ticket-demo-1", "ticket-demo-2", "ticket-custom-7"])
+def test_handoff_collects_full_typed_facts_without_mutation_or_model_work(domain, ticket_id):
+    facts = {
+        "owner": "Synthetic Follow-up Desk",
+        "next_action": "Review the update request; do not execute it",
+        "deadline": "2026-11-20T15:30:00Z",
+        "validation": 'Compare the "Demo A" result with the supplied checklist',
+    }
+    tickets = {ticket_id: {"revision": 9, "status": "open", "summary": "Synthetic handoff case"}}
+    output, session, models = execute(domain, handoff_text(ticket_id, facts), tickets)
+    assert isinstance(session.request.handoff, domain.Handoff)
+    assert [call["name"] for call in session.calls] == ["read_ticket", "prepare_handoff"]
+    prepared = calls(session, "prepare_handoff")[0]
+    assert prepared["arguments"] == {"ticket_id": ticket_id, **facts}
+    assert prepared["result"] == {"ok": True, "ticket_id": ticket_id, "handoff": facts}
+    delivered = json.loads(output)
+    expected = {"ticket_id": ticket_id, **facts}
+    if domain.__name__.endswith("007"):
+        expected.pop("deadline")
+        expected.pop("validation")
+    assert delivered == expected
+    assert session.tickets == tickets
+    assert not session.escalations and not session.poll_attempts and not models
+
+
+@pytest.mark.parametrize("invalid", [
+    {}, {"owner": "Synthetic desk"}, {"owner": 7}, {"deadline": " "},
+    {"validation": None}, {"next_action": ["read"]}, {"unexpected": "extra field"},
+])
+def test_incomplete_or_untyped_handoff_facts_do_not_fabricate_values(domain, invalid):
+    facts = dict(owner="Synthetic desk", next_action="read the checklist", deadline="tomorrow",
+                 validation="check the sample")
+    facts = {} if not invalid else {**facts, **invalid}
+    if invalid == {"owner": "Synthetic desk"}:
+        facts.pop("validation")
+    output, session, models = execute(domain, handoff_text("ticket-demo-1", facts))
+    assert "no action" in output
+    assert session is None and not models
+
+
+def test_handoff_never_reuses_history_or_dispatches_appended_update(domain):
+    facts = dict(owner="Synthetic desk", next_action="read the checklist", deadline="tomorrow",
+                 validation="check the sample")
+    text = handoff_text("ticket-demo-1", facts)
+    for request in (text + " Confirm update for ticket-demo-1 at revision 3.",
+                    "Do not " + text, text.replace("ticket-demo-1", "ticket-demo-99")):
+        _, session, models = execute(domain, request)
+        assert session is None or not session.calls
+        assert not models
+    history = [
+        {"role": "user", "content": text},
+        {"role": "assistant", "content": "Ready."},
+        {"role": "user", "content": "Prepare a read-only handoff for ticket-demo-1."},
+    ]
+    _, session, models = execute(domain, domain.input_text(history))
+    assert session is None and not models
+
+
+def test_all_ten_handoff_probes_have_independent_caller_values_and_matched_baseline():
+    traffic = json.loads((ROOT / "issues" / "issue-007" / "traffic.json").read_text(encoding="utf-8"))
+    requests = {item["id"]: item for item in traffic["requests"]}
+    seen = set()
+    for attempt in traffic["attempts"]:
+        assert len(attempt["setup_steps"]) == len(attempt["probe_steps"]) == 1
+        probe = requests[attempt["probe_steps"][0]]
+        text = load_domain("v0").input_text(probe["request"]["body"]["input"])
+        healthy, baseline, models = execute(load_domain("v0"), text)
+        broken, issue, issue_models = execute(load_domain("issue-007"), text)
+        assert not models and not issue_models
+        assert baseline.calls == issue.calls
+        upstream = calls(baseline, "prepare_handoff")[0]["result"]
+        assert json.loads(healthy) == {"ticket_id": upstream["ticket_id"], **upstream["handoff"]}
+        assert json.loads(broken) == probe["expected"]["semantic_assertions"]["exact_json"]
+        assert set(json.loads(healthy)) - set(json.loads(broken)) == {"deadline", "validation"}
+        assert baseline.tickets == issue.tickets == load_domain("v0").TICKETS
+        seen.add((upstream["ticket_id"], *upstream["handoff"].values()))
+    assert len(seen) == len(traffic["attempts"]) == 10
+    assert len({values[0] for values in seen}) == 2
+    assert len({values[1] for values in seen}) == len({values[3] for values in seen}) == 10
+
+
+def test_baseline_handoff_replaces_only_a_redundant_read_coverage_slot():
+    traffic = json.loads((ROOT / "v0" / "traffic.json").read_text(encoding="utf-8"))
+    assert len(traffic["attempts"]) == 10
+    texts = [load_domain("v0").input_text(row["request"]["body"]["input"]) for row in traffic["requests"]]
+    assert sum("Prepare a read-only handoff" in text for text in texts) == 1
+    for index, operation in [(1, "Read"), (2, "Summarize"), (3, "Confirm update"),
+                             (4, "Recover"), (5, "Read"), (6, "Prepare a read-only handoff")]:
+        assert any(text.startswith(f"Fixed synthetic case {index:02d}. {operation}") for text in texts)
+    assert set(traffic["coverage"]) == {
+        "grounded_success", "normal_latency_and_token_use", "bounded_latency_and_output",
+        "ordinary_model_work", "handled_transient_tool_failure", "handled_agent_error_or_partial_result",
+    }
