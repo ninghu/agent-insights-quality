@@ -155,6 +155,9 @@ class TicketSession:
         self.escalations: list[dict] = []
         self.synthetic_dispatcher = SyntheticDispatcher()
 
+    def record_application_guard(self, **facts: str | bool) -> None:
+        """Optional observation hook; it does not dispatch business work."""
+
     def call(self, name: str, **arguments: object) -> dict:
         operations = {
             "read_ticket": self.read_ticket,
@@ -279,6 +282,13 @@ async def run(session: TicketSession, max_output_tokens: int) -> str:
         return f"Unknown ticket {ticket_id}; no action was taken."
 
     if request.action in {"read", "summarize"}:
+        session.record_application_guard(
+            request_kind=request.action,
+            ticket_known=True,
+            decision="reject",
+            reason="request_kind_blocked",
+            short_circuit_stage="before_business_dispatch",
+        )
         return "Valid ticket request rejected before model or tool dispatch."
 
     if request.action == "recover" and "repeated temporary failure" in request.text:

@@ -45,6 +45,11 @@ async def model_response(prompt: str, max_output_tokens: int) -> ModelReply:
 
 
 class ObservedSession(TicketSession):
+    def record_application_guard(self, **facts: str | bool) -> None:
+        trace.get_current_span().set_attributes({
+            f"support.application_guard.{key}": value for key, value in facts.items()
+        })
+
     def call(self, name: str, **arguments: object) -> dict:
         transition = name == "propagate_state"
         label = "support.state.propagation" if transition else f"support.tool.{name}"

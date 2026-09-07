@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import aiohttp
 from azure.ai.agentserver.responses import CreateResponse
+from azure.monitor.opentelemetry.exporter.export.trace._exporter import _convert_span_to_envelope
 import httpx
 import pytest
 from openai import AsyncOpenAI
@@ -67,7 +68,7 @@ def invoke(monkeypatch):
     providers = []
     packages = []
 
-    def send(version, text=None, *, body=None, model_reply="Local boundary summary."):
+    def send(version, text=None, *, body=None, model_reply="Local boundary summary.", headers=None):
         directory = ROOT / "v0" if version == "v0" else ROOT / "issues" / version
         package = "support_hosted_" + uuid4().hex
         packages.append(package)
@@ -126,7 +127,7 @@ def invoke(monkeypatch):
                     transport=httpx.ASGITransport(app=app.app),
                     base_url="http://support-host.invalid",
                 ) as local:
-                    return await local.post("/responses", json=request_body)
+                    return await local.post("/responses", json=request_body, headers=headers)
 
         response = asyncio.run(post())
         assert response.status_code == 200, response.text
@@ -285,6 +286,116 @@ def test_read_failure_boundary_is_independent_of_endpoint_answer(invoke, version
         assert "rejected before" in issue.output
 
 
+def application_guard_facts(result):
+    root = next(span for span in result.spans if span.attributes.get("gen_ai.operation.name") == "invoke_agent")
+    return {
+        key: value for key, value in root.attributes.items()
+        if key.startswith("support.application_guard.")
+    }
+
+
+@pytest.mark.parametrize("attempt_index", range(1, 11))
+def test_issue032_canonical_guard_facts_are_on_the_response_owned_span(invoke, attempt_index):
+    traffic = json.loads((ROOT / "issues" / "issue-032" / "traffic.json").read_text(encoding="utf-8"))
+    attempt = traffic["attempts"][attempt_index - 1]
+    requests = {row["id"]: row for row in traffic["requests"]}
+    setup = invoke("issue-032", body=requests[attempt["setup_steps"][0]]["request"]["body"])
+    assert setup.output == "Acknowledged. No external action was taken."
+    assert not application_guard_facts(setup) and not setup.requests
+    probe = requests[attempt["probe_steps"][0]]
+    result = invoke("issue-032", body=probe["request"]["body"])
+    assert result.output == "Valid ticket request rejected before model or tool dispatch."
+    assert application_guard_facts(result) == {
+        "support.application_guard.request_kind": "read",
+        "support.application_guard.ticket_known": True,
+        "support.application_guard.decision": "reject",
+        "support.application_guard.reason": "request_kind_blocked",
+        "support.application_guard.short_circuit_stage": "before_business_dispatch",
+    }
+    assert len(result.spans) == 1
+    assert not result.requests and not model_spans(result)
+    root = result.spans[0]
+    assert root.attributes["gen_ai.response.id"] == result.envelope["id"]
+    assert root.attributes["aiq.terminal_response.success"] is True
+    assert root.status.status_code == StatusCode.OK
+    assert not root.events
+    assert "error.type" not in root.attributes and "gen_ai.request.model" not in root.attributes
+
+
+def test_issue032_summary_guard_is_specific_to_the_current_request_kind(invoke):
+    result = invoke("issue-032", "Summarize ticket-demo-2 in one sentence.")
+    assert result.output == "Valid ticket request rejected before model or tool dispatch."
+    assert application_guard_facts(result)["support.application_guard.request_kind"] == "summarize"
+    assert len(result.spans) == 1 and not result.requests
+
+
+def test_issue032_guard_preserves_w3c_parent_and_response_ownership(invoke):
+    trace_id = "0123456789abcdef0123456789abcdef"
+    parent_id = "0123456789abcdef"
+    result = invoke(
+        "issue-032", "Read valid ticket-demo-2.",
+        headers={"traceparent": f"00-{trace_id}-{parent_id}-01"},
+    )
+    root = result.spans[0]
+    assert root.context.trace_id == int(trace_id, 16)
+    assert root.parent.span_id == int(parent_id, 16)
+    assert root.attributes["gen_ai.response.id"] == result.envelope["id"]
+    assert application_guard_facts(result)["support.application_guard.decision"] == "reject"
+
+
+def test_issue032_guard_survives_the_installed_exporter_dependency_conversion(invoke):
+    result = invoke("issue-032", "Read valid ticket-demo-2.")
+    root = result.spans[0]
+    # Convert locally only: never construct an exporter or submit telemetry.
+    envelope = _convert_span_to_envelope(root)
+    assert envelope.name == "Microsoft.ApplicationInsights.RemoteDependency"
+    assert envelope.data.base_type == "RemoteDependencyData"
+    assert envelope.data.base_data.success is True
+    assert envelope.tags["ai.operation.id"] == f"{root.context.trace_id:032x}"
+    properties = envelope.data.base_data.properties
+    assert properties["gen_ai.response.id"] == result.envelope["id"]
+    assert {key: properties[key] for key in application_guard_facts(result)} == {
+        key: str(value) for key, value in application_guard_facts(result).items()
+    }
+
+
+@pytest.mark.parametrize("text", [
+    "Read a ticket.",
+    "Read ticket-demo-1 and ticket-demo-2.",
+    "Read ticket-demo-99.",
+    "Summarize ticket-demo-99.",
+    "Do not confirm update for ticket-demo-1 at revision 3.",
+])
+def test_issue032_non_guard_returns_do_not_assert_the_guard_decision(invoke, text):
+    result = invoke("issue-032", text)
+    assert not application_guard_facts(result)
+    assert result.output != "Valid ticket request rejected before model or tool dispatch."
+    assert len(result.spans) == 1 and not result.requests
+
+
+@pytest.mark.parametrize("text", [
+    "Recover ticket-demo-2 after one temporary read failure.",
+    "Recover ticket-demo-2 after repeated temporary failure.",
+    "Wait for ticket-demo-2.",
+    "Wait for ticket-demo-2 while waiting on an unavailable worker.",
+    "Confirm update for ticket-demo-2 at revision 1.",
+    "Confirm update for ticket-demo-2 at revision 0.",
+    "Confirm update for ticket-demo-2 at revision 1 while preserving shared revision state.",
+])
+def test_issue032_other_hosted_workflows_are_not_marked_as_guard_short_circuits(invoke, text):
+    healthy, issue = invoke("v0", text), invoke("issue-032", text)
+    assert issue.output == healthy.output
+    assert issue.requests == healthy.requests
+    assert not application_guard_facts(issue)
+    assert [
+        (span.attributes["gen_ai.tool.name"], tool_data(span))
+        for span in issue.spans if "gen_ai.tool.name" in span.attributes
+    ] == [
+        (span.attributes["gen_ai.tool.name"], tool_data(span))
+        for span in healthy.spans if "gen_ai.tool.name" in span.attributes
+    ]
+
+
 def test_actual_dispatcher_exception_and_recovery_are_naturally_traced(invoke):
     text = "Read ticket-demo-2 after one deterministic synthetic model failure."
     for version, attempts in [("v0", 2), ("issue-034", 1)]:
@@ -441,3 +552,4 @@ def test_handoff_is_healthy_in_every_other_version_without_claiming_an_update(in
         expected.pop("validation")
     assert json.loads(result.output) == expected
     assert len(result.spans) == 3 and not result.requests and not model_spans(result)
+    assert not application_guard_facts(result)
