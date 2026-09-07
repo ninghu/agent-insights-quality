@@ -1578,7 +1578,77 @@ class Runner:
             **reference, "status": "applied",
         })
 
+    def _pending_daily_assessment(self, target: Target, work: _Work | None = None) -> dict | None:
+        """Validate unfinished bindings before selection can allocate new work."""
+        from .assessment_calls import DAILY_CALL_CONTRACT
+
+        reference = self.run.read(f"targets/{target.key}/assessment", missing_ok=True)
+        if reference is None:
+            return None
+        if (
+            reference.get("status") not in {"pending", "saved", "applied"}
+            or not isinstance(reference.get("artifact"), str)
+            or not reference["artifact"].startswith(f"targets/{target.key}/assessments/")
+        ):
+            raise StateError("assessment_pending_binding_mismatch")
+        if reference["status"] == "applied":
+            result = self.run.read_artifact(reference["artifact"], missing_ok=True)
+            if (
+                result is None or "unit_result" not in result
+                or restore_unit(result["unit_result"]).unit_id != target.unit_id
+            ):
+                raise StateError("assessment_pending_binding_mismatch")
+            return None
+        source = work.binding if work is not None else self.run.read(
+            f"targets/{target.key}/source", missing_ok=True,
+        )
+        if (
+            source is None or reference.get("source_revision") != self.revision
+            or not isinstance(source.get("work_key"), str)
+            or not source["work_key"].startswith(f"targets/{target.key}/work-")
+            or not isinstance(source.get("traffic_run_id"), str)
+            or not isinstance(source.get("evidence_key"), str)
+            or reference.get("work_key", source.get("work_key")) != source.get("work_key")
+            or reference.get("configured_assessor", self.assessment_settings.to_dict())
+            != self.assessment_settings.to_dict()
+            or "evidence_key" in reference and (
+                reference["evidence_key"] != source.get("evidence_key")
+                or reference.get("evidence_run_id") != source.get("traffic_run_id")
+            )
+        ):
+            raise StateError("assessment_pending_binding_mismatch")
+        journal = self.run.read_artifact(reference["artifact"] + "/calls/binding", missing_ok=True)
+        if journal is not None and journal != {
+            **{key: value for key, value in reference.items() if key != "status"},
+            "contract": DAILY_CALL_CONTRACT,
+        }:
+            raise StateError("assessment_pending_binding_mismatch")
+        return reference
+
+    def _pending_assessment_snapshot(self, target: Target, work: _Work, reference: dict) -> Snapshot:
+        snapshot = self._snapshot(work, reference.get("evidence_key", work.binding["evidence_key"]))
+        request = self.run.read_artifact(reference["artifact"] + "/calls/initial/request", missing_ok=True)
+        if request is not None:
+            from .assessment import _json_copy
+            from .assessment_partition import expand_payload
+            payload = expand_payload(request["payload"])
+            frozen = Snapshot.from_private_dict(payload["snapshot"])
+            if (
+                frozen != snapshot or request["mode"] != "initial"
+                or payload["target"] != _json_copy({
+                    "unit_id": target.unit_id.to_dict(), "agent_type": target.agent_type,
+                    "validation_mode": target.validation_mode, "expectation": dict(target.expectation),
+                })
+            ):
+                raise StateError("assessment_pending_input_mismatch")
+            # Old journals also retain the full packet; validate it without
+            # inventing or adding binding fields to their immutable records.
+            return frozen
+        return snapshot
+
     def _recover_assessment(self, target: Target, work: _Work) -> bool:
+        if self.runtime.environment == "daily":
+            self._pending_daily_assessment(target, work)
         reference = self.run.read(f"targets/{target.key}/assessment", missing_ok=True)
         if not reference or (
             reference["source_revision"] != self.revision
@@ -1595,7 +1665,10 @@ class Runner:
     @measure("stage", "assessment")
     async def _assess(self, target: Target, work: _Work, operation: Callable[[SolPort], Awaitable]) -> dict:
         pending_key = f"targets/{target.key}/assessment"
-        pending = self.run.read(pending_key, missing_ok=True)
+        pending = (
+            self._pending_daily_assessment(target, work) if self.runtime.environment == "daily"
+            else self.run.read(pending_key, missing_ok=True)
+        )
         if pending and (
             pending["source_revision"] == self.revision
             and pending.get("work_key", work.key) == work.key
@@ -1606,9 +1679,15 @@ class Runner:
         else:
             artifact = f"targets/{target.key}/assessments/{uuid.uuid4().hex}"
             saved = None
-        reference = {
+        reference = {key: value for key, value in pending.items() if key != "status"} if (
+            self.runtime.environment == "daily" and pending is not None
+        ) else {
             "source_revision": self.revision, "work_key": work.key, "artifact": artifact,
             "configured_assessor": self.assessment_settings.to_dict(),
+            **({
+                "evidence_key": work.binding["evidence_key"],
+                "evidence_run_id": work.binding["traffic_run_id"],
+            } if self.runtime.environment == "daily" else {}),
         }
         self._save(self.run, "progress", pending_key, {**reference, "status": "pending"})
         if saved is None:
@@ -1752,6 +1831,15 @@ class Runner:
 
         if not self._initialized or self.runtime.environment != "daily" or targets != self.targets:
             raise QualityError("runner_not_initialized")
+        # Check all pending units before any lane/provider can advance. A changed
+        # TEST source must not hide its unfinished journal behind a new artifact.
+        for target in targets:
+            pending = self._pending_daily_assessment(target)
+            if pending is not None:
+                source = self.run.read(f"targets/{target.key}/source")
+                self._pending_assessment_snapshot(
+                    target, _Work(self.runtime.run(source["traffic_run_id"]), source), pending,
+                )
         legacy_call_state = self.run.read_completed("assessment-call-contract", missing_ok=True) is None
         agents = tuple(dict.fromkeys(target.unit_id.agent for target in targets))
         if any(not next(target for target in targets if target.unit_id.agent == agent).is_baseline for agent in agents):
@@ -1772,6 +1860,7 @@ class Runner:
                             work = self._binding(target)
                             attempts = self._plan(target, work)
                             recovered = self._recover_assessment(target, work)
+                            pending = self._pending_daily_assessment(target, work)
                             prior = self._prior_result(work)
                             terminal_assessment = prior and (
                                 work.binding["assessment"]["run_id"] == self.run_id
@@ -1798,7 +1887,11 @@ class Runner:
                                 self._reused_traffic(target, attempts, invocations)
                                 if self.metrics:
                                     self.metrics.reuse("stage", "insights")
-                                if work.binding.get("refresh_evidence") or prior and (
+                                if pending is not None:
+                                    snapshot = self._pending_assessment_snapshot(target, work, pending)
+                                    if self.metrics:
+                                        self.metrics.reuse("stage", "evidence")
+                                elif work.binding.get("refresh_evidence") or prior and (
                                     ExclusionReason.INCOMPLETE_EVIDENCE.value
                                     in prior["unit_result"]["exclusion_reasons"]
                                 ):
