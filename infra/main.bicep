@@ -17,7 +17,10 @@ param telemetryGeneration string = 'g30'
 param testAgentCapacity int = 4500
 @minValue(1)
 @maxValue(1000)
-param insightGenerationCapacity int = 100
+param dailyInsightGenerationCapacity int = 1000
+@minValue(1)
+@maxValue(1000)
+param stagingInsightGenerationCapacity int = 100
 @minValue(1)
 @maxValue(1000)
 param assessmentCapacity int = 1000
@@ -46,7 +49,8 @@ module lab 'modules/lab.bicep' = {
     automationPrincipalId: automationPrincipalId
     telemetryGeneration: telemetryGeneration
     testAgentCapacity: testAgentCapacity
-    insightGenerationCapacity: insightGenerationCapacity
+    dailyInsightGenerationCapacity: dailyInsightGenerationCapacity
+    stagingInsightGenerationCapacity: stagingInsightGenerationCapacity
     assessmentCapacity: assessmentCapacity
     storageAccountPrefix: storageAccountPrefix
     storageResourceRole: storageResourceRole
