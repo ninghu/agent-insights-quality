@@ -217,6 +217,17 @@ migration; the original card/baseline/field/highlight functions remain queryable
 for deeper historical maintenance. `AIQOperationsV1()` remains a separate
 operational view rather than a wall of score-dashboard tiles.
 
+Older deployed legacy views can expose fewer columns than the repository's
+historical definitions. Legacy tiles use `column_ifexists`: absent
+`IssuesMissing` and `DuplicateCards` stay null, and absent/empty formulas are
+labeled **Legacy formula not recorded**. These scores are not labeled v1 or v2.
+No missing or incorrect count is inferred from older partial/failure statistics
+or from `IssuesExpected - IssuesCorrect`. The issue table's `OutcomeOrResult`
+column preserves `Outcome` when present, otherwise the older `Result` value;
+neither is reinterpreted as a current classification. This JSON-only
+compatibility adjustment does not alter legacy functions or data and needs no
+function reinstall.
+
 Offline checks live in `tests/unit/test_dashboard.py` and
 `tests/unit/test_publication.py`: JSON references/layout/filter scope, query
 contracts and synthetic v1/v2, exclusion, rotation, replay and revision examples.

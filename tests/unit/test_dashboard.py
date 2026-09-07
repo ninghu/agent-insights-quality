@@ -447,3 +447,41 @@ def test_bounded_cohorts_retain_exact_predecessor_outside_fourteen_day_window():
     changes = FUNCTIONS["AIQSnapshotChangesV1"]
     assert "AIQSnapshotsV1(startDate, endDate, regionKey, scoringPolicy, true)" in changes
     assert changes.index("prev(PlannedCohort)") < changes.index("| where isnull(startDate)")
+
+
+@pytest.mark.parametrize("optional,expected", [
+    ({}, (None, None, "Legacy formula not recorded")),
+    ({"QualityScoreFormula": ""}, (None, None, "Legacy formula not recorded")),
+    ({"IssuesMissing": 2, "DuplicateCards": 3, "QualityScoreFormula": "stored-legacy-formula"},
+     (2, 3, "stored-legacy-formula")),
+])
+def test_legacy_optional_columns_preserve_missing_values_without_inventing_counts(optional, expected):
+    trend, daily, _ = DASHBOARD["tiles"][-3:]
+    formula = "coalesce(tostring(column_ifexists('QualityScoreFormula', '')), 'Legacy formula not recorded')"
+    assert formula in trend["query"] and formula in daily["query"]
+    for field in ("IssuesMissing", "DuplicateCards"):
+        assert f"{field} = tolong(column_ifexists('{field}', long(null)))" in daily["query"]
+    source = {
+        "IssuesCorrect": 4, "IssuesExpected": 10, "IssuesPartial": 3,
+        "QualityFailures": 2, "UnverifiedCards": 7, **optional,
+    }
+    # Synthetic schema reference, not KQL execution: older statistics are not substitutes.
+    assert (
+        source.get("IssuesMissing"), source.get("DuplicateCards"),
+        source.get("QualityScoreFormula") or "Legacy formula not recorded",
+    ) == expected
+    assert "IssuesExpected -" not in daily["query"]
+    assert all(field not in daily["query"] for field in (
+        "IssuesPartial", "QualityFailures", "UnverifiedCards", "IssuesIncorrect",
+    ))
+
+
+@pytest.mark.parametrize("source,expected", [
+    ({"Result": "legacy-recorded-result"}, "legacy-recorded-result"),
+    ({"Outcome": "recorded-outcome", "Result": "older-result"}, "recorded-outcome"),
+    ({}, "Not recorded"),
+])
+def test_legacy_outcome_column_rename_preserves_recorded_meaning(source, expected):
+    issues = DASHBOARD["tiles"][-1]
+    assert "OutcomeOrResult = tostring(column_ifexists('Outcome', column_ifexists('Result', 'Not recorded')))" in issues["query"]
+    assert source.get("Outcome", source.get("Result", "Not recorded")) == expected

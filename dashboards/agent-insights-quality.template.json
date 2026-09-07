@@ -225,7 +225,7 @@
       "id": "9ed47f6f-a002-4d91-b45c-944b1fe01dbd",
       "layout": {"height": 8, "width": 24, "x": 0, "y": 0},
       "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| project ReportDate, QualityScore, Series = QualityScoreFormula\n| order by ReportDate asc",
+      "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| project ReportDate, QualityScore, Series = coalesce(tostring(column_ifexists('QualityScoreFormula', '')), 'Legacy formula not recorded')\n| order by ReportDate asc",
       "title": "Legacy stored scores — historical formulas; never compare this line as a v2 Engine change",
       "usedParamVariables": ["_startTime", "_endTime"],
       "visualOptions": {
@@ -244,7 +244,7 @@
       "id": "4c6e01f0-1019-443d-a026-2c70a250ed82",
       "layout": {"height": 6, "width": 24, "x": 0, "y": 8},
       "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| project ReportDate, QualityScore, IssuesCorrect, IssuesExpected, IssuesMissing, NoiseCards, DuplicateCards, QualityScoreFormula\n| order by ReportDate desc",
+      "query": "AIQDailyRuns()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| project ReportDate, QualityScore, IssuesCorrect, IssuesExpected, IssuesMissing = tolong(column_ifexists('IssuesMissing', long(null))), NoiseCards, DuplicateCards = tolong(column_ifexists('DuplicateCards', long(null))), QualityScoreFormula = coalesce(tostring(column_ifexists('QualityScoreFormula', '')), 'Legacy formula not recorded')\n| order by ReportDate desc",
       "title": "Legacy daily counts — original meanings and stored score retained",
       "usedParamVariables": ["_startTime", "_endTime", "_reportDate"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
@@ -255,8 +255,8 @@
       "id": "8ec799b1-850f-4bed-954f-34820e7cf772",
       "layout": {"height": 10, "width": 24, "x": 0, "y": 14},
       "pageId": "8f04f149-93f7-47a3-9099-02a23a70a61f",
-      "query": "AIQDailyIssues()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| where isempty(_agent) or Agent == _agent\n| project ReportDate, Agent, IssueId, Outcome, CardCount, RuntimeEvidenceComplete\n| order by ReportDate desc, Agent asc, IssueId asc",
-      "title": "Legacy issue outcomes — read-only historical context",
+      "query": "AIQDailyIssues()\n| where ReportDate between (startofday(_startTime) .. startofday(_endTime))\n| where isempty(_reportDate) or format_datetime(ReportDate, 'yyyy-MM-dd') == _reportDate\n| where isempty(_agent) or Agent == _agent\n| project ReportDate, Agent, IssueId, OutcomeOrResult = tostring(column_ifexists('Outcome', column_ifexists('Result', 'Not recorded'))), CardCount, RuntimeEvidenceComplete\n| order by ReportDate desc, Agent asc, IssueId asc",
+      "title": "Legacy issue outcomes/results — recorded values, read-only",
       "usedParamVariables": ["_startTime", "_endTime", "_reportDate", "_agent"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
