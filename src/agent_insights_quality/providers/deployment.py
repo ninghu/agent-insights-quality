@@ -102,8 +102,10 @@ class DeploymentClient:
         same = resume or existing is not None and (
             content_hash is not None and existing.content_hash == content_hash
         )
+        # Discover every content owner before enforcing frozen provenance: filtering
+        # by commit first could let a rejected retry duplicate another owner's version.
         metadata = self._metadata(
-            target, source_revision if resume else None, content_hash,
+            target, source_revision if resume and content_hash is None else None, content_hash,
         )
         path = f"/agents/{segment(name)}"
         if same and existing.provider_version:
@@ -157,6 +159,8 @@ class DeploymentClient:
             provenance = matches[0]["metadata"].get("aiq_source_revision")
             if not isinstance(provenance, str) or not provenance:
                 raise QualityError("deployment_provenance_missing", request_accepted=True)
+            if resume and provenance != source_revision:
+                raise QualityError("deployment_provenance_conflict", request_accepted=None)
             observed_metadata = self._metadata(target, provenance, content_hash)
             recovered = Deployment(
                 target.key, name, version, target.agent_type, provenance,

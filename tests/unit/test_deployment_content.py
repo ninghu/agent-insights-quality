@@ -59,6 +59,22 @@ def create(environment, target, *, images=None, variables=None):
     return result
 
 
+def incomplete_submission(environment, target, state="rejected"):
+    reply = {
+        "rejected": response({}, 429),
+        "unknown": TimeoutError("synthetic"),
+        "pending": response({}, 202),
+    }[state]
+    wire = FakeTransport(response(status=404), reply)
+    provider = runtime(environment, wire)
+    saved = []
+    with pytest.raises(QualityError):
+        run(provider.ensure_deployment(target, "commit-one", None, saved.append))
+    assert saved[-1].details["provisioning_state"] == state
+    assert not saved[-1].provider_version
+    return provider, wire, saved
+
+
 def fingerprint(environment, target, *, images=None, variables=None):
     artifact = run(prepare_artifact(
         target, environment, "irrelevant-commit", images=images,
@@ -312,6 +328,98 @@ def test_multiple_content_matches_remain_ambiguous(environment, target, resume):
     assert all(request.method == "GET" for request in wire.requests)
 
 
+@pytest.mark.parametrize("state", ["rejected", "unknown", "pending"])
+@pytest.mark.parametrize("native_state", ["active", "creating"])
+def test_frozen_discovery_blocks_other_provenance_without_another_post(
+    environment, target, state, native_state,
+):
+    provider, wire, saved = incomplete_submission(environment, target, state)
+    frozen = saved[-1]
+    before = copy.deepcopy(asdict(frozen))
+    count = len(saved)
+    wire.replies.extend([
+        response({}),
+        response({"data": [native(frozen, version="42", status=native_state, metadata={
+            **frozen.details["metadata"], "aiq_source_revision": "commit-other",
+        })]}),
+        response({"version": "43", "status": "active"}, 201),
+    ])
+    with pytest.raises(QualityError, match="deployment_provenance_conflict"):
+        run(provider.ensure_deployment(target, "commit-one", frozen, saved.append, resume=True))
+    assert [request.method for request in wire.requests] == ["GET", "POST", "GET", "GET"]
+    assert len(saved) == count and asdict(saved[-1]) == before
+    assert asdict(frozen) == before
+
+
+@pytest.mark.parametrize("state", ["rejected", "unknown", "pending"])
+@pytest.mark.parametrize("includes_original", [False, True])
+def test_frozen_discovery_blocks_multiple_content_owners(environment, target, state, includes_original):
+    provider, wire, saved = incomplete_submission(environment, target, state)
+    frozen = saved[-1]
+    before = copy.deepcopy(asdict(frozen))
+    count = len(saved)
+    candidates = [
+        native(frozen, version=str(index), status=status, metadata={
+            **frozen.details["metadata"], "aiq_source_revision": provenance,
+        })
+        for index, (provenance, status) in enumerate((
+            ("commit-one" if includes_original else "commit-other", "active"),
+            ("commit-third", "creating"),
+        ), start=42)
+    ]
+    wire.replies.extend([response({}), response({"data": candidates})])
+    with pytest.raises(QualityError, match="deployment_versions_ambiguous"):
+        run(provider.ensure_deployment(target, "commit-one", frozen, saved.append, resume=True))
+    assert [request.method for request in wire.requests] == ["GET", "POST", "GET", "GET"]
+    assert len(saved) == count and asdict(saved[-1]) == before
+
+
+@pytest.mark.parametrize("field,value", [
+    ("aiq_content_hash", "v1:sha256:" + "f" * 64),
+    ("aiq_profile", "daily"),
+    ("aiq_logical_version", "issue-002"),
+    ("aiq_agent_type", "hosted_code"),
+])
+def test_rejected_retry_ignores_unrelated_content_or_binding(environment, target, field, value):
+    provider, wire, saved = incomplete_submission(environment, target)
+    frozen = saved[-1]
+    before = copy.deepcopy(asdict(frozen))
+    wire.replies.extend([
+        response({}),
+        response({"data": [native(frozen, version="42", metadata={
+            **frozen.details["metadata"], "aiq_source_revision": "commit-other", field: value,
+        })]}),
+        response({"version": "43", "status": "active"}, 201),
+    ])
+    result = run(provider.ensure_deployment(target, "commit-one", frozen, saved.append, resume=True))
+    assert result.provider_version == "43" and result.source_revision == "commit-one"
+    assert result.content_hash == frozen.content_hash
+    assert result.details["metadata"] == frozen.details["metadata"]
+    assert asdict(frozen) == before
+    assert [request.method for request in wire.requests] == ["GET", "POST", "GET", "GET", "POST"]
+
+
+@pytest.mark.parametrize("native_state", ["active", "creating"])
+def test_rejected_retry_reconciles_exact_original_provenance(environment, target, native_state):
+    provider, wire, saved = incomplete_submission(environment, target)
+    frozen = saved[-1]
+    before = copy.deepcopy(asdict(frozen))
+    wire.replies.extend([
+        response({}), response({"data": [native(frozen, version="42", status=native_state)]}),
+    ])
+    operation = provider.ensure_deployment(target, "commit-one", frozen, saved.append, resume=True)
+    if native_state == "creating":
+        with pytest.raises(QualityError, match="deployment_pending"):
+            run(operation)
+    else:
+        assert run(operation).provider_version == "42"
+    assert saved[-1].provider_version == "42" and saved[-1].source_revision == "commit-one"
+    assert saved[-1].content_hash == frozen.content_hash
+    assert saved[-1].details["metadata"] == frozen.details["metadata"]
+    assert asdict(frozen) == before
+    assert [request.method for request in wire.requests] == ["GET", "POST", "GET", "GET"]
+
+
 @pytest.mark.parametrize("recover", [False, True])
 def test_unknown_submission_reconciles_original_identity_without_repackaging(
     environment, target, recover,
@@ -324,9 +432,10 @@ def test_unknown_submission_reconciles_original_identity_without_repackaging(
     assert pending.content_hash and pending.details["provisioning_state"] == "unknown"
     (target.version_root / "definition.json").unlink()
     found = native(pending, version="42")
-    # Same content under another commit cannot resolve this exact ambiguous submission.
+    # An unrelated version cannot resolve this exact ambiguous submission.
     other = native(pending, version="99", metadata={
         **pending.details["metadata"], "aiq_source_revision": "another-commit",
+        "aiq_content_hash": "v1:sha256:" + "f" * 64,
     })
     wire = FakeTransport(response({}), response({"data": [other, *([found] if recover else [])]}))
     operation = runtime(environment, wire).ensure_deployment(

@@ -374,6 +374,9 @@ matches remain ambiguous, and no match never authorizes a blind retry. A missing
 frozen active version is an error, not permission to replace it. Known rejected new
 submissions may retry only after verifying identical content; a rejected legacy
 submission requires explicitly selected new work rather than inventing a hash.
+Frozen discovery checks all same-content/binding candidates before provenance:
+another source's ownership blocks even a definitively rejected retry, without adopting
+that version or submitting another. Fresh non-resume reuse still retains its owner's provenance.
 The saved input hash is checked before a rejected container submission can build
 again; its final digest-pinned artifact must still match before an Agent POST.
 Unresolved registry records block new work until their owning run is reconciled.
