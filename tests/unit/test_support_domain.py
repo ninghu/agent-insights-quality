@@ -234,6 +234,80 @@ def test_rejection_and_post_tool_abort_have_different_causal_boundaries(version,
         assert calls(session, "read_ticket")[0]["result"]["ticket"]["revision"] == 1
 
 
+@pytest.fixture
+def observed_issue032(monkeypatch):
+    module = load_domain("issue-032")
+    decisions = []
+
+    def record(session, **facts):
+        assert session.request.action == facts["request_kind"]
+        assert (session.request.ticket_id in session.tickets) == facts["ticket_known"]
+        assert not session.calls
+        decisions.append(facts)
+
+    monkeypatch.setattr(module.TicketSession, "record_application_guard", record)
+    return module, decisions
+
+
+@pytest.mark.parametrize("action", ["Read valid", "Summarize"])
+@pytest.mark.parametrize("ticket_id", ["ticket-demo-1", "ticket-demo-2", "ticket-custom-7"])
+def test_issue032_records_the_executed_guard_before_business_dispatch(observed_issue032, action, ticket_id):
+    module, decisions = observed_issue032
+    tickets = {ticket_id: {"revision": 9, "status": "open", "summary": "Synthetic local case"}}
+    text = f"{action} {ticket_id}."
+    output, session, model_calls = execute(module, text, tickets)
+    assert output == "Valid ticket request rejected before model or tool dispatch."
+    assert decisions == [{
+        "request_kind": module.parse_request(text).action,
+        "ticket_known": True,
+        "decision": "reject",
+        "reason": "request_kind_blocked",
+        "short_circuit_stage": "before_business_dispatch",
+    }]
+    assert not session.calls and not model_calls
+    assert session.synthetic_dispatcher.attempts == 0
+    assert session.tickets == tickets
+
+
+@pytest.mark.parametrize("text", [
+    "Acknowledge this fixed synthetic conversation context without external action.",
+    "Read a ticket.",
+    "Read ticket-demo-1 and ticket-demo-2.",
+    "Read ticket-demo-99.",
+    "Summarize ticket-demo-99.",
+    "Do not confirm update for ticket-demo-1 at revision 3.",
+])
+def test_issue032_does_not_mislabel_setup_invalid_or_unknown_requests(observed_issue032, text):
+    module, decisions = observed_issue032
+    output, session, models = execute(module, text)
+    assert output != "Valid ticket request rejected before model or tool dispatch."
+    assert not decisions and not models
+    assert session is None or not session.calls
+
+
+@pytest.mark.parametrize("text", [
+    "Recover ticket-demo-2 after one temporary read failure.",
+    "Recover ticket-demo-2 after repeated temporary failure.",
+    "Wait for ticket-demo-2.",
+    "Wait for ticket-demo-2 while waiting on an unavailable worker.",
+    "Confirm update for ticket-demo-2 at revision 1.",
+    "Confirm update for ticket-demo-2 at revision 0.",
+    "Confirm update for ticket-demo-2 at revision 1 while preserving shared revision state.",
+    'Prepare a read-only handoff for ticket-demo-2. '
+    'Include ticket_id, owner, next_action, deadline, and validation as JSON. '
+    'Handoff facts: {"owner":"Synthetic desk","next_action":"Review","deadline":"tomorrow","validation":"Check"}',
+])
+def test_issue032_other_workflows_keep_their_actual_business_behavior(observed_issue032, text):
+    module, decisions = observed_issue032
+    expected, healthy, healthy_models = execute(load_domain("v0"), text)
+    output, session, models = execute(module, text)
+    assert output == expected
+    assert session.calls == healthy.calls
+    assert session.tickets == healthy.tickets
+    assert models == healthy_models
+    assert session.calls and not decisions
+
+
 @pytest.mark.parametrize("version,attempts", [("v0", 2), ("issue-034", 1)])
 def test_real_synthetic_dispatcher_failure_and_bounded_recovery(version, attempts):
     output, session, external_calls = execute(load_domain(version),
