@@ -168,10 +168,11 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
         if any(
             detail.get("cards", {}).get(finding["card_alias"], {}).get("disagreement")
             for finding in current
-        ):
+        ) or detail.get("attempt_disagreements"):
             notes.append("Review disagreement.")
-        else:
-            notes.append("; ".join(_EXCLUSION_LABELS[reason] for reason in unit["exclusion_reasons"]) + ".")
+        if detail.get("attempt_disagreements"):
+            notes.append(f"Activation/sufficiency disputed on {len(detail['attempt_disagreements'])}/10 attempts.")
+        notes.append("; ".join(_EXCLUSION_LABELS[reason] for reason in unit["exclusion_reasons"]) + ".")
     elif missed and private:
         observations = len(detail.get("observations", ()))
         if observations:

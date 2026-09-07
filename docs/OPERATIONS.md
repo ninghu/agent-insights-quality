@@ -60,6 +60,14 @@ policy and evidence dependencies still select the corresponding reviewed reasses
 Daily-only assessor prompt changes do not requalify unchanged staging results. They still
 refresh Daily judgments when a legacy trial explicitly reuses execution evidence.
 
+The Daily wrapper/Noise guidance and semantic-disagreement diagnostics do not change staging
+judgments or policy. The diagnostic code resides in shared `assessment.py`, however: changes
+to that file conservatively select completed staging targets for retained-evidence reassessment
+under the existing file-level dependencies, not redeployment or automatic new traffic.
+Do not hide that selection by weakening dependencies. Offline semantic fixtures test frozen
+judgment handling, not assessor reliability; revised prompts need a separately authorized
+future Daily trial. Historical results and prepared reports retain their recorded reasons.
+
 Use the [trace-context audit](#caller-invocation-context) on retained results for propagation
 diagnostics. An explicitly authorized [session preparation trial](STAGING_PREPARATION_TRIAL.md)
 can exercise the bounded Travel lookahead inside normal staging, followed by its read-only audit.

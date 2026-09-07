@@ -506,7 +506,10 @@ async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
                 "independent supporting or contradicting evidence. Explain any material core "
                 "error separately from wording, reasonable category, severity or proposed-fix "
                 "disagreements. Internal-only defects need not appear in the delivered answer; "
-                "do not reinterpret an explicit delivered-answer claim as internal."
+                "do not reinterpret an explicit delivered-answer claim as internal. "
+                "For an alleged obligation, identify its normative basis or essential uncertainty; "
+                "lack of support alone is not proof of an incorrect core. Distinguish outer "
+                "Agent response wrappers from independent model/tool execution evidence."
             ),
         }
         cards["items"] = {"anyOf": [
@@ -1099,6 +1102,7 @@ async def assess_daily(
         _retain_error(error, detail)
         raise
     candidates = _candidates(output, cards, baseline=target.is_baseline)
+    activation_disputed = False
     if candidates:
         review_payload = {**payload, "review": {
             "candidate_reasons": candidates, "initial": output,
@@ -1115,6 +1119,17 @@ async def assess_daily(
             except QualityError as error:
                 _retain_error(error, detail)
                 raise
+            initial_attempts = {item["index"]: item for item in output["attempts"]}
+            activation_disputed = any(
+                old["sufficient"] and item["sufficient"]
+                and old["observed"] != item["observed"]
+                and all(
+                    _citations_visible(judgment["citations"], evidence, visible)
+                    for judgment in (old, item)
+                )
+                for item in reviewed["attempts"]
+                for old in (initial_attempts[item["index"]],)
+            )
             output, disagreement = _merge_review(output, reviewed, cards)
             if disagreement:
                 exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
@@ -1135,7 +1150,13 @@ async def assess_daily(
     if not target.is_baseline and not (
         visible_in_time and _activation_visible(output, evidence, visible)
     ):
-        exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
-        reasons.add("expected_defect_unconfirmed_or_not_visible")
+        if visible_in_time and visible_snapshot.query_complete and activation_disputed:
+            # Both passes judged previsible proof sufficient, but disagreed on
+            # its meaning. Merge remains fail-closed; it did not lose raw data.
+            exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
+            reasons.add("expected_activation_disputed")
+        else:
+            exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
+            reasons.add("expected_defect_unconfirmed_or_not_visible")
     detail["resolved"] = output
     return _daily_result(target, cards, output, exclusions, reasons, detail)

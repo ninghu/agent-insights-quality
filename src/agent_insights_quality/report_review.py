@@ -163,6 +163,13 @@ class RetainedReviewContext:
                     for stage in ("initial", "review", "resolved")
                     if detail.get(stage) is not None
                 }
+                if "initial" in judgments and "review" in judgments:
+                    first = {item["index"]: item for item in detail["initial"]["attempts"]}
+                    value["attempt_disagreements"] = [
+                        item["index"] for item in detail["review"]["attempts"]
+                        if (first[item["index"]]["sufficient"], first[item["index"]]["observed"])
+                        != (item["sufficient"], item["observed"])
+                    ]
                 current_aliases = {
                     alias for alias, finding in findings.items()
                     if finding.card.contribution.value == "current"
