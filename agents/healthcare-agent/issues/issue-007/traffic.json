@@ -65,9 +65,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],
@@ -137,9 +139,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],
@@ -209,9 +213,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],
@@ -281,9 +287,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],
@@ -353,9 +361,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],
@@ -425,9 +435,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],
@@ -497,9 +509,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],
@@ -569,9 +583,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],
@@ -641,9 +657,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],
@@ -713,9 +731,11 @@
         "http_status": 200,
         "semantic_assertions": {
           "response_format": "json",
-          "exact_json": {
-            "handoff": "scheduling",
-            "status": "unavailable"
+          "json_schema": {
+            "type": "object",
+            "not": {
+              "required": ["owner", "next_action", "deadline", "validation"]
+            }
           }
         },
         "trace_assertions": [],

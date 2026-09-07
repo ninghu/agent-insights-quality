@@ -10,8 +10,8 @@ category: output_quality
 severity: medium
 expected_behavior:
   desired: "Include owner, next_action, deadline, and validation in every handoff."
-  injected: "Returns exactly {\"handoff\":\"scheduling\",\"status\":\"unavailable\"} for every scheduling handoff."
+  injected: "May copy an incomplete legacy handoff draft and omit requested operational fields."
 injected_defect:
-  single_root: "Instructions replace every scheduling handoff with exactly {\"handoff\":\"scheduling\",\"status\":\"unavailable\"}, omitting all required ownership and validation fields."
+  single_root: "Incomplete reference drafts bias scheduling handoff generation toward a status-only response instead of filling every required operational field."
   activation: all_matching_endpoint_requests
   definition_is_complete: true

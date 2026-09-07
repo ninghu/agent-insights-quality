@@ -43,7 +43,7 @@ _INTEGRITY = {
 }
 _EVALUATION = (
     "src/agent_insights_quality/assessment.py", "src/agent_insights_quality/telemetry.py",
-    "src/agent_insights_quality/prompts",
+    "src/agent_insights_quality/prompts/staging.md",
 )
 
 
@@ -574,7 +574,10 @@ class Runner:
                     self.catalog,
                     last_tests={target.key: LastTest(old["source_revision"], "PASS", old["tested_at"])},
                     changed_paths=changes,
-                    evaluation_paths=_EVALUATION,
+                    evaluation_paths=(
+                        (*_EVALUATION, "src/agent_insights_quality/prompts/daily.md")
+                        if self.runtime.environment == "daily" else _EVALUATION
+                    ),
                 ) if item.target.key == target.key), None)
                 changed = choice is not None and choice.action == "traffic"
                 evaluate = choice is not None

@@ -64,8 +64,8 @@ issues:
     severity: medium
     implementation: agents/healthcare-agent/issues/issue-007
     validation_mode: model_mediated
-    root_cause: The scheduling handoff omits a required owner, next action, deadline, or validation field.
-    expected_fix: Require every named handoff field in the response contract.
+    root_cause: The scheduling handoff copies an incomplete reference draft and omits a required owner, next action, deadline, or validation field.
+    expected_fix: Complete the reference drafts and validate every named handoff field against the unchanged response contract.
   - id: issue-008
     title: Appointment action envelope lacks approval scope
     agent: healthcare-agent

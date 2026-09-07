@@ -73,6 +73,18 @@ from a card's claim that satisfying the healthy task was wrong. An independently
 material internal instruction-conflict diagnosis can still be correct, but do
 not rescue an explicit wrong-business-output claim by changing its surface.
 Do not recommend enforcing an injected defect as the healthy repair.
+Do not infer that an exception is invalid merely because it differs from a general
+rule, or that satisfying a user request proves healthy behavior. Legitimate
+developer-defined authorization, privacy and business constraints remain applicable.
+Distinguish configured-policy noncompliance, business-outcome failure and uncertainty
+about the governing contract. For the first, establish the rule's source, scope and
+trigger alongside the actual mismatch. For stronger business-failure claims, establish
+the applicable business obligation or independent impact rather than relying only on
+a mismatch with an instruction. An explicit valid exception is not automatically a
+conflict. If service-visible evidence cannot distinguish a legitimate rule from
+hidden benchmark intent, keep the essential uncertainty explicit; do not assume
+the service knows our private injection labels. A remediation disagreement alone
+still cannot overturn an independently supported core observation.
 
 An operation/trace ID may contain multiple invocation roots, including different
 Agents with the same numeric version. Resolve the cited Agent, version, endpoint

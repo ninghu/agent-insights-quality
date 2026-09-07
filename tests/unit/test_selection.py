@@ -98,7 +98,7 @@ def test_missing_full_incomplete_and_unchanged_failure(catalog):
     ("src/agent_insights_quality/assessment_partition.py", {"all"}, "reassess"),
     ("src/agent_insights_quality/telemetry.py", {"all"}, "reassess"),
     ("src/agent_insights_quality/prompts/staging.md", {"all"}, "reassess"),
-    ("src/agent_insights_quality/prompts/daily.md", {"all"}, "reassess"),
+    ("src/agent_insights_quality/prompts/daily.md", set(), "traffic"),
     ("src/agent_insights_quality/prompts/unrelated.md", set(), "traffic"),
     ("src/agent_insights_quality/evidence.py", set(), "traffic"),
     ("catalogs/ISSUE_CATALOG.yaml", {"all"}, "reassess"),
@@ -244,9 +244,9 @@ def test_deployment_inputs_exclude_traffic_and_verifiers(catalog):
             evaluator / "assessment_partition.py",
             evaluator / "providers" / "sol.py",
             evaluator / "prompts" / "staging.md",
-            evaluator / "prompts" / "daily.md",
         ):
             assert path not in paths and path in evaluation_inputs(target)
+        assert evaluator / "prompts" / "daily.md" not in evaluation_inputs(target)
 
 
 def test_git_bound_deployment_revision_changes_only_for_actual_inputs(catalog, tmp_path):

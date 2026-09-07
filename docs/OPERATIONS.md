@@ -56,6 +56,8 @@ a later snapshot never proves that those records were visible earlier.
 Orchestration/recovery changes alone do not request new judgments for completed PASS or FAIL
 measurements. They retain their actual source/date. Changes to explicit assessment, expectation,
 policy and evidence dependencies still select the corresponding reviewed reassessment work.
+Daily-only assessor prompt changes do not requalify unchanged staging results. They still
+refresh Daily judgments when a legacy trial explicitly reuses execution evidence.
 
 Use the [trace-context audit](#caller-invocation-context) on retained results for propagation
 diagnostics. An explicitly authorized [session preparation trial](STAGING_PREPARATION_TRIAL.md)

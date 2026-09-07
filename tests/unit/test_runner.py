@@ -425,6 +425,31 @@ def test_reassess_uses_exact_old_traffic_snapshot_no_deployment_or_agent_calls(t
     assert all(call["snapshot"] == h.sol.calls[index % 2]["snapshot"] for index, call in enumerate(h.sol.calls))
 
 
+def test_daily_prompt_change_does_not_reassess_staging_but_does_refresh_reused_daily(tmp_path):
+    path = "src/agent_insights_quality/prompts/daily.md"
+    staging = Harness(tmp_path / "stage", profile="staging")
+    staging.staging()
+    selected = choose_staging(
+        staging.catalog, staging.store, changes_since=lambda _: SourceChanges((path,)),
+    )
+    assert selected == ()
+
+    daily = Harness(tmp_path / "day")
+    daily.daily("old", test_run=True, rerun=1)
+    original_calls = len(daily.cloud.invocations), len(daily.cloud.starts)
+    previous = deepcopy(daily.sol.calls)
+    daily.daily(
+        "new", revision="source-two", changes=(path,), reuse_run_id="old",
+        test_run=True, rerun=2,
+    )
+    assert (len(daily.cloud.invocations), len(daily.cloud.starts)) == original_calls
+    assert len(daily.sol.calls) == len(previous) * 2
+    for target in daily.catalog.targets:
+        binding = daily.store.run("new").read(f"targets/{target.key}/source")
+        assert binding["traffic_run_id"] == "old"
+        assert binding["assessment"]["run_id"] == "new"
+
+
 def test_incomplete_recollects_new_snapshot_without_resampling(tmp_path):
     h = Harness(tmp_path, profile="staging")
     h.cloud.query_complete = False
