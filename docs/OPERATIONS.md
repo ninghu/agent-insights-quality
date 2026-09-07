@@ -22,6 +22,7 @@ python -m agent_insights_quality validate
 python -m agent_insights_quality generate-docs
 python -m agent_insights_quality run-staging
 python -m agent_insights_quality run-staging --full
+python -m agent_insights_quality run-staging --target finance-agent/issue-019 --new-run
 python -m agent_insights_quality run-daily --report-mode test --to-address "<TO_ADDRESS>"
 python -m agent_insights_quality status --profile staging
 python -m agent_insights_quality status --profile daily
@@ -92,6 +93,37 @@ evidence; an explicit execution safety cap is not a substitute for the reviewed 
 Staging resumes the same source and selection mode across midnight, retaining its original run
 date and completed calls. Repeating a completed full run is a no-op. Only an explicitly requested
 fresh full exercise uses `run-staging --full --new-run`; it cannot replace an unfinished full run.
+
+### Explicit single-target staging
+
+For an explicitly authorized fresh measurement of **one** reviewed target, use
+`run-staging --target finance-agent/issue-019 --new-run` (substitute one exact catalog
+`Agent/version` key). This does not run incremental selection or expand to the other 40 targets.
+It executes all ten canonical attempts, not only earlier missing or unfavorable attempts.
+Never repeat measurements until PASS or change the reviewed traffic, thresholds or assessor
+to obtain a different outcome. The single-target result is not a full-inventory qualification.
+
+Python freezes the target, committed source, date, native run/work identity and predecessor
+reference before providers. Repeating that exact command, or `run-staging --target <same-key>`,
+resumes the same measurement across midnight—even after a final FAIL or INCOMPLETE.
+It does not allocate fresh traffic, replace the evidence deadline or request another judgment
+for an already assessed batch. Resume requires the frozen source and target.
+
+A subsequent separately authorized whole-target measurement requires
+`run-staging --target <key> --new-run --after-run <previous-targeted-run-id>`, using the
+actual native targeted run ID. Repeating this command also resumes its frozen request.
+An older request cannot replace its successor. `--full`, multiple/repeated targets,
+short names, wildcards and arbitrary selector syntax are rejected.
+
+The environment ownership lock excludes active writers. A prior final INCOMPLETE judgment
+with ten resolved attempts may be superseded (including unsubmitted continuations after a
+proven terminal rejection, not pending/unknown outcomes); an interrupted deployment, session, invocation,
+Insights operation, assessment or selected-but-unbound launch may not. Those require recovery
+first, not pointer deletion or fabricated completion. Conservatively unresolved work is blocked.
+The targeted control participates in staging history and per-target supersession; later
+incremental/full work can supersede it, and its stale command then fails closed.
+Old traffic, judgments and legacy full/incremental controls remain unchanged; only the selected
+target's current index advances, retaining each other target's actual source and date.
 
 Preserve pending deployment/session/Insights records after an interrupted request. Unknown accepted
 POSTs are not safe to repeat. Native Insights submission keys and their exact request bodies are
