@@ -511,6 +511,12 @@ class Runner:
                 raise QualityError("runner_reuse_invalid")
             self.lanes = self.runtime.run(previous.get("lane_run_id", self.reuse_run_id))
         self._save(self.run, "completed", "assessment-settings", self.assessment_settings.to_dict())
+        if kind == "daily":
+            from .assessment_calls import DAILY_CALL_CONTRACT
+            if existing is None:
+                self._save(self.run, "completed", "assessment-call-contract", {
+                    "contract": DAILY_CALL_CONTRACT,
+                })
         self._save(self.run, "completed", "environment", asdict(self.cloud.environment))
         if existing is None:
             self._save(self.run, "completed", "run", {
@@ -599,7 +605,8 @@ class Runner:
                     last_tests={target.key: LastTest(old["source_revision"], "PASS", old["tested_at"])},
                     changed_paths=changes,
                     evaluation_paths=(
-                        (*_EVALUATION, "src/agent_insights_quality/prompts/daily.md")
+                        (*_EVALUATION, "src/agent_insights_quality/prompts/daily.md",
+                         "src/agent_insights_quality/assessment_calls.py")
                         if self.runtime.environment == "daily" else _EVALUATION
                     ),
                 ) if item.target.key == target.key), None)
@@ -1552,6 +1559,15 @@ class Runner:
         else:
             restore_unit(result["unit_result"])
             fields = {"result": {key: result[key] for key in ("unit_result", "reasons")}}
+            if "call_contract" in result:
+                from .assessment_calls import DAILY_CALL_CONTRACT
+                if (
+                    result["call_contract"] != DAILY_CALL_CONTRACT
+                    or type(result.get("assessment_input_final")) is not bool
+                ):
+                    raise StateError("assessment_call_contract_invalid")
+                fields["result"]["call_contract"] = result["call_contract"]
+                fields["result"]["assessment_input_final"] = result["assessment_input_final"]
         work.binding.pop("reason", None)
         work.binding.pop("failure_run_id", None)
         self._update(
@@ -1577,7 +1593,7 @@ class Runner:
         return True
 
     @measure("stage", "assessment")
-    async def _assess(self, target: Target, work: _Work, operation: Callable[[], Awaitable]) -> dict:
+    async def _assess(self, target: Target, work: _Work, operation: Callable[[SolPort], Awaitable]) -> dict:
         pending_key = f"targets/{target.key}/assessment"
         pending = self.run.read(pending_key, missing_ok=True)
         if pending and (
@@ -1599,9 +1615,29 @@ class Runner:
             self._event("started", target, stage="assessment")
             async with limited(self.metrics, self.assessment_limit, "assessment"):
                 self._check()
-                result = await operation()
+                sol = self.sol
+                if self.runtime.environment == "daily":
+                    from .assessment_calls import DAILY_CALL_CONTRACT, DailyAssessmentCalls
+                    contract = self.run.read_completed("assessment-call-contract", missing_ok=True)
+                    if contract is None:
+                        # Legacy final artifacts restore above. Missing old call state
+                        # cannot prove it is safe to submit unfinished assessments again.
+                        raise QualityError("assessment_legacy_call_state_unavailable")
+                    if contract != {"contract": DAILY_CALL_CONTRACT}:
+                        raise StateError("assessment_call_contract_invalid")
+                    sol = DailyAssessmentCalls(sol, self.run, artifact + "/calls", reference, self._save)
+                result = await operation(sol)
                 saved = result.to_private_dict()
                 saved["configured_assessor"] = self.assessment_settings.to_dict()
+                if self.runtime.environment == "daily":
+                    saved["call_contract"] = DAILY_CALL_CONTRACT
+                    # A root correction cannot buy another review via evidence
+                    # refresh. Ordinary incomplete-evidence recovery stays separate.
+                    saved["assessment_input_final"] = (
+                        "initial_validation_error" in saved["private_detail"]
+                        or ExclusionReason.INCOMPLETE_EVIDENCE.value
+                        not in saved["unit_result"]["exclusion_reasons"]
+                    )
             self._save(self.run, "artifact", artifact, saved)
         elif self.metrics:
             self.metrics.reuse("stage", "assessment")
@@ -1672,7 +1708,7 @@ class Runner:
                         snapshot, artifact = await self._evidence(target, work, deployment, attempts, invocations)
                         self._update(target, work, evidence_key=artifact)
                     stage = "assessment"
-                    async def assess():
+                    async def assess(sol):
                         if policy_reassessment:
                             previous = self.runtime.run(policy_reassessment["run_id"]).read_artifact(
                                 policy_reassessment["artifact"],
@@ -1680,7 +1716,7 @@ class Runner:
                             result = reassess_staging_policy(target, attempts, invocations, snapshot, previous)
                             result.private_detail["policy_reassessment"].update(policy_reassessment)
                             return result
-                        return await assess_staging(target, attempts, invocations, snapshot, self.sol)
+                        return await assess_staging(target, attempts, invocations, snapshot, sol)
                     await self._assess(target, work, assess)
                 except QualityError as error:
                     self._failure(target, error, stage)
@@ -1712,9 +1748,11 @@ class Runner:
     @measure("run", "daily")
     async def run_daily(self, targets: tuple[Target, ...]) -> QualityResult:
         from .assessment import assess_daily
+        from .assessment_calls import DAILY_CALL_CONTRACT
 
         if not self._initialized or self.runtime.environment != "daily" or targets != self.targets:
             raise QualityError("runner_not_initialized")
+        legacy_call_state = self.run.read_completed("assessment-call-contract", missing_ok=True) is None
         agents = tuple(dict.fromkeys(target.unit_id.agent for target in targets))
         if any(not next(target for target in targets if target.unit_id.agent == agent).is_baseline for agent in agents):
             raise QualityError("daily_baseline_must_be_first")
@@ -1735,7 +1773,17 @@ class Runner:
                             attempts = self._plan(target, work)
                             recovered = self._recover_assessment(target, work)
                             prior = self._prior_result(work)
-                            if recovered or prior and not prior["unit_result"]["exclusion_reasons"]:
+                            terminal_assessment = prior and (
+                                work.binding["assessment"]["run_id"] == self.run_id
+                                and (
+                                    legacy_call_state
+                                    or prior.get("call_contract") == DAILY_CALL_CONTRACT
+                                    and prior.get("assessment_input_final") is True
+                                )
+                            )
+                            if recovered or prior and (
+                                not prior["unit_result"]["exclusion_reasons"] or terminal_assessment
+                            ):
                                 invocations = self._load_traffic(target, work, attempts)
                                 self._reused_traffic(target, attempts, invocations)
                                 if self.metrics:
@@ -1842,8 +1890,8 @@ class Runner:
         async def assess(values) -> None:
             target, work, attempts, invocations, snapshot, visible, insight, window = values
             try:
-                result = await self._assess(target, work, lambda: assess_daily(
-                    target, attempts, invocations, snapshot, self.sol,
+                result = await self._assess(target, work, lambda sol: assess_daily(
+                    target, attempts, invocations, snapshot, sol,
                     before_cards=tuple(insight["before"]), after_cards=tuple(insight["after"]),
                     engine_started_at=insight["started_at"], visible_snapshot=visible, engine_window=window,
                     max_payload_bytes=self.settings.daily_assessment_max_payload_bytes,
