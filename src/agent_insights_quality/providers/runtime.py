@@ -76,9 +76,11 @@ class AzureRuntime:
         source_revision: str,
         existing: Deployment | None,
         persist: Callable[[Deployment], None],
+        *,
+        resume: bool = False,
     ) -> Deployment:
         return await self._deployments.ensure_deployment(
-            target, source_revision, existing, persist
+            target, source_revision, existing, persist, resume=resume,
         )
 
     async def activate(self, deployment: Deployment) -> None:

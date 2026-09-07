@@ -72,6 +72,7 @@ def source_revision(catalog: Catalog) -> str:
 
 
 def deployment_revision(catalog: Catalog, target: Target) -> str:
+    """Git provenance only; the provider compares resolved deployment content."""
     result = subprocess.run(
         ["git", "log", "-1", "--format=%H", "--",
          *(str(path.relative_to(catalog.root)) for path in deployment_inputs(target))],
@@ -738,18 +739,23 @@ class Runner:
         self._event("started", target, stage="deployment")
         raw = work.records.read(key, missing_ok=True)
         existing = Deployment(**raw) if raw else self.registry.get(target.key)
-        revision = self.deployment_source(target)
+        resume = raw is not None
+        revision = existing.source_revision if resume else self.deployment_source(target)
         deadline = self._deadline(work.records, key + "/deadline", self.settings.poll_timeout_seconds)
         start = self.monotonic()
         async with limited(self.metrics, self.deploy_limit, "deployment"):
             while True:
                 def persist(value: Deployment) -> None:
-                    nonlocal existing
+                    nonlocal existing, resume, revision
                     self._save(work.records, "progress", key, asdict(value))
                     existing = value
+                    resume = True
+                    revision = value.source_revision
                 self._check()
                 try:
-                    value = await self.cloud.ensure_deployment(target, revision, existing, persist)
+                    value = await self.cloud.ensure_deployment(
+                        target, revision, existing, persist, resume=resume,
+                    )
                     persist(value)
                     await self.registry.save(value)
                     self._event("completed", target, stage="deployment")

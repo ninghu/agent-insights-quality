@@ -24,6 +24,7 @@ FOUNDRY_SCOPE = "https://ai.azure.com/.default"
 ARM_SCOPE = "https://management.azure.com/.default"
 TRANSIENT = {408, 429, 500, 502, 503, 504}
 AZURE_DEVOPS_SCOPE = "499b84ac-1321-427f-aa17-267ca6975798/.default"
+HOSTED_FEATURES = "HostedAgents=V1Preview"
 
 
 @dataclass(frozen=True)
@@ -312,7 +313,7 @@ class JsonClient:
             body = encode(payload)
             values["Content-Type"] = "application/json"
         if hosted:
-            values["Foundry-Features"] = "HostedAgents=V1Preview"
+            values["Foundry-Features"] = HOSTED_FEATURES
         values.update(headers or {})
         if any(
             not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", key)

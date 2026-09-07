@@ -7,7 +7,7 @@ import re
 import shlex
 import zipfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -15,14 +15,48 @@ import yaml
 
 from agent_insights_quality.contracts import Environment, JsonObject, Target
 from agent_insights_quality.errors import QualityError
+from agent_insights_quality.providers.container_environment import container_environment
 from agent_insights_quality.providers.hosted import hosted_definition
-from agent_insights_quality.providers.transport import encode
+from agent_insights_quality.providers.transport import HOSTED_FEATURES, encode
+
+DEPLOYMENT_API_VERSION = "v1"
 
 
 @dataclass(frozen=True)
 class Artifact:
     definition: JsonObject
     archive: bytes | None = None
+    context_hash: str | None = None
+    context: Mapping[str, bytes] | None = field(default=None, repr=False)
+
+
+def deployment_content_hash(
+    target: Target, environment: Environment, artifact: Artifact,
+) -> str:
+    """Hash resolved deployment inputs, never commit history or evaluation assets."""
+    document = {
+        "schema": "aiq-deployment-content-v1",
+        "target_key": target.key,
+        "agent_name": target.runtime_name(environment.profile),
+        "agent_type": target.agent_type,
+        "profile": environment.profile,
+        "project_endpoint": environment.project_endpoint,
+        "api_version": DEPLOYMENT_API_VERSION,
+        "features": None if target.is_prompt else HOSTED_FEATURES,
+        "definition": artifact.definition,
+        "archive_sha256": (
+            hashlib.sha256(artifact.archive).hexdigest()
+            if artifact.archive is not None else None
+        ),
+        "context_sha256": artifact.context_hash,
+    }
+    try:
+        body = json.dumps(
+            document, sort_keys=True, allow_nan=False, separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        raise QualityError("deployment_content_invalid", request_accepted=False) from None
+    return "v1:sha256:" + hashlib.sha256(body).hexdigest()
 
 
 class ImageBuilder(Protocol):
@@ -107,12 +141,10 @@ def multipart(
     return body, f"multipart/form-data; boundary={boundary}", checksum
 
 
-async def prepare_artifact(
+def prepare_artifact_inputs(
     target: Target,
     environment: Environment,
-    source_revision: str,
     *,
-    images: ImageBuilder | None,
     hosted_environment: Mapping[str, str],
 ) -> Artifact:
     if target.is_prompt:
@@ -126,7 +158,11 @@ async def prepare_artifact(
         if definition.get("tools") or definition.get("tool_resources"):
             raise QualityError("prompt_tools_forbidden")
         return Artifact(definition)
-    definition = hosted_definition(environment, hosted_environment)
+    definition = hosted_definition(
+        environment,
+        container_environment(hosted_environment)
+        if target.agent_type == "hosted_custom_container" else hosted_environment,
+    )
     if target.agent_type == "hosted_code":
         host = _yaml(target.baseline_root / "host.yaml")
         entrypoint = host.get("entrypoint")
@@ -140,14 +176,39 @@ async def prepare_artifact(
         return Artifact(definition, source_zip(source_files(target)))
     if target.agent_type != "hosted_custom_container":
         raise QualityError("deployment_agent_type_unsupported")
+    context = source_files(target, container=True)
+    return Artifact(
+        definition, context_hash=hashlib.sha256(source_zip(context)).hexdigest(), context=context,
+    )
+
+
+async def build_artifact(
+    target: Target, source_revision: str, artifact: Artifact, *, images: ImageBuilder | None,
+) -> Artifact:
+    if target.agent_type != "hosted_custom_container":
+        return artifact
     if images is None:
         raise QualityError("container_builder_unavailable", request_accepted=False)
-    image = await images.ensure_image(
-        target, source_revision, source_files(target, container=True)
-    )
+    if artifact.context is None:
+        raise QualityError("container_context_missing", request_accepted=False)
+    image = await images.ensure_image(target, source_revision, artifact.context)
     if not isinstance(image, str) or not re.fullmatch(
         r"[a-z0-9.-]+/[a-z0-9._/-]+@sha256:[0-9a-f]{64}", image
     ):
         raise QualityError("container_image_not_pinned")
-    definition["container_configuration"] = {"image": image}
-    return Artifact(definition)
+    return replace(
+        artifact, context=None,
+        definition={**artifact.definition, "container_configuration": {"image": image}},
+    )
+
+
+async def prepare_artifact(
+    target: Target,
+    environment: Environment,
+    source_revision: str,
+    *,
+    images: ImageBuilder | None,
+    hosted_environment: Mapping[str, str],
+) -> Artifact:
+    inputs = prepare_artifact_inputs(target, environment, hosted_environment=hosted_environment)
+    return await build_artifact(target, source_revision, inputs, images=images)

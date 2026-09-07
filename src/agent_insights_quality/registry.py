@@ -117,6 +117,14 @@ def _decode(data: bytes) -> dict[str, Deployment]:
                 )
             ):
                 raise ValueError("Invalid registry entry")
+            if record.content_hash is not None:
+                metadata = record.details.get("metadata")
+                if not isinstance(metadata, Mapping) or (
+                    metadata.get("aiq_content_hash") != record.content_hash
+                    or metadata.get("aiq_source_revision") != record.source_revision
+                    or metadata.get("aiq_agent_type") != record.agent_type
+                ):
+                    raise ValueError("Invalid registry content identity")
             result[key] = record
         return result
     except (TypeError, ValueError, KeyError, UnicodeError):
@@ -126,7 +134,13 @@ def _decode(data: bytes) -> dict[str, Deployment]:
 def _document(records: Mapping[str, Deployment]) -> dict[str, Any]:
     return {
         "schema_version": "1.0",
-        "targets": {key: asdict(item) for key, item in records.items()},
+        "targets": {
+            key: {
+                name: value for name, value in asdict(item).items()
+                if name != "content_hash" or value is not None
+            }
+            for key, item in records.items()
+        },
     }
 
 

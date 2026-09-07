@@ -79,10 +79,73 @@ def deployment(name="weather-agent", version="42"):
     )
 
 
+def content_deployment():
+    content_hash = "v1:sha256:" + "a" * 64
+    return replace(deployment(), content_hash=content_hash, details={
+        "provisioning_state": "active",
+        "metadata": {
+            "aiq_profile": "daily", "aiq_logical_version": "v0", "aiq_agent_type": "prompt",
+            "aiq_source_revision": "source-one", "aiq_content_hash": content_hash,
+        },
+    })
+
+
+def test_content_identity_round_trip_preserves_git_provenance_and_legacy_entries(tmp_path):
+    legacy = asdict(deployment("healthcare-agent"))
+    legacy.pop("content_hash")
+    blob = Blob(json.dumps({"schema_version": "1.0", "targets": {
+        legacy["target_key"]: legacy,
+    }}).encode())
+    store = RuntimeStore("daily", root=tmp_path)
+    registry = DeploymentRegistry(blob, store.outbox("registry"))
+    current = content_deployment()
+    with store.ownership():
+        asyncio.run(registry.load())
+        assert not blob.writes
+        asyncio.run(registry.save(current))
+        restored = DeploymentRegistry(blob, store.outbox("registry"))
+        asyncio.run(restored.load())
+    assert restored.get(current.target_key) == current
+    assert json.loads(blob.data)["targets"][legacy["target_key"]] == legacy
+    assert restored.get(legacy["target_key"]).content_hash is None
+    assert {
+        key: value for key, value in asdict(restored.get(legacy["target_key"])).items()
+        if key != "content_hash"
+    } == legacy
+
+
+@pytest.mark.parametrize("mutation", ["invalid_hash", "missing_metadata", "mismatched_hash", "mismatched_source"])
+def test_invalid_content_identity_never_replaces_registry_cache(tmp_path, mutation):
+    value = asdict(content_deployment())
+    if mutation == "invalid_hash":
+        value["content_hash"] = "not-a-commit-or-content-hash"
+    elif mutation == "missing_metadata":
+        value["details"].pop("metadata")
+    else:
+        key = "aiq_content_hash" if mutation == "mismatched_hash" else "aiq_source_revision"
+        value["details"]["metadata"][key] = "different"
+    blob = Blob(json.dumps({"schema_version": "1.0", "targets": {value["target_key"]: value}}).encode())
+    store = RuntimeStore("daily", root=tmp_path)
+    cache = store.outbox("registry")
+    previous = {"schema_version": "1.0", "targets": {}}
+    with store.ownership():
+        cache.save_progress("deployment-registry", previous)
+        with pytest.raises(QualityError, match="registry_format_invalid"):
+            asyncio.run(DeploymentRegistry(blob, cache).load())
+    assert cache.read("deployment-registry") == previous
+    assert not blob.writes
+
+
 def document(*records):
     return {
         "schema_version": "1.0",
-        "targets": {item.target_key: asdict(item) for item in records},
+        "targets": {
+            item.target_key: {
+                key: value for key, value in asdict(item).items()
+                if key != "content_hash" or value is not None
+            }
+            for item in records
+        },
     }
 
 

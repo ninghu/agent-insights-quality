@@ -36,6 +36,7 @@ from agent_insights_quality.providers import (
     resolve_environment,
 )
 from agent_insights_quality.providers.telemetry import time_bounds
+from agent_insights_quality.providers.artifacts import deployment_content_hash, prepare_artifact
 from agent_insights_quality.providers.transport import (
     ARM_SCOPE,
     FOUNDRY_SCOPE,
@@ -122,6 +123,27 @@ def deployed(target, profile="staging", **details):
     )
 
 
+def content_metadata(environment, target, revision="revision-one"):
+    artifact = run(prepare_artifact(
+        target, environment, revision, images=None, hosted_environment={},
+    ))
+    return {
+        "aiq_profile": environment.profile,
+        "aiq_logical_version": target.unit_id.logical_version,
+        "aiq_source_revision": revision,
+        "aiq_agent_type": target.agent_type,
+        "aiq_content_hash": deployment_content_hash(target, environment, artifact),
+    }
+
+
+def content_deployed(environment, target):
+    metadata = content_metadata(environment, target)
+    return replace(
+        deployed(target, environment.profile, metadata=metadata),
+        content_hash=metadata["aiq_content_hash"],
+    )
+
+
 def runtime(environment, transport, **kwargs):
     return AzureRuntime(
         environment,
@@ -153,19 +175,18 @@ def test_prompt_create_wire_and_persist_before_return(environment, target):
     body = json.loads(wire.body)
     assert body["name"] == "example-agent-issue-001"
     assert body["definition"]["kind"] == "prompt"
-    assert body["metadata"] == {
-        "aiq_profile": "staging",
-        "aiq_logical_version": "issue-001",
-        "aiq_source_revision": "revision-one",
-    }
+    assert body["metadata"] == content_metadata(environment, target)
+    assert result.content_hash == body["metadata"]["aiq_content_hash"]
 
 
 def test_registry_exact_version_does_not_list_or_use_latest(environment, target):
-    transport = FakeTransport(response({"version": "42"}))
+    transport = FakeTransport(response({
+        "version": "42", "metadata": content_metadata(environment, target),
+    }))
     saved = []
     result = run(
         runtime(environment, transport).ensure_deployment(
-            target, "revision-one", deployed(target), saved.append
+            target, "revision-two", content_deployed(environment, target), saved.append
         )
     )
     assert result.provider_version == "42"
@@ -177,7 +198,7 @@ def test_exact_version_read_requires_real_returned_version(environment, target):
     transport = FakeTransport(response({"status": "active"}))
     with pytest.raises(QualityError, match="deployment_version_missing"):
         run(runtime(environment, transport).ensure_deployment(
-            target, "revision-one", deployed(target), lambda value: None,
+            target, "revision-one", deployed(target), lambda value: None, resume=True,
         ))
 
 
@@ -243,7 +264,7 @@ def test_missing_ready_version_is_recreated_only_after_listing(environment, targ
     )
     result = run(
         runtime(environment, transport).ensure_deployment(
-            target, "revision-one", deployed(target), lambda value: None
+            target, "revision-one", content_deployed(environment, target), lambda value: None
         )
     )
     assert result.provider_version == "43"
@@ -316,10 +337,15 @@ def test_pending_create_preserves_identity_and_resume_reads_exact(environment, t
     provider = runtime(environment, transport)
     saved = []
     with pytest.raises(QualityError, match="deployment_pending") as error:
-        run(provider.ensure_deployment(target, "r", None, saved.append))
+        run(provider.ensure_deployment(
+            target, "r",
+            Deployment(target.key, target.runtime_name("staging"), "", target.agent_type,
+                       "r", {"provisioning_state": "unknown"}),
+            saved.append, resume=True,
+        ))
     assert error.value.retryable and error.value.request_accepted is True
     assert saved[-1].provider_version == "42"
-    result = run(provider.ensure_deployment(target, "r", saved[-1], saved.append))
+    result = run(provider.ensure_deployment(target, "r", saved[-1], saved.append, resume=True))
     assert result.details["provisioning_state"] == "active"
     assert all(wire.method == "GET" for wire in transport.requests)
 
@@ -346,7 +372,7 @@ def test_pending_known_version_404_never_creates(environment, target):
     with pytest.raises(QualityError, match="deployment_propagation_pending"):
         run(
             runtime(environment, transport).ensure_deployment(
-                target, "revision-one", pending, lambda x: None
+                target, "revision-one", pending, lambda x: None, resume=True,
             )
         )
     assert len(transport.requests) == 1
@@ -368,16 +394,12 @@ def test_unknown_create_is_checkpointed_and_not_resubmitted(environment, target)
     assert saved[-1].details["provisioning_state"] == "unknown"
     assert "provider_response" not in saved[-1].details
     with pytest.raises(QualityError, match="deployment_create_unresolved"):
-        run(provider.ensure_deployment(target, "r", saved[-1], saved.append))
+        run(provider.ensure_deployment(target, "r", saved[-1], saved.append, resume=True))
     assert [wire.method for wire in transport.requests].count("POST") == 1
 
 
 def test_version_recovery_reads_past_one_hundred(environment, target):
-    metadata = {
-        "aiq_profile": "staging",
-        "aiq_logical_version": "issue-001",
-        "aiq_source_revision": "r",
-    }
+    metadata = content_metadata(environment, target, "r")
     transport = FakeTransport(
         response({}),
         response(
@@ -399,11 +421,7 @@ def test_version_recovery_reads_past_one_hundred(environment, target):
 
 
 def test_ambiguous_matching_versions_are_not_selected(environment, target):
-    metadata = {
-        "aiq_profile": "staging",
-        "aiq_logical_version": "issue-001",
-        "aiq_source_revision": "r",
-    }
+    metadata = content_metadata(environment, target, "r")
     transport = FakeTransport(
         response({}),
         response(
