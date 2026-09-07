@@ -250,9 +250,20 @@
 .create-or-alter function with (
     folder = 'Agent Insights Quality v1',
     docstring = 'Immutable current reports. Exact replay is deduplicated; conflicting run content is not scored.'
-) AIQReportsV1() {
+) AIQReportsV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', runIds:dynamic=dynamic(null)) {
+    // Scope candidates before carrying payloads, but reconcile each candidate's
+    // entire identity: a conflicting copy outside the filter must not be hidden.
+    let Candidates = QualityReportsV1
+        | where PayloadVersion == '1'
+        | where isnull(startDate) or ReportDate >= startofday(startDate)
+        | where isnull(endDate) or ReportDate <= startofday(endDate)
+        | where isempty(regionKey) or tolower(replace_string(Region, ' ', '')) == regionKey
+        | where isempty(scoringPolicy) or tostring(Payload.scoring_policy.version) == scoringPolicy
+        | where isnull(runIds) or FrameworkRunId in (runIds)
+        | distinct FrameworkRunId;
     QualityReportsV1
     | where PayloadVersion == '1'
+    | where FrameworkRunId in (Candidates)
     | extend PublishedAt = ingestion_time()
     // Replays must not make an older run look newly published.
     | summarize ContentHashes = make_set(ContentHash, 2), arg_min(PublishedAt, *) by FrameworkRunId
@@ -263,8 +274,8 @@
 .create-or-alter function with (
     folder = 'Agent Insights Quality v1',
     docstring = 'Stored score and recorded v1/v2 policy with numeric whole-unit coverage. No rescoring or healthy bonus.'
-) AIQRunsV1() {
-    AIQReportsV1()
+) AIQRunsV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', runIds:dynamic=dynamic(null)) {
+    AIQReportsV1(startDate, endDate, regionKey, scoringPolicy, runIds)
     | project
         ReportDate, FrameworkRunId, PublishedAt, SourceCommit, Region,
         QualityScore = todouble(Payload.score),
@@ -292,8 +303,8 @@
 .create-or-alter function with (
     folder = 'Agent Insights Quality v1',
     docstring = 'Actual UnitId/kind/scorable/counts/findings shape, including wholly excluded units and their reasons.'
-) AIQUnitsV1() {
-    AIQReportsV1()
+) AIQUnitsV1(runIds:dynamic=dynamic(null)) {
+    AIQReportsV1(datetime(null), datetime(null), '', '', runIds)
     | mv-expand Unit = Payload.units to typeof(dynamic)
     | project
         ReportDate, FrameworkRunId, Region,
@@ -316,8 +327,8 @@
 .create-or-alter function with (
     folder = 'Agent Insights Quality v1',
     docstring = 'Public aliases and closed verdict vocabulary, not raw cards/model prose. Unscored findings remain visible.'
-) AIQFindingsV1() {
-    AIQUnitsV1()
+) AIQFindingsV1(runIds:dynamic=dynamic(null)) {
+    AIQUnitsV1(runIds)
     | mv-expand Finding = Findings to typeof(dynamic)
     | project
         ReportDate, FrameworkRunId, Region, CoverageStatus, ScoringPolicy,
@@ -337,9 +348,38 @@
 // the scoring policy: historical scores and absent v1 MissWeight stay unchanged.
 .create-or-alter function with (
     folder = 'Agent Insights Quality dashboard',
+    docstring = 'Lightweight daily snapshot metadata. Optionally retain exactly one pre-window snapshot for each visible region/scoring/coverage series; never expand units here.'
+) AIQSnapshotRunsV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', includePrevious:bool=false) {
+    let Daily = materialize(
+        AIQRunsV1(iff(includePrevious, datetime(null), startDate), endDate, regionKey, scoringPolicy)
+        | extend RegionKey = tolower(replace_string(Region, ' ', ''))
+        | extend SnapshotOrder = strcat(format_datetime(PublishedAt, 'yyyyMMddHHmmssfffffff'), '/', FrameworkRunId)
+        | summarize arg_max(SnapshotOrder, *) by ReportDate, RegionKey, ScoringPolicy, CoveragePolicy
+    );
+    let Visible = Daily | where isnull(startDate) or ReportDate >= startofday(startDate);
+    union Visible,
+        (Daily
+         | where includePrevious and isnotnull(startDate) and ReportDate < startofday(startDate)
+         | summarize arg_max(ReportDate, *) by RegionKey, ScoringPolicy, CoveragePolicy
+         | join kind=leftsemi (Visible | distinct RegionKey, ScoringPolicy, CoveragePolicy)
+             on RegionKey, ScoringPolicy, CoveragePolicy)
+    | sort by RegionKey asc, ScoringPolicy asc, CoveragePolicy asc, ReportDate asc
+    | serialize
+    | extend SameSeries = coalesce(
+        RegionKey == prev(RegionKey) and ScoringPolicy == prev(ScoringPolicy)
+        and CoveragePolicy == prev(CoveragePolicy), false)
+    | extend PreviousRunId = iff(SameSeries, prev(FrameworkRunId), ''),
+        PreviousDate = iff(SameSeries, prev(ReportDate), datetime(null))
+    | project-away SameSeries
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality dashboard',
     docstring = 'One snapshot per report date, normalized region and recorded scoring/coverage policy. First ingestion orders same-date revisions; replay cannot change selection.'
-) AIQSnapshotsV1() {
-    let Cohorts = AIQUnitsV1()
+) AIQSnapshotsV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', includePrevious:bool=false) {
+    let Runs = materialize(AIQSnapshotRunsV1(startDate, endDate, regionKey, scoringPolicy, includePrevious));
+    let RunIds = toscalar(Runs | summarize make_set(FrameworkRunId));
+    let Cohorts = AIQUnitsV1(RunIds)
         | extend UnitKey = strcat(Agent, '/', LogicalVersion, '/', Kind, '/', ExpectedIssueAlias)
         | summarize
             UnitRows = count(),
@@ -359,10 +399,7 @@
             PlannedCohort = tostring(array_sort_asc(PlannedCohort)),
             ScoredCohort = tostring(array_sort_asc(ScoredCohort)),
             BaselineCohort = tostring(array_sort_asc(BaselineCohort));
-    AIQRunsV1()
-    | extend RegionKey = tolower(replace_string(Region, ' ', ''))
-    | extend SnapshotOrder = strcat(format_datetime(PublishedAt, 'yyyyMMddHHmmssfffffff'), '/', FrameworkRunId)
-    | summarize arg_max(SnapshotOrder, *) by ReportDate, RegionKey, ScoringPolicy, CoveragePolicy
+    Runs
     | join kind=leftouter Cohorts on FrameworkRunId
     | extend PolicyValid = coalesce(
         NoiseWeight == 1.0 and ScoreRounding == 'half-up-one-decimal' and (
@@ -393,8 +430,8 @@
 .create-or-alter function with (
     folder = 'Agent Insights Quality dashboard',
     docstring = 'Immediate earlier report-date snapshot in the same region/scoring/coverage policy, before any dashboard date filter. Changed unit mix is disclosed, not skipped to find a nicer comparison.'
-) AIQSnapshotChangesV1() {
-    AIQSnapshotsV1()
+) AIQSnapshotChangesV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='') {
+    AIQSnapshotsV1(startDate, endDate, regionKey, scoringPolicy, true)
     | sort by RegionKey asc, ScoringPolicy asc, CoveragePolicy asc, ReportDate asc
     | serialize
     | extend SameSeries = coalesce(
@@ -438,15 +475,17 @@
         DeltaNoise = NoiseCards - PreviousNoise,
         DeltaDuplicates = DuplicateCards - PreviousDuplicates
     | project-away SameSeries
+    // The predecessor seed must survive until AFTER prev() and all comparisons.
+    | where isnull(startDate) or ReportDate >= startofday(startDate)
 }
 
 .create-or-alter function with (
     folder = 'Agent Insights Quality dashboard',
     docstring = 'Current/previous unit identities, counts and exclusions. Full outer join retains rotated-out units; absent or excluded units are not misses.'
-) AIQUnitChangesV1(frameworkRunId:string) {
-    let PreviousRun = toscalar(AIQSnapshotChangesV1()
-        | where FrameworkRunId == frameworkRunId | project PreviousRunId);
-    let Current = AIQUnitsV1()
+) AIQUnitPairV1(frameworkRunId:string, previousRunId:string) {
+    let PreviousRun = previousRunId;
+    let PairUnits = materialize(AIQUnitsV1(pack_array(frameworkRunId, previousRunId)));
+    let Current = PairUnits
         | where FrameworkRunId == frameworkRunId
         | project Agent, LogicalVersion, Kind, ExpectedIssueAlias,
             CurrentPresent = true, CurrentScorable = Scorable,
@@ -455,7 +494,7 @@
             M = iff(Scorable and Kind == 'issue', ExpectedIssues - CorrectIssues, long(null)),
             N = iff(Scorable, NoiseCards, long(null)), D = iff(Scorable, DuplicateCards, long(null)),
             CurrentReasons = ExclusionReasons;
-    let Previous = AIQUnitsV1()
+    let Previous = PairUnits
         | where FrameworkRunId == PreviousRun
         | project Agent, LogicalVersion, Kind, ExpectedIssueAlias,
             PreviousPresent = true, PreviousScorable = Scorable,
@@ -478,6 +517,19 @@
     | extend DeltaC = C - PreviousC, DeltaM = M - PreviousM,
         DeltaN = N - PreviousN, DeltaD = D - PreviousD
     | project-away Agent1, LogicalVersion1, Kind1, ExpectedIssueAlias1
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality dashboard',
+    docstring = 'Compatibility entry point for a single run alias. New dashboards resolve the metadata pair once and call AIQUnitPairV1 directly.'
+) AIQUnitChangesV1(frameworkRunId:string) {
+    let Context = materialize(AIQRunsV1(datetime(null), datetime(null), '', '', pack_array(frameworkRunId)));
+    let CurrentDate = coalesce(toscalar(Context | project ReportDate), datetime(0001-01-01));
+    let CurrentRegion = toscalar(Context | project tolower(replace_string(Region, ' ', '')));
+    let CurrentPolicy = toscalar(Context | project ScoringPolicy);
+    let PreviousRun = toscalar(AIQSnapshotRunsV1(CurrentDate, CurrentDate, CurrentRegion, CurrentPolicy, true)
+        | where FrameworkRunId == frameworkRunId | project PreviousRunId);
+    AIQUnitPairV1(frameworkRunId, PreviousRun)
 }
 
 .create-or-alter function with (
