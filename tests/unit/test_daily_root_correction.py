@@ -423,10 +423,7 @@ def test_old_completed_results_restore_without_new_contract_or_calls(tmp_path, m
     assert (len(h.sol.calls), len(h.cloud.events)) == counts
 
 
-@pytest.mark.parametrize("remaining", ["none", "unknown", "evidence_gap"])
-def test_runner_correction_survives_final_save_crash_and_freezes_excluded_results(
-    tmp_path, monkeypatch, remaining,
-):
+def correction_harness(tmp_path, monkeypatch, remaining):
     runner_fake.fake_storage(monkeypatch)
     h = runner_fake.Harness(tmp_path)
     ensure, poll = h.cloud.ensure_monitor, h.cloud.get_insights_run
@@ -450,8 +447,18 @@ def test_runner_correction_survives_final_save_crash_and_freezes_excluded_result
             value["cards"][1].update(core="unknown", root_group=None, expected_match=False)
         elif remaining == "evidence_gap":
             value["limitations"] = ["incomplete_evidence"]
+        elif remaining == "duplicate":
+            value = fake.output(payload)
         return value
     h.sol = fake.Sol(result)
+    return h
+
+
+@pytest.mark.parametrize("remaining", ["none", "unknown", "evidence_gap"])
+def test_runner_correction_survives_final_save_crash_and_freezes_excluded_results(
+    tmp_path, monkeypatch, remaining,
+):
+    h = correction_harness(tmp_path, monkeypatch, remaining)
     original = RecordStore.save_artifact
     def crash(records, key, value):
         if "/assessments/" in key and "/calls/" not in key and value.get("private_detail", {}).get("correction"):
@@ -476,6 +483,150 @@ def test_runner_correction_survives_final_save_crash_and_freezes_excluded_result
     assert (len(h.sol.calls), len(h.cloud.invocations), len(h.cloud.starts)) == counts
     assert counts == (3, 40, 2)
     assert h.store.run("trial").read(f"targets/{target.key}/assessment")["artifact"] == pending["artifact"]
+
+
+@pytest.mark.parametrize("remaining", ["duplicate", "unknown", "evidence_gap", "none"])
+def test_applied_final_correction_cannot_reopen_budget_by_changing_source(
+    tmp_path, monkeypatch, remaining,
+):
+    h = correction_harness(tmp_path, monkeypatch, remaining)
+    first = h.daily(test_run=True, rerun=1)
+    target = h.catalog.targets[1]
+    records = h.store.run("trial")
+    source = records.read(f"targets/{target.key}/source")
+    reference = records.read(f"targets/{target.key}/assessment")
+    saved = records.read_artifact(reference["artifact"])
+    assert reference["status"] == "applied"
+    assert saved["assessment_input_final"] is True
+    assert bool(saved["unit_result"]["exclusion_reasons"]) == (remaining != "none")
+    if remaining == "duplicate":
+        assert saved["private_detail"]["unreviewed_candidates"] == ["duplicate_root"]
+    count = len(h.sol.calls), len(h.cloud.events), len(h.cloud.invocations), len(h.cloud.starts)
+    assert count[0] == 3
+    h.clock.value += timedelta(seconds=60)
+    assert h.daily(test_run=True, rerun=1).to_dict() == first.to_dict()
+    assert (len(h.sol.calls), len(h.cloud.events), len(h.cloud.invocations), len(h.cloud.starts)) == count
+    for changes in ((), ("src/agent_insights_quality/assessment.py",)):
+        with pytest.raises(StateError, match="assessment_pending_binding_mismatch"):
+            h.daily(test_run=True, rerun=1, revision="source-two", changes=changes)
+        assert (len(h.sol.calls), len(h.cloud.events), len(h.cloud.invocations), len(h.cloud.starts)) == count
+        assert records.read(f"targets/{target.key}/source") == source
+        assert records.read(f"targets/{target.key}/assessment") == reference
+        assert records.read_artifact(reference["artifact"]) == saved
+    assert h.daily(test_run=True, rerun=1).to_dict() == first.to_dict()
+    assert records.read(f"targets/{target.key}/source")["assessed_at"] == source["assessed_at"]
+    assert len(h.sol.calls) == 3
+
+
+def test_applied_correction_blocks_source_change_before_other_units_evidence_recovery(
+    tmp_path, monkeypatch,
+):
+    h = correction_harness(tmp_path, monkeypatch, "duplicate")
+    h.cloud.query_complete = False
+    poll = h.cloud.get_insights_run
+    async def after_baseline(name, run_id):
+        value = await poll(name, run_id)
+        job = next(item for item in h.cloud.jobs.values() if item["id"] == run_id)
+        if job["target"].endswith("/v0"):
+            h.cloud.query_complete = True
+        return value
+    h.cloud.get_insights_run = after_baseline
+    h.daily(test_run=True, rerun=1)
+    baseline, target = h.catalog.targets
+    records = h.store.run("trial")
+    baseline_source = records.read(f"targets/{baseline.key}/source")
+    source = records.read(f"targets/{target.key}/source")
+    assert baseline_source["result"]["assessment_input_final"] is False
+    assert source["result"]["assessment_input_final"] is True
+    count = len(h.sol.calls), len(h.cloud.events), len(h.cloud.invocations), len(h.cloud.starts)
+    checked = []
+    check = runner_fake.Runner._checked_daily_assessment
+    def checking(self, target, work=None):
+        checked.append(target.key)
+        return check(self, target, work)
+    monkeypatch.setattr(runner_fake.Runner, "_checked_daily_assessment", checking)
+    with pytest.raises(StateError, match="assessment_pending_binding_mismatch"):
+        h.daily(
+            test_run=True, rerun=1, revision="source-two",
+            changes=("src/agent_insights_quality/assessment.py",),
+        )
+    # The baseline is legitimately recoverable; the applied issue itself must
+    # reject the source change before that baseline makes any provider call.
+    assert checked == [baseline.key, target.key]
+    assert (len(h.sol.calls), len(h.cloud.events), len(h.cloud.invocations), len(h.cloud.starts)) == count
+    h.clock.value += timedelta(seconds=60)
+    h.daily(test_run=True, rerun=1)
+    assert len(h.sol.calls) == count[0] + 1
+    assert len(h.cloud.events) > count[1]
+    assert len(h.cloud.invocations) == count[2] and len(h.cloud.starts) == count[3]
+    assert records.read(f"targets/{baseline.key}/source")["evidence_key"] != baseline_source["evidence_key"]
+    assert records.read(f"targets/{target.key}/source") == source
+    resumed = len(h.sol.calls), len(h.cloud.events)
+    h.daily(test_run=True, rerun=1)
+    assert (len(h.sol.calls), len(h.cloud.events)) == resumed
+
+
+@pytest.mark.parametrize("corruption", ["marker_false", "markers_removed", "raw_marker_false"])
+def test_applied_final_budget_uses_immutable_result_not_clearable_source_markers(
+    tmp_path, monkeypatch, corruption,
+):
+    h = correction_harness(tmp_path, monkeypatch, "duplicate")
+    h.daily(test_run=True, rerun=1)
+    target = h.catalog.targets[1]
+    records = h.store.run("trial")
+    key = f"targets/{target.key}/source"
+    source = records.read(key)
+    artifact = source["assessment"]["artifact"]
+    count = len(h.sol.calls), len(h.cloud.events)
+    if corruption == "raw_marker_false":
+        read = RecordStore.read_artifact
+        def corrupted(self, key, **kwargs):
+            value = read(self, key, **kwargs)
+            if key == artifact:
+                value["assessment_input_final"] = False
+            return value
+        monkeypatch.setattr(RecordStore, "read_artifact", corrupted)
+    else:
+        if corruption == "marker_false":
+            source["result"]["assessment_input_final"] = False
+        else:
+            source["result"].pop("assessment_input_final")
+            source["result"].pop("call_contract")
+        with h.store.ownership():
+            records.save_progress(key, source)
+    with pytest.raises(StateError, match="assessment_(pending_binding_mismatch|call_contract_invalid)"):
+        h.daily(test_run=True, rerun=1)
+    assert (len(h.sol.calls), len(h.cloud.events)) == count
+
+
+def test_applied_final_is_checked_at_binding_and_assessment_entrypoints(tmp_path, monkeypatch):
+    h = correction_harness(tmp_path, monkeypatch, "duplicate")
+    h.daily(test_run=True, rerun=1)
+    target = h.catalog.targets[1]
+    records = h.store.run("trial")
+    source = records.read(f"targets/{target.key}/source")
+    saved = records.read_artifact(source["assessment"]["artifact"])
+    count = len(h.sol.calls), len(h.cloud.events)
+    async def forbidden(sol):
+        pytest.fail("An applied-final assessment must not call its operation again")
+    with h.store.ownership():
+        runner = h.runner(test_run=True, rerun=1)
+        runner.initialize(h.catalog.targets, runner_fake.DAY, kind="daily")
+        work = runner._binding(target)
+        assert asyncio.run(runner._assess(target, work, forbidden)) == saved
+        runner.logger.close()
+        changed = h.runner(
+            test_run=True, rerun=1, revision="source-two",
+            changes=("src/agent_insights_quality/assessment.py",),
+        )
+        changed.initialize(h.catalog.targets, runner_fake.DAY, kind="daily")
+        with pytest.raises(StateError, match="assessment_pending_binding_mismatch"):
+            changed._binding(target)
+        with pytest.raises(StateError, match="assessment_pending_binding_mismatch"):
+            asyncio.run(changed._assess(target, work, forbidden))
+        changed.logger.close()
+    assert (len(h.sol.calls), len(h.cloud.events)) == count
+    assert records.read(f"targets/{target.key}/source") == source
 
 
 @pytest.mark.parametrize("legacy_binding", [False, True])

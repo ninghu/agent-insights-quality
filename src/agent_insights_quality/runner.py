@@ -553,6 +553,8 @@ class Runner:
     def _binding(self, target: Target, selection: Selection | None = None) -> _Work:
         from .staging_target import read_intent, reference, REASONS
 
+        if self.runtime.environment == "daily":
+            self._checked_daily_assessment(target)
         key = f"targets/{target.key}/source"
         intent = read_intent(self.run)
         if intent is not None and (
@@ -1539,6 +1541,30 @@ class Runner:
             self._save(self.run, "artifact", f"targets/{target.key}/errors/{uuid.uuid4().hex}", detail)
         self._save(self.run, "progress", f"targets/{target.key}/failure", value)
 
+    @staticmethod
+    def _daily_input_final(result: dict) -> bool:
+        if not isinstance(result.get("private_detail"), dict):
+            raise StateError("assessment_call_contract_invalid")
+        return (
+            "initial_validation_error" in result["private_detail"]
+            or ExclusionReason.INCOMPLETE_EVIDENCE.value
+            not in result["unit_result"]["exclusion_reasons"]
+        )
+
+    def _checked_daily_input_final(self, result: dict) -> bool:
+        from .assessment_calls import DAILY_CALL_CONTRACT
+
+        if "call_contract" not in result:
+            return True  # Historical completed judgments are not new review budgets.
+        frozen = self._daily_input_final(result)
+        if (
+            result["call_contract"] != DAILY_CALL_CONTRACT
+            or type(result.get("assessment_input_final")) is not bool
+            or result["assessment_input_final"] != frozen
+        ):
+            raise StateError("assessment_call_contract_invalid")
+        return frozen
+
     def _apply_assessment(self, target: Target, work: _Work, reference: dict, result: dict) -> None:
         configured = self._configured_assessor(
             {"run_id": self.run_id}, result.get("configured_assessor"),
@@ -1560,12 +1586,7 @@ class Runner:
             restore_unit(result["unit_result"])
             fields = {"result": {key: result[key] for key in ("unit_result", "reasons")}}
             if "call_contract" in result:
-                from .assessment_calls import DAILY_CALL_CONTRACT
-                if (
-                    result["call_contract"] != DAILY_CALL_CONTRACT
-                    or type(result.get("assessment_input_final")) is not bool
-                ):
-                    raise StateError("assessment_call_contract_invalid")
+                self._checked_daily_input_final(result)
                 fields["result"]["call_contract"] = result["call_contract"]
                 fields["result"]["assessment_input_final"] = result["assessment_input_final"]
         work.binding.pop("reason", None)
@@ -1578,8 +1599,13 @@ class Runner:
             **reference, "status": "applied",
         })
 
-    def _pending_daily_assessment(self, target: Target, work: _Work | None = None) -> dict | None:
-        """Validate unfinished bindings before selection can allocate new work."""
+    def _checked_daily_assessment(self, target: Target, work: _Work | None = None) -> dict | None:
+        """Return checked unfinished or applied-final work, never a new budget.
+
+        Only an applied ordinary incomplete-evidence assessment releases its
+        input for recovery. Terminality comes from the immutable result, not
+        source-index flags that selection could clear.
+        """
         from .assessment_calls import DAILY_CALL_CONTRACT
 
         reference = self.run.read(f"targets/{target.key}/assessment", missing_ok=True)
@@ -1598,7 +1624,8 @@ class Runner:
                 or restore_unit(result["unit_result"]).unit_id != target.unit_id
             ):
                 raise StateError("assessment_pending_binding_mismatch")
-            return None
+            if not self._checked_daily_input_final(result):
+                return None
         source = work.binding if work is not None else self.run.read(
             f"targets/{target.key}/source", missing_ok=True,
         )
@@ -1623,9 +1650,18 @@ class Runner:
             "contract": DAILY_CALL_CONTRACT,
         }:
             raise StateError("assessment_pending_binding_mismatch")
+        if reference["status"] == "applied" and (
+            source.get("assessment") != {"run_id": self.run_id, "artifact": reference["artifact"]}
+            or source.get("result") != {
+                key: result[key] for key in (
+                    "unit_result", "reasons", "call_contract", "assessment_input_final",
+                ) if key in result
+            }
+        ):
+            raise StateError("assessment_pending_binding_mismatch")
         return reference
 
-    def _pending_assessment_snapshot(self, target: Target, work: _Work, reference: dict) -> Snapshot:
+    def _frozen_assessment_snapshot(self, target: Target, work: _Work, reference: dict) -> Snapshot:
         snapshot = self._snapshot(work, reference.get("evidence_key", work.binding["evidence_key"]))
         request = self.run.read_artifact(reference["artifact"] + "/calls/initial/request", missing_ok=True)
         if request is not None:
@@ -1648,7 +1684,7 @@ class Runner:
 
     def _recover_assessment(self, target: Target, work: _Work) -> bool:
         if self.runtime.environment == "daily":
-            self._pending_daily_assessment(target, work)
+            self._checked_daily_assessment(target, work)
         reference = self.run.read(f"targets/{target.key}/assessment", missing_ok=True)
         if not reference or (
             reference["source_revision"] != self.revision
@@ -1666,9 +1702,13 @@ class Runner:
     async def _assess(self, target: Target, work: _Work, operation: Callable[[SolPort], Awaitable]) -> dict:
         pending_key = f"targets/{target.key}/assessment"
         pending = (
-            self._pending_daily_assessment(target, work) if self.runtime.environment == "daily"
+            self._checked_daily_assessment(target, work) if self.runtime.environment == "daily"
             else self.run.read(pending_key, missing_ok=True)
         )
+        if self.runtime.environment == "daily" and pending and pending["status"] == "applied":
+            if self.metrics:
+                self.metrics.reuse("stage", "assessment")
+            return self.run.read_artifact(pending["artifact"])
         if pending and (
             pending["source_revision"] == self.revision
             and pending.get("work_key", work.key) == work.key
@@ -1712,11 +1752,7 @@ class Runner:
                     saved["call_contract"] = DAILY_CALL_CONTRACT
                     # A root correction cannot buy another review via evidence
                     # refresh. Ordinary incomplete-evidence recovery stays separate.
-                    saved["assessment_input_final"] = (
-                        "initial_validation_error" in saved["private_detail"]
-                        or ExclusionReason.INCOMPLETE_EVIDENCE.value
-                        not in saved["unit_result"]["exclusion_reasons"]
-                    )
+                    saved["assessment_input_final"] = self._daily_input_final(saved)
             self._save(self.run, "artifact", artifact, saved)
         elif self.metrics:
             self.metrics.reuse("stage", "assessment")
@@ -1827,20 +1863,18 @@ class Runner:
     @measure("run", "daily")
     async def run_daily(self, targets: tuple[Target, ...]) -> QualityResult:
         from .assessment import assess_daily
-        from .assessment_calls import DAILY_CALL_CONTRACT
 
         if not self._initialized or self.runtime.environment != "daily" or targets != self.targets:
             raise QualityError("runner_not_initialized")
-        # Check all pending units before any lane/provider can advance. A changed
-        # TEST source must not hide its unfinished journal behind a new artifact.
+        # Check pending AND applied-final work before any lane/provider or
+        # source selection can discard a frozen assessment's identity.
         for target in targets:
-            pending = self._pending_daily_assessment(target)
-            if pending is not None:
+            reference = self._checked_daily_assessment(target)
+            if reference is not None:
                 source = self.run.read(f"targets/{target.key}/source")
-                self._pending_assessment_snapshot(
-                    target, _Work(self.runtime.run(source["traffic_run_id"]), source), pending,
+                self._frozen_assessment_snapshot(
+                    target, _Work(self.runtime.run(source["traffic_run_id"]), source), reference,
                 )
-        legacy_call_state = self.run.read_completed("assessment-call-contract", missing_ok=True) is None
         agents = tuple(dict.fromkeys(target.unit_id.agent for target in targets))
         if any(not next(target for target in targets if target.unit_id.agent == agent).is_baseline for agent in agents):
             raise QualityError("daily_baseline_must_be_first")
@@ -1860,16 +1894,10 @@ class Runner:
                             work = self._binding(target)
                             attempts = self._plan(target, work)
                             recovered = self._recover_assessment(target, work)
-                            pending = self._pending_daily_assessment(target, work)
+                            reference = self._checked_daily_assessment(target, work)
+                            pending = reference if reference and reference["status"] != "applied" else None
                             prior = self._prior_result(work)
-                            terminal_assessment = prior and (
-                                work.binding["assessment"]["run_id"] == self.run_id
-                                and (
-                                    legacy_call_state
-                                    or prior.get("call_contract") == DAILY_CALL_CONTRACT
-                                    and prior.get("assessment_input_final") is True
-                                )
-                            )
+                            terminal_assessment = reference and reference["status"] == "applied"
                             if recovered or prior and (
                                 not prior["unit_result"]["exclusion_reasons"] or terminal_assessment
                             ):
@@ -1888,7 +1916,7 @@ class Runner:
                                 if self.metrics:
                                     self.metrics.reuse("stage", "insights")
                                 if pending is not None:
-                                    snapshot = self._pending_assessment_snapshot(target, work, pending)
+                                    snapshot = self._frozen_assessment_snapshot(target, work, pending)
                                     if self.metrics:
                                         self.metrics.reuse("stage", "evidence")
                                 elif work.binding.get("refresh_evidence") or prior and (
