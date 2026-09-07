@@ -15,18 +15,3 @@ injected_defect:
   single_root: "Instructions force the create_appointment envelope to always drop the account_scope and approval fields."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
-determinism:
-  temperature: 0
-  definition_sha256: 236387d2ef1761b3837c0cf05410762186d2c0045e29aa29fd3b5965fb456f28
-  traffic_file: traffic.json
-  minimum_requests: 5
-artifacts:
-  include:
-  - definition.json
-  - implementation.yaml
-  - traffic.json
-public_safety:
-  synthetic_only: true
-  real_people: false
-  credentials: false
-  service_locations: false

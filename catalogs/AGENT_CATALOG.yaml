@@ -31,7 +31,6 @@ agents:
       terminal_response: direct_prompt
       semantic_assertions: required_per_request
       function_calling: forbidden
-      trace_operations: uniform
       validation_mode: baseline
     issue_ids: [issue-001, issue-002, issue-003, issue-004, issue-005, issue-006]
   - name: healthcare-agent
@@ -45,7 +44,6 @@ agents:
       terminal_response: direct_prompt
       semantic_assertions: required_per_request
       function_calling: forbidden
-      trace_operations: uniform
       validation_mode: baseline
     issue_ids: [issue-007, issue-008, issue-009, issue-010, issue-011, issue-012]
   - name: finance-agent
@@ -59,7 +57,6 @@ agents:
       terminal_response: standard_assistant_message
       semantic_assertions: required
       function_calling: not_applicable
-      trace_operations: uniform
       validation_mode: baseline
     issue_ids: [issue-013, issue-014, issue-015, issue-016, issue-017, issue-018, issue-019, issue-020]
   - name: travel-agent
@@ -73,7 +70,6 @@ agents:
       terminal_response: standard_assistant_message
       semantic_assertions: required
       function_calling: not_applicable
-      trace_operations: uniform
       validation_mode: baseline
     issue_ids: [issue-021, issue-022, issue-023, issue-024, issue-025, issue-026, issue-027, issue-028]
   - name: support-ticket-agent
@@ -87,6 +83,5 @@ agents:
       terminal_response: explicit_span_attributes
       semantic_assertions: required
       function_calling: not_applicable
-      trace_operations: required_per_request
       validation_mode: baseline
     issue_ids: [issue-029, issue-030, issue-031, issue-032, issue-033, issue-034, issue-035, issue-036]

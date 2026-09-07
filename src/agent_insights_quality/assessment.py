@@ -1,1203 +1,1141 @@
+"""Raw-evidence assessment through an injected Sol port; never invokes Agents.
+
+Invocation keys are ``(attempt.index, step.step_id)``. Endpoint citation refs are
+``endpoint-01-01`` (attempt and one-based turn); trace refs are Snapshot row refs.
+Staging may batch independent complete conversation groups, including missing
+execution. Daily retains holistic card/root judgment using lossless transport
+deduplication, never isolated-chunk votes. The caller persists returned private
+detail before completing its checkpoint.
+"""
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from importlib.resources import files
+import json
+from typing import Any, Literal
 
 from jsonschema import Draft202012Validator
 
-from agent_insights_quality.models import (
-    RequestCompletionEvidence,
-    SKIPPED_VERSION_STATUSES,
-    SemanticAssertionEvidence,
-    TraceAssertionEvidence,
-    VersionResult,
-    linked_operations_match_scope,
-    request_completion_payload,
+from .assessment_partition import (
+    Partition,
+    _subset,
+    conversation_groups,
+    expand_payload,
+    intern_payload,
+    partition_payload,
+    payload_size,
 )
-from agent_insights_quality.runtime_state import VersionCheckpointStore
-from agent_insights_quality.scoring import (
-    ATTRIBUTABLE_FINDING_TYPES,
-    scoring_fields_pass,
+from .contracts import Attempt, Invocation, SolPort, Target
+from .errors import QualityError
+from .privacy import SUMMARIES
+from .results import (
+    CardVerdict,
+    Contribution,
+    CoreVerdict,
+    DiagnosticVerdict,
+    ExclusionReason,
+    UnitResult,
 )
-from agent_insights_quality.validation_trace_gap_policy import (
-    daily_target_decision,
-    validate_trace_maturity_proof,
-)
-from agent_insights_quality.util import ROOT, ContractError, atomic_json, content_hash, read_json
+from .telemetry import Snapshot
+from .staging_policy import ROOT_HYGIENE_POLICY_VERSION, STAGING_POLICY, StagingPolicy
 
 
-def _validate_package(path: Path, package: dict[str, Any]) -> None:
-    schema = read_json(ROOT / "schemas" / "assessment-package.schema.json")
-    errors = list(Draft202012Validator(schema).iter_errors(package))
-    if errors:
-        raise ContractError(
-            f"{path.name} assessment package is invalid: {errors[0].message}"
-        )
-    expected_hash = content_hash(
-        {key: value for key, value in package.items() if key != "package_hash"}
-    )
-    if package["package_hash"] != expected_hash:
-        raise ContractError(f"{path.name} assessment package hash is invalid")
+class AssessmentError(QualityError):
+    """Invalid evidence/model output, not a behavioral PASS or FAIL."""
+
+    def __init__(self, code: str, *, private_detail: dict[str, Any] | None = None) -> None:
+        super().__init__(code)
+        self.private_detail = private_detail
 
 
-def _write_package(path: Path, package: dict[str, Any]) -> None:
-    package["package_hash"] = content_hash(
-        {key: value for key, value in package.items() if key != "package_hash"}
-    )
-    _validate_package(path, package)
-    atomic_json(path, package)
-
-
-def _load_package(path: Path) -> dict[str, Any]:
-    package = read_json(path)
-    _validate_package(path, package)
-    return package
-
-
-def rehydrate_packages(
-    manifest: dict[str, Any],
-    issues: dict[str, Any],
-    registry: dict[str, Any],
-    runtime: Any,
-    output: Path,
-    checkpoint_store: VersionCheckpointStore,
-) -> list[Path]:
-    output.mkdir(parents=True, exist_ok=True)
-    issue_by_id = {item["id"]: item for item in issues["issues"]}
-    paths: list[Path] = []
-    for agent in manifest["agents"]:
-        baseline = agent["baseline"]
-        baseline_result = _checkpoint_result(
-            checkpoint_store,
-            agent["name"],
-            baseline,
-        )
-        baseline_cards = _baseline_cards(
-            baseline_result.observed_insights,
-            set(baseline.get("operation_ids") or []),
-            baseline["foundry_version"],
-        )
-        baseline_operation_ids = set(baseline.get("operation_ids") or [])
-        trace_proof_cache: dict[tuple[str, ...], dict[str, Any]] = {}
-
-        def trace_proof(operation_ids: tuple[str, ...]) -> dict[str, Any]:
-            if not operation_ids:
-                return {}
-            if operation_ids not in trace_proof_cache:
-                trace_proof_cache[operation_ids] = runtime.trace_behavior_evidence(
-                    operation_ids
-                )
-            return trace_proof_cache[operation_ids]
-
-        def baseline_insight_payload(value: Any) -> dict[str, Any]:
-            payload = _insight_payload(value)
-            key = _linked_baseline_operations(value, baseline_operation_ids)
-            payload["card_linked_trace_proof"] = trace_proof(key)
-            return payload
-
-        baseline_endpoint_evidence = _endpoint_evidence(baseline)
-        recorded_baseline_trace = baseline.get("trace_behavior_summary") or {}
-        if (
-            baseline.get("status") in {"passed", "not_at_bar"}
-            and not recorded_baseline_trace
-        ):
-            raise ContractError(
-                f"{agent['name']} baseline trace proof is missing"
-            )
-        baseline_full_trace_proof = (
-            dict(recorded_baseline_trace)
-            if recorded_baseline_trace
-            else trace_proof(tuple(sorted(baseline_operation_ids)))
-        )
-        baseline_contract = agent["baseline_contract"]
-        baseline_execution = _manifest_execution_context(baseline)
-        baseline_package = {
-            "schema_version": "3.0.0",
-            "target_kind": "baseline",
-            "agent_name": agent["name"],
-            "foundry_version": baseline["foundry_version"],
-            "manifest_reference": manifest["manifest_hash"],
-            "source_integrity": manifest["source_integrity"],
-            **baseline_execution,
-            "trace_maturity_proof": baseline.get("trace_maturity_proof"),
-            "role_pass_summary": baseline.get("role_pass_summary"),
-            "runtime_status": baseline["status"],
-            "error_code": baseline.get("error_code"),
-            "operation_count": len(baseline.get("operation_ids") or []),
-            "endpoint_evidence": baseline_endpoint_evidence,
-            "full_request_trace_proof": baseline_full_trace_proof,
-            "behavior_summary": _baseline_behavior_summary(
-                baseline_endpoint_evidence,
-                baseline_full_trace_proof,
-                baseline_contract,
-            ),
-            "expected": {
-                "insight_count": 0,
-                "behavior": baseline_contract,
-            },
-            "observed_insights": [
-                baseline_insight_payload(value) for value in baseline_cards
-            ],
-            "package_hash": "",
-        }
-        path = output / f"baseline-{agent['name']}.json"
-        _write_package(path, baseline_package)
-        paths.append(path)
-        for value in agent["issues"]:
-            issue_id = value["issue_id"]
-            issue_result = _checkpoint_result(
-                checkpoint_store,
-                agent["name"],
-                value,
-            )
-            cards = _cards_for_operations(
-                issue_result.observed_insights,
-                set(value.get("operation_ids") or []),
-            )
-            issue_operation_ids = set(value.get("operation_ids") or [])
-            issue_endpoint_evidence = _endpoint_evidence(value)
-            recorded_issue_trace = value.get("trace_behavior_summary") or {}
-            issue_full_trace_proof = (
-                dict(recorded_issue_trace)
-                if recorded_issue_trace
-                else trace_proof(tuple(sorted(issue_operation_ids)))
-            )
-
-            def issue_insight_payload(item: Any) -> dict[str, Any]:
-                payload = _insight_payload(item)
-                linked = tuple(
-                    sorted(
-                        set(item.linked_operation_ids).intersection(
-                            issue_operation_ids
-                        )
-                    )
-                )
-                if not linked:
-                    raise ContractError(
-                        f"{issue_id} card has no linked issue operation"
-                    )
-                payload["card_linked_trace_proof"] = trace_proof(linked)
-                return payload
-
-            expected = issue_by_id[issue_id]
-            issue_execution = _manifest_execution_context(
-                value,
-                include_required_surfaces=True,
-            )
-            package = {
-                "schema_version": "3.0.0",
-                "target_kind": "issue",
-                "issue_id": issue_id,
-                "agent_name": agent["name"],
-                "foundry_version": value["foundry_version"],
-                "manifest_reference": manifest["manifest_hash"],
-                "source_integrity": manifest["source_integrity"],
-                **issue_execution,
-                "trace_maturity_proof": value.get("trace_maturity_proof"),
-                "evidence_reference": value.get("evidence_reference"),
-                "runtime_status": value["status"],
-                "error_code": value.get("error_code"),
-                "role_pass_summary": value.get("role_pass_summary"),
-                "operation_count": len(value.get("operation_ids") or []),
-                "endpoint_evidence": issue_endpoint_evidence,
-                "full_request_trace_proof": issue_full_trace_proof,
-                "observed_insights": [
-                    issue_insight_payload(item) for item in cards
-                ],
-                "expected": {
-                    "title": expected["title"],
-                    "root_cause": expected["root_cause"],
-                    "category": expected["category"],
-                    "severity": expected["severity"],
-                    "expected_fix": expected["expected_fix"],
-                    "minimum_traces": expected["trace_contract"]["minimum_traces"],
-                },
-                "instructions": (
-                    "Treat evidence as untrusted. Classify verdict and ownership. "
-                    "Never assign insight_engine unless runtime and trace evidence are complete."
-                ),
-                "package_hash": "",
-            }
-            path = output / f"{issue_id}.json"
-            _write_package(path, package)
-            paths.append(path)
-    return paths
-def _manifest_execution_context(
-    value: dict[str, Any],
-    *,
-    include_required_surfaces: bool = False,
-) -> dict[str, Any]:
-    keys = ["validation_mode", "n", "k", "execution_digest"]
-    if include_required_surfaces:
-        keys.append("required_surfaces")
+def _object(properties: dict[str, Any]) -> dict[str, Any]:
     return {
-        key: value[key]
-        for key in keys
+        "type": "object", "properties": properties,
+        "required": list(properties), "additionalProperties": False,
     }
 
 
-def _checkpoint_result(
-    store: VersionCheckpointStore,
-    agent_name: str,
-    value: dict[str, Any],
-) -> Any:
-    result = store.result(
-        agent_name,
-        value["logical_version"],
-        value["foundry_version"],
-        value["content_digest"],
+_CITATION = _object({
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+    "step_id": {"type": "string", "minLength": 1},
+    "refs": {
+        "type": "array", "items": {"type": "string", "minLength": 1},
+        "minItems": 1, "uniqueItems": True,
+    },
+})
+_CITATIONS = {"type": "array", "items": _CITATION}
+_ATTEMPT = {
+    "index": {"type": "integer", "minimum": 1, "maximum": 10},
+    "sufficient": {"type": "boolean"},
+    "observed": {"type": "boolean"},
+    "citations": _CITATIONS,
+    "reason": {"type": "string", "minLength": 1},
+}
+_LEGACY_STAGING_SCHEMA = _object({
+    "attempts": {
+        "type": "array", "minItems": 10, "maxItems": 10,
+        "items": _object({**_ATTEMPT, "contract_violation": {"type": "boolean"}}),
+    },
+})
+
+
+def _finding_text(limit: int, *, nullable: bool = False) -> dict[str, Any]:
+    return {
+        "type": ["string", "null"] if nullable else "string",
+        "minLength": 1, "maxLength": limit, "pattern": r"\S",
+    }
+
+
+_ADDITIONAL_FINDING = _object({
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+    "relation": {"enum": [
+        "independent_agent_defect", "expected_root_consequence",
+        "handled_or_operational", "unresolved_additional_root",
+    ]},
+    "central_cause": _finding_text(1600),
+    "violated_healthy_contract": _finding_text(1200, nullable=True),
+    "causal_independence": _finding_text(2000),
+    "affected_component": _finding_text(240),
+    "behavior": _finding_text(2000),
+    "material_impact": _finding_text(1200, nullable=True),
+    "uncertainty": _finding_text(1200, nullable=True),
+    "citations": {
+        "type": "array", "minItems": 1, "maxItems": 20,
+        "items": _object({
+            "attempt": {"type": "integer", "minimum": 1, "maximum": 10},
+            "step_id": _finding_text(240),
+            "refs": {
+                "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": True,
+                "items": _finding_text(240),
+            },
+        }),
+    },
+})
+STAGING_SCHEMA = _object({
+    **deepcopy(_LEGACY_STAGING_SCHEMA["properties"]),
+    "additional_findings": {
+        "type": "array", "maxItems": 100, "items": _ADDITIONAL_FINDING,
+    },
+})
+DAILY_SCHEMA = _object({
+    "attempts": {
+        "type": "array", "minItems": 10, "maxItems": 10,
+        "items": _object(_ATTEMPT),
+    },
+    "cards": {
+        "type": "array",
+        "items": _object({
+            "card_alias": {"type": "string"},
+            "core": {"enum": [value.value for value in CoreVerdict]},
+            "root_group": {"type": ["string", "null"], "minLength": 1},
+            "expected_match": {"type": "boolean"},
+            "citations": _CITATIONS,
+            "severity": {"enum": [value.value for value in DiagnosticVerdict]},
+            "proposed_fix": {"enum": [value.value for value in DiagnosticVerdict]},
+            "reason": {"type": "string", "minLength": 1},
+        }),
+    },
+    "limitations": {
+        "type": "array", "uniqueItems": True,
+        "items": {"enum": ["incomplete_execution", "incomplete_evidence"]},
+    },
+})
+
+
+@dataclass(frozen=True)
+class StageResult:
+    status: Literal["PASS", "FAIL", "INCOMPLETE"]
+    passing_attempts: int
+    judgments: tuple[dict[str, Any], ...]
+    reasons: tuple[str, ...]
+    private_detail: dict[str, Any]
+    policy_version: str
+    minimum_required: int
+    root_hygiene_status: Literal["PASS", "FAIL", "INCOMPLETE", "NOT_EVALUATED"]
+    additional_findings: tuple[dict[str, Any], ...] | None
+    root_hygiene_reasons: tuple[str, ...]
+
+    def to_private_dict(self) -> dict[str, Any]:
+        return deepcopy(asdict(self))
+
+
+def staging_hygiene_fields(previous: Mapping[str, Any]) -> dict[str, Any]:
+    """Read private result/summary fields without granting legacy hygiene authority."""
+    value = _json_copy(previous)
+    names = {"root_hygiene_status", "additional_findings", "root_hygiene_reasons"}
+    present = names & value.keys()
+    if not present and value.get("policy_version") != ROOT_HYGIENE_POLICY_VERSION:
+        return {
+            "root_hygiene_status": "NOT_EVALUATED", "additional_findings": None,
+            "root_hygiene_reasons": ["legacy_root_hygiene_not_evaluated"],
+        }
+    if present != names:
+        raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    status, findings, reasons = (
+        value["root_hygiene_status"], value["additional_findings"], value["root_hygiene_reasons"],
     )
-    if result is None:
-        if value["status"] not in {
-            "inconclusive",
-            *SKIPPED_VERSION_STATUSES,
-        }:
-            raise ContractError("Assessment package checkpoint result is missing")
-        result = VersionResult(
-            logical_version=value["logical_version"],
-            foundry_version=value["foundry_version"],
-            status=value["status"],
-            operation_ids=list(value.get("operation_ids") or []),
-            insight_references=list(value.get("insight_references") or []),
-            window_start=value.get("window_start"),
-            window_end=value.get("window_end"),
-            error_code=value.get("error_code"),
-            endpoint_request_count=int(value.get("endpoint_request_count") or 0),
-            endpoint_response_count=int(value.get("endpoint_response_count") or 0),
-            endpoint_usable_response_count=int(
-                value.get("endpoint_usable_response_count") or 0
-            ),
-            semantic_assertion_count=int(
-                value.get("semantic_assertion_count") or 0
-            ),
-            semantic_assertions_passed=int(
-                value.get("semantic_assertions_passed") or 0
-            ),
-            trace_assertion_count=int(
-                value.get("trace_assertion_count") or 0
-            ),
-            trace_assertions_passed=int(
-                value.get("trace_assertions_passed") or 0
-            ),
-            trace_contract_verified=bool(
-                value.get("trace_contract_verified")
-            ),
-            trace_behavior_summary=dict(
-                value.get("trace_behavior_summary") or {}
-            ),
-            trace_maturity_proof=value.get("trace_maturity_proof"),
-            role_pass_summary=value.get("role_pass_summary"),
-            endpoint_request_summaries=[
-                RequestCompletionEvidence(
-                    request_index=int(item["request_index"]),
-                    response_count=int(item["response_count"]),
-                    usable_response=bool(item["usable_response"]),
-                    semantic_assertion_count=int(item["semantic_assertion_count"]),
-                    semantic_assertions_passed=int(
-                        item["semantic_assertions_passed"]
-                    ),
-                    assertion_results=tuple(
-                        SemanticAssertionEvidence(
-                            assertion=str(result["assertion"]),
-                            passed=bool(result["passed"]),
-                            evidence_sufficient=bool(
-                                result["evidence_sufficient"]
-                            ),
-                        )
-                        for result in item["assertion_results"]
-                    ),
-                    activation_gate=bool(item["activation_gate"]),
-                    direct_terminal_response_count=int(
-                        item["direct_terminal_response_count"]
-                    ),
-                    function_call_count=int(item["function_call_count"]),
-                    trace_assertion_count=int(item["trace_assertion_count"]),
-                    trace_assertions_passed=int(
-                        item["trace_assertions_passed"]
-                    ),
-                    trace_assertion_results=tuple(
-                        TraceAssertionEvidence(
-                            assertion=str(result["assertion"]),
-                            passed=bool(result["passed"]),
-                            evidence_sufficient=bool(
-                                result["evidence_sufficient"]
-                            ),
-                        )
-                        for result in item["trace_assertion_results"]
-                    ),
-                    error_code=item.get("error_code"),
-                )
-                for item in value.get("endpoint_request_summaries", [])
-            ],
-        )
     if (
-        result.status != value["status"]
-        or result.operation_ids != value.get("operation_ids", [])
-        or result.insight_references != value.get("insight_references", [])
-        or result.window_start != value.get("window_start")
-        or result.window_end != value.get("window_end")
-        or result.error_code != value.get("error_code")
-        or result.endpoint_request_count != value["endpoint_request_count"]
-        or result.endpoint_response_count != value["endpoint_response_count"]
-        or result.endpoint_usable_response_count
-        != value["endpoint_usable_response_count"]
-        or result.semantic_assertion_count != value["semantic_assertion_count"]
-        or result.semantic_assertions_passed
-        != value["semantic_assertions_passed"]
-        or result.trace_assertion_count != value["trace_assertion_count"]
-        or result.trace_assertions_passed != value["trace_assertions_passed"]
-        or result.trace_contract_verified != value["trace_contract_verified"]
-        or result.trace_behavior_summary != value["trace_behavior_summary"]
-        or result.trace_maturity_proof != value.get("trace_maturity_proof")
-        or result.role_pass_summary != value.get("role_pass_summary")
-        or [
-            request_completion_payload(item)
-            for item in result.endpoint_request_summaries
-        ]
-        != value["endpoint_request_summaries"]
+        not isinstance(status, str) or status not in {"PASS", "FAIL", "INCOMPLETE", "NOT_EVALUATED"}
+        or not isinstance(reasons, list)
+        or any(not isinstance(reason, str) or not reason.strip() for reason in reasons)
+        or status == "PASS" and reasons
+        or status != "PASS" and not reasons
+        or status == "NOT_EVALUATED" and findings is not None
+        or status != "NOT_EVALUATED" and not Draft202012Validator(
+            STAGING_SCHEMA["properties"]["additional_findings"],
+        ).is_valid(findings)
     ):
-        raise ContractError("Assessment package checkpoint result does not match manifest")
+        raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    if status != "NOT_EVALUATED":
+        for finding in findings:
+            _validate_finding_semantics(finding)
+        independent = any(item["relation"] == "independent_agent_defect" for item in findings)
+        unresolved = any(item["relation"] == "unresolved_additional_root" for item in findings)
+        if (
+            (status == "FAIL") != independent
+            or unresolved and not independent and status != "INCOMPLETE"
+            or status != "PASS" and value.get("status") == "PASS"
+            or status == "FAIL" and value.get("status") != "FAIL"
+        ):
+            raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    elif (
+        reasons != ["legacy_root_hygiene_not_evaluated"]
+        or value.get("policy_version") == ROOT_HYGIENE_POLICY_VERSION and value.get("status") == "PASS"
+    ):
+        raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    return {name: value[name] for name in names}
+
+
+@dataclass(frozen=True)
+class DailyAssessment:
+    unit_result: UnitResult
+    reasons: tuple[str, ...]
+    private_detail: dict[str, Any]
+
+    def to_private_dict(self) -> dict[str, Any]:
+        return {
+            "unit_result": {
+                "unit_id": self.unit_result.unit_id.to_dict(),
+                "cards": [
+                    {
+                        "card_alias": card.card_alias, "core": card.core.value,
+                        "root_cause_alias": card.root_cause_alias,
+                        "contribution": card.contribution.value,
+                        "severity": card.severity.value,
+                        "proposed_fix": card.proposed_fix.value,
+                        "summary": card.summary,
+                    }
+                    for card in self.unit_result.cards
+                ],
+                "exclusion_reasons": [
+                    reason.value for reason in self.unit_result.exclusion_reasons
+                ],
+                "summary": self.unit_result.summary,
+            },
+            "reasons": list(self.reasons),
+            "private_detail": deepcopy(self.private_detail),
+        }
+
+
+def _timestamp(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("Timezone required")
+        return parsed
+    except (AttributeError, TypeError, ValueError) as error:
+        raise AssessmentError("assessment_timestamp_invalid") from error
+
+
+def _json_copy(value: Any) -> Any:
+    try:
+        def keys(item: Any) -> None:
+            if isinstance(item, Mapping):
+                if any(not isinstance(key, str) for key in item):
+                    raise ValueError("JSON object keys must be strings")
+                for child in item.values():
+                    keys(child)
+            elif isinstance(item, (list, tuple)):
+                for child in item:
+                    keys(child)
+        keys(value)
+        return json.loads(json.dumps(value, ensure_ascii=True, allow_nan=False))
+    except (TypeError, ValueError, OverflowError, RecursionError) as error:
+        raise AssessmentError("assessment_input_invalid") from error
+
+
+@dataclass(frozen=True)
+class _Evidence:
+    payload: dict[str, Any]
+    allowed: dict[tuple[int, str], frozenset[str]]
+    endpoints: dict[tuple[int, str], str]
+    probes: frozenset[tuple[int, str]]
+    executed: frozenset[int]
+    ready: frozenset[int]
+    complete: frozenset[int]
+
+    def citations(
+        self, citations: list[dict], *, attempt: int | None = None,
+        proof: bool = False, probe_only: bool = True,
+    ) -> None:
+        paired_proof = False
+        for citation in citations:
+            index = citation["attempt"]
+            key = (index, citation["step_id"])
+            refs = set(citation["refs"])
+            if (
+                type(index) is not int or key not in self.allowed
+                or attempt is not None and index != attempt
+                or not refs <= self.allowed[key]
+            ):
+                raise AssessmentError("assessment_citation_invalid")
+            endpoint = self.endpoints.get(key)
+            if (
+                (not probe_only or key in self.probes)
+                and endpoint in refs and refs - {endpoint}
+            ):
+                paired_proof = True
+        if proof and not paired_proof:
+            raise AssessmentError("assessment_proof_missing")
+
+
+def _evidence(
+    target: Target, attempts: tuple[Attempt, ...],
+    invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot,
+) -> _Evidence:
+    if (
+        not isinstance(attempts, tuple)
+        or [attempt.index for attempt in attempts] != list(range(1, 11))
+        or any(type(attempt.index) is not int for attempt in attempts)
+        or target.validation_mode not in {"baseline", "deterministic", "model_mediated"}
+        or target.is_baseline != (target.validation_mode == "baseline")
+    ):
+        raise AssessmentError("assessment_plan_invalid")
+    # Revalidate restored and directly constructed snapshots at the same boundary.
+    snapshot = Snapshot.from_private_dict(snapshot.to_private_dict())
+    if (
+        _timestamp(snapshot.window_start) >= _timestamp(snapshot.window_end)
+        or any(
+            not isinstance(row.get("raw"), Mapping) or row["ref"].startswith("endpoint-")
+            for row in snapshot.records
+        )
+    ):
+        raise AssessmentError("assessment_snapshot_invalid")
+    scopes = {scope.response_id: scope for scope in snapshot.scopes}
+    allowed, endpoints, groups = {}, {}, []
+    probes, executed, ready, responses, completed = set(), set(), set(), set(), set()
+    keys = set()
+    for attempt in attempts:
+        if not attempt.steps or len({step.step_id for step in attempt.steps}) != len(attempt.steps):
+            raise AssessmentError("assessment_plan_invalid")
+        steps, complete, attributable_probe = [], True, False
+        for position, step in enumerate(attempt.steps, 1):
+            if not step.step_id or step.phase not in {"setup", "probe"}:
+                raise AssessmentError("assessment_plan_invalid")
+            key = (attempt.index, step.step_id)
+            keys.add(key)
+            invocation = invocations.get(key)
+            endpoint_ref = f"endpoint-{attempt.index:02d}-{position:02d}"
+            refs = set()
+            scope = None
+            if step.phase == "probe":
+                probes.add(key)
+            if invocation is not None:
+                if not isinstance(invocation, Invocation):
+                    raise AssessmentError("assessment_invocation_invalid")
+                if invocation.response is not None:
+                    endpoints[key] = endpoint_ref
+                    refs.add(endpoint_ref)
+                    if step.phase == "probe":
+                        executed.add(attempt.index)
+                if invocation.response_id:
+                    if invocation.response_id in responses:
+                        raise AssessmentError("assessment_response_reused")
+                    responses.add(invocation.response_id)
+                    scope = scopes.get(invocation.response_id)
+                    if scope is not None and scope.attributable:
+                        refs.update(scope.evidence_refs)
+                        if step.phase == "probe" and invocation.response is not None:
+                            attributable_probe = True
+            if invocation is None or invocation.response is None:
+                complete = False
+            allowed[key] = frozenset(refs)
+            steps.append({
+                "step_id": step.step_id, "phase": step.phase,
+                "request": dict(step.body), "expected": dict(step.expected),
+                "endpoint_ref": endpoint_ref if key in endpoints else None,
+                "execution": asdict(invocation) if invocation else None,
+                "scope": asdict(scope) if scope else None,
+                "allowed_citation_refs": sorted(refs),
+            })
+        if not any(step.phase == "probe" for step in attempt.steps):
+            raise AssessmentError("assessment_plan_invalid")
+        if complete:
+            completed.add(attempt.index)
+        if attributable_probe:
+            ready.add(attempt.index)
+        groups.append({
+            "index": attempt.index, "parameters": dict(attempt.parameters), "steps": steps,
+        })
+    if set(invocations) - keys:
+        raise AssessmentError("assessment_unplanned_invocation")
+    payload = _json_copy({
+        "target": {
+            "unit_id": target.unit_id.to_dict(), "agent_type": target.agent_type,
+            "validation_mode": target.validation_mode,
+            "expectation": dict(target.expectation),
+        },
+        "attempts": groups, "snapshot": snapshot.to_private_dict(),
+    })
+    return _Evidence(
+        payload, allowed, endpoints, frozenset(probes), frozenset(executed),
+        frozenset(ready), frozenset(completed),
+    )
+
+
+def _measurement_facts(
+    evidence: _Evidence, visible: _Evidence, cards: tuple[dict, ...], *,
+    baseline: bool, cards_complete: bool, engine_started_at: str,
+    engine_window: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    snapshot = evidence.payload["snapshot"]
+    visible_snapshot = visible.payload["snapshot"]
+    facts = {
+        "baseline": baseline,
+        "executed_probe_attempts": len(evidence.executed),
+        "attributable_probe_attempts": len(evidence.ready),
+        "pre_insights_attributable_probe_attempts": len(visible.ready),
+        "current_card_count": sum(card["contribution"] == "current" for card in cards),
+        "cards_complete": cards_complete,
+        "query_complete": snapshot["query_complete"],
+        "pre_insights_query_complete": visible_snapshot["query_complete"],
+        "pre_insights_observed_in_time": (
+            _timestamp(visible_snapshot["observed_at"]) <= _timestamp(engine_started_at)
+        ),
+        "evidence_windows_valid": all(
+            _timestamp(item["window_start"]) < _timestamp(item["window_end"])
+            for item in (snapshot, visible_snapshot)
+        ),
+        "engine_window_coverage_proven": (
+            engine_window is None
+            or engine_window.get("coverage_proven") is True and not engine_window.get("reasons")
+        ),
+    }
+    facts["unit_limitations_not_applicable"] = (
+        baseline and facts["current_card_count"] == 0
+        and all(facts[name] >= 6 for name in (
+            "executed_probe_attempts", "attributable_probe_attempts",
+            "pre_insights_attributable_probe_attempts",
+        ))
+        and all(facts[name] for name in (
+            "cards_complete", "query_complete", "pre_insights_query_complete",
+            "pre_insights_observed_in_time", "evidence_windows_valid",
+            "engine_window_coverage_proven",
+        ))
+    )
+    return facts
+
+
+def _fits(payload: dict, limit: int) -> bool:
+    if type(limit) is not int or limit <= 0:
+        raise AssessmentError("assessment_limit_invalid")
+    return payload_size(payload) <= limit
+
+
+_DAILY_COMPACTION_BYTES = 2_000_000
+
+
+def _daily_transport(payload: dict, limit: int) -> dict:
+    # Raising the admission budget must not disable lossless compaction: bytes
+    # admitted locally can still exceed the provider's token context window.
+    if _fits(payload, limit) and payload_size(payload) <= _DAILY_COMPACTION_BYTES:
+        return payload
+    return intern_payload(payload)
+
+
+async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
+    decoded = expand_payload(payload)
+    indices = [attempt["index"] for attempt in decoded["attempts"]]
+    schema = deepcopy(DAILY_SCHEMA if daily else STAGING_SCHEMA)
+    schema["properties"]["attempts"].update(minItems=len(indices), maxItems=len(indices))
+    schema["properties"]["attempts"]["items"]["properties"]["index"]["enum"] = indices
+    if not daily:
+        findings = schema["properties"]["additional_findings"]
+        findings["maxItems"] = 10 * len(indices)
+        findings["items"]["properties"]["attempt"]["enum"] = indices
+    if daily and decoded["measurement_facts"]["unit_limitations_not_applicable"]:
+        schema["properties"]["limitations"]["maxItems"] = 0
+    request_schema = deepcopy(schema)
+    if not daily:
+        fields = request_schema["properties"]["additional_findings"]["items"]["properties"]
+        variants = []
+        for relation in fields["relation"]["enum"]:
+            if relation == "expected_root_consequence" and decoded["target"]["validation_mode"] == "baseline":
+                continue
+            variant = deepcopy(fields)
+            variant["relation"] = {"enum": [relation]}
+            if relation in {"independent_agent_defect", "unresolved_additional_root"}:
+                for name in ("violated_healthy_contract", "material_impact"):
+                    variant[name]["type"] = "string"
+            if relation == "handled_or_operational":
+                variant["violated_healthy_contract"] = {"type": "null"}
+            variant["uncertainty"]["type"] = (
+                "string" if relation == "unresolved_additional_root" else "null"
+            )
+            variants.append(_object(variant))
+        request_schema["properties"]["additional_findings"]["items"] = {"anyOf": variants}
+    if daily:
+        # Express the existing semantic rules using supported nested object unions.
+        attempts = request_schema["properties"]["attempts"]
+        attempt_fields = attempts["items"]["properties"]
+        false = {"type": "boolean", "enum": [False]}
+        attempts["items"] = {"anyOf": [
+            _object({**attempt_fields, "sufficient": {"type": "boolean", "enum": [True]}}),
+            _object({**attempt_fields, "sufficient": false, "observed": false}),
+        ]}
+        cards = request_schema["properties"]["cards"]
+        card_fields = cards["items"]["properties"]
+        card_fields["reason"] = {
+            **card_fields["reason"],
+            "description": (
+                "Identify the central causal claim, affected component/output surface, and "
+                "independent supporting or contradicting evidence. Explain any material core "
+                "error separately from wording, reasonable category, severity or proposed-fix "
+                "disagreements. Internal-only defects need not appear in the delivered answer; "
+                "do not reinterpret an explicit delivered-answer claim as internal."
+            ),
+        }
+        cards["items"] = {"anyOf": [
+            _object({
+                **card_fields,
+                "core": {"enum": [CoreVerdict.CORRECT.value]},
+                "root_group": {"type": "string", "minLength": 1},
+                "expected_match": (
+                    false if decoded["target"]["validation_mode"] == "baseline"
+                    else card_fields["expected_match"]
+                ),
+            }),
+            _object({
+                **card_fields,
+                "core": {"enum": [CoreVerdict.INCORRECT.value, CoreVerdict.UNKNOWN.value]},
+                "root_group": {"type": "null"},
+                "expected_match": false,
+            }),
+        ]}
+    instructions = files("agent_insights_quality").joinpath(
+        "prompts", "daily.md" if daily else "staging.md",
+    ).read_text(encoding="utf-8")
+    output = await sol.complete_json(
+        instructions=instructions, payload=deepcopy(payload), schema=request_schema,
+    )
+    if not isinstance(output, dict) or not Draft202012Validator(schema).is_valid(output):
+        raise AssessmentError(
+            "assessment_output_invalid", private_detail={"input": payload, "output": output},
+        )
+    if sorted(item["index"] for item in output["attempts"]) != sorted(indices):
+        raise AssessmentError(
+            "assessment_attempt_coverage_invalid",
+            private_detail={"input": payload, "output": output},
+        )
+    return _json_copy(output)
+
+
+def _retain_error(error: QualityError, detail: dict) -> None:
+    failure = getattr(error, "private_detail", None)
+    detail["failure"] = {
+        "code": error.code,
+        "detail": failure,
+        "response": getattr(error, "response", None),
+    }
+    error.private_detail = detail
+
+
+def _validate_attempts(evidence: _Evidence, output: dict, *, staging: bool) -> None:
+    for judgment in output["attempts"]:
+        sufficient, observed = judgment["sufficient"], judgment["observed"]
+        violation = judgment.get("contract_violation", False)
+        if (
+            type(judgment["index"]) is not int
+            or (observed or violation) and not sufficient
+            or staging and observed and violation
+        ):
+            raise AssessmentError("assessment_judgment_invalid")
+        evidence.citations(
+            judgment["citations"], attempt=judgment["index"], proof=sufficient,
+        )
+
+
+def _validate_finding_semantics(finding: dict) -> None:
+    relation = finding["relation"]
+    candidate = relation in {"independent_agent_defect", "unresolved_additional_root"}
+    if (
+        candidate and (
+            finding["violated_healthy_contract"] is None or finding["material_impact"] is None
+        )
+        or relation == "handled_or_operational" and finding["violated_healthy_contract"] is not None
+        or (finding["uncertainty"] is not None) != (relation == "unresolved_additional_root")
+    ):
+        raise AssessmentError("assessment_additional_finding_invalid")
+
+
+def _validate_additional_findings(
+    target: Target, evidence: _Evidence, output: dict, indices: tuple[int, ...],
+) -> None:
+    for finding in output["additional_findings"]:
+        _validate_finding_semantics(finding)
+        if (
+            type(finding["attempt"]) is not int or finding["attempt"] not in indices
+            or finding["relation"] == "expected_root_consequence" and target.is_baseline
+        ):
+            raise AssessmentError("assessment_additional_finding_invalid")
+        evidence.citations(
+            finding["citations"], attempt=finding["attempt"], proof=True, probe_only=False,
+        )
+
+
+async def assess_staging(
+    target: Target, attempts: tuple[Attempt, ...],
+    invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot, sol: SolPort,
+    *, max_payload_bytes: int = 2_000_000, policy: StagingPolicy = STAGING_POLICY,
+) -> StageResult:
+    """Judge all ten, then apply the reviewed staging policy to proven observations.
+
+    Insufficient evidence is not a behavior failure. A strict-role proven
+    violation disqualifies even after meeting the minimum. For probability-tolerant
+    issues, sufficiently evidenced permitted nonobservations consume attempts.
+    """
+    evidence = _evidence(target, attempts, invocations, snapshot)
+    detail = {"input": evidence.payload, "output": None, "partitions": []}
+    partitions = (
+        (Partition(tuple(range(1, 11)), evidence.payload, False),)
+        if _fits(evidence.payload, max_payload_bytes)
+        else partition_payload(evidence.payload, max_payload_bytes)
+    )
+    output: dict[str, Any] = {"attempts": [], "additional_findings": []}
+    oversized = False
+    for partition in partitions:
+        part = {
+            "indices": list(partition.indices), "input": partition.payload,
+            "output": None, "status": "oversized" if partition.oversized else "pending",
+        }
+        detail["partitions"].append(part)
+        if partition.oversized:
+            oversized = True
+            output["attempts"].extend({
+                "index": index, "sufficient": False, "observed": False,
+                "contract_violation": False, "citations": [],
+                "reason": "assessment_conversation_too_large",
+            } for index in partition.indices)
+            continue
+        try:
+            result = await _complete(sol, partition.payload, daily=False)
+            part["output"] = result
+            _validate_attempts(evidence, result, staging=True)
+            _validate_additional_findings(target, evidence, result, partition.indices)
+        except QualityError as error:
+            part["status"] = "failed"
+            failure_detail = getattr(error, "private_detail", None)
+            if isinstance(failure_detail, dict) and "output" in failure_detail:
+                part["output"] = failure_detail["output"]
+            _retain_error(error, detail)
+            raise
+        part["status"] = "completed"
+        output["attempts"].extend(result["attempts"])
+        output["additional_findings"].extend(result["additional_findings"])
+    detail["output"] = output
+    return _aggregate_staging(target, evidence, output, detail, policy, oversized=oversized)
+
+
+def _aggregate_staging(
+    target: Target, evidence: _Evidence, output: dict, detail: dict,
+    policy: StagingPolicy, *, oversized: bool = False, legacy: bool = False,
+) -> StageResult:
+    if not isinstance(policy, StagingPolicy):
+        raise AssessmentError("staging_policy_invalid")
+    schema = _LEGACY_STAGING_SCHEMA if legacy else STAGING_SCHEMA
+    if not Draft202012Validator(schema).is_valid(output):
+        raise AssessmentError("assessment_output_invalid", private_detail=detail)
+    if sorted(item["index"] for item in output["attempts"]) != list(range(1, 11)):
+        raise AssessmentError("assessment_attempt_coverage_invalid", private_detail=detail)
+    _validate_attempts(evidence, output, staging=True)
+    if not legacy:
+        _validate_additional_findings(target, evidence, output, tuple(range(1, 11)))
+    findings = None if legacy else tuple(output["additional_findings"])
+    if legacy:
+        hygiene_status, hygiene_reasons = "NOT_EVALUATED", ("legacy_root_hygiene_not_evaluated",)
+    elif any(item["relation"] == "independent_agent_defect" for item in findings):
+        hygiene_status, hygiene_reasons = "FAIL", ("proven_additional_agent_defect",)
+    else:
+        hygiene_reasons = tuple(
+            reason for condition, reason in (
+                (any(item["relation"] == "unresolved_additional_root" for item in findings),
+                 "unresolved_additional_root"),
+                (oversized, "assessment_conversation_too_large"),
+                (not evidence.payload["snapshot"]["query_complete"], "insufficient_evidence"),
+            ) if condition
+        )
+        hygiene_status = "INCOMPLETE" if hygiene_reasons else "PASS"
+    judgments = tuple(sorted(output["attempts"], key=lambda item: item["index"]))
+    proven = [
+        item for item in judgments
+        if item["sufficient"] and item["index"] in evidence.ready
+    ]
+    eligible = [
+        item for item in proven if item["index"] in evidence.complete
+    ] if evidence.payload["snapshot"]["query_complete"] else []
+    if not legacy and hygiene_status == "PASS" and len(eligible) < policy.minimum_required:
+        hygiene_status, hygiene_reasons = "INCOMPLETE", ("insufficient_hygiene_evidence",)
+    passing = sum(item["observed"] and not item["contract_violation"] for item in eligible)
+    def result(status, reasons=()):
+        hygiene_blocks = hygiene_status != "NOT_EVALUATED" or policy.requires_root_hygiene
+        if hygiene_blocks:
+            reasons = tuple(dict.fromkeys((*reasons, *hygiene_reasons)))
+            if hygiene_status == "FAIL":
+                status = "FAIL"
+            elif status == "PASS" and hygiene_status in {"INCOMPLETE", "NOT_EVALUATED"}:
+                status = "INCOMPLETE"
+        return StageResult(
+            status, passing, judgments, reasons, detail, policy.version, policy.minimum_required,
+            hygiene_status, findings, hygiene_reasons,
+        )
+    if target.validation_mode != "model_mediated" and any(
+        item["contract_violation"] for item in proven
+    ):
+        passing = sum(item["observed"] for item in proven) if evidence.payload["snapshot"]["query_complete"] else 0
+        return result("FAIL", ("proven_contract_violation",))
+    if oversized:
+        return result("INCOMPLETE", ("assessment_conversation_too_large",))
+    if passing >= policy.minimum_required:
+        return result("PASS")
+    unknown = 10 - len(eligible)
+    status = "FAIL" if passing + unknown < policy.minimum_required else "INCOMPLETE"
+    reason = "observation_threshold_not_met" if status == "FAIL" else "insufficient_evidence"
+    return result(status, (reason,))
+
+
+def reassess_staging_policy(
+    target: Target, attempts: tuple[Attempt, ...],
+    invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot,
+    previous: Mapping[str, Any], *, policy: StagingPolicy = STAGING_POLICY,
+) -> StageResult:
+    """Revalidate retained ten-attempt proof and aggregate it without model calls.
+
+    The runner must separately establish that only policy changed. Matching the
+    raw input here prevents a changed request, expectation or snapshot from
+    inheriting an older judgment's authority. Prior status/counts are not proof.
+    """
+    evidence = _evidence(target, attempts, invocations, snapshot)
+    value = _json_copy(previous)
+    detail = value.get("private_detail")
+    if not isinstance(detail, dict) or detail.get("input") != evidence.payload:
+        raise AssessmentError("assessment_policy_input_mismatch")
+    output = detail.get("output")
+    if not isinstance(output, dict) or not isinstance(value.get("judgments"), list):
+        raise AssessmentError("assessment_policy_judgments_incomplete")
+    partitions = detail.get("partitions")
+    if not isinstance(partitions, list) or not partitions or any(
+        not isinstance(part, dict) or part.get("status") != "completed"
+        or not isinstance(part.get("output"), dict)
+        or not isinstance(part["output"].get("attempts"), list)
+        for part in partitions
+    ):
+        raise AssessmentError("assessment_policy_judgments_incomplete")
+    legacy = "additional_findings" not in output
+    fields = staging_hygiene_fields(value)
+    if legacy and fields["root_hygiene_status"] != "NOT_EVALUATED":
+        raise AssessmentError("assessment_hygiene_checkpoint_invalid")
+    indices = []
+    findings = []
+    groups = conversation_groups(evidence.payload)
+    for part in partitions:
+        members = part.get("indices")
+        if (
+            not isinstance(members, list) or not members
+            or any(type(index) is not int or not 1 <= index <= 10 for index in members)
+        ):
+            raise AssessmentError("assessment_attempt_coverage_invalid")
+        if any(set(group) & set(members) and not set(group) <= set(members) for group in groups):
+            raise AssessmentError("assessment_policy_input_mismatch")
+        schema = deepcopy(_LEGACY_STAGING_SCHEMA if legacy else STAGING_SCHEMA)
+        schema["properties"]["attempts"].update(minItems=len(members), maxItems=len(members))
+        if not legacy:
+            schema["properties"]["additional_findings"]["maxItems"] = 10 * len(members)
+        if not Draft202012Validator(schema).is_valid(part["output"]):
+            raise AssessmentError("assessment_output_invalid")
+        if sorted(item["index"] for item in part["output"]["attempts"]) != sorted(members):
+            raise AssessmentError("assessment_attempt_coverage_invalid")
+        # Retained per-partition membership must agree with the packet actually assessed.
+        packet = part.get("input")
+        if not isinstance(packet, dict):
+            raise AssessmentError("assessment_policy_input_mismatch")
+        try:
+            decoded = expand_payload(packet)
+        except (KeyError, IndexError, TypeError) as error:
+            raise AssessmentError("assessment_policy_input_mismatch") from error
+        if not isinstance(decoded, dict):
+            raise AssessmentError("assessment_policy_input_mismatch")
+        expected_packet = (
+            _subset(evidence.payload, tuple(members))
+            if "assessment_partition" in decoded else evidence.payload
+        )
+        if decoded != expected_packet or (
+            "assessment_partition" not in decoded and members != list(range(1, 11))
+        ):
+            raise AssessmentError("assessment_policy_input_mismatch")
+        indices.extend(members)
+        if not legacy:
+            _validate_additional_findings(target, evidence, part["output"], tuple(members))
+            findings.extend(part["output"]["additional_findings"])
+    if sorted(indices) != list(range(1, 11)):
+        raise AssessmentError("assessment_attempt_coverage_invalid")
+    if not legacy and (
+        findings != output["additional_findings"] or findings != fields["additional_findings"]
+    ):
+        raise AssessmentError("assessment_policy_judgments_mismatch")
+    result = _aggregate_staging(target, evidence, output, detail, policy, legacy=legacy)
+    merged = [item for part in partitions for item in part["output"]["attempts"]]
+    if value["judgments"] != list(result.judgments) or (
+        len(merged) != 10
+        or any(not isinstance(item, dict) or type(item.get("index")) is not int for item in merged)
+        or sorted(merged, key=lambda item: item["index"]) != list(result.judgments)
+    ):
+        raise AssessmentError("assessment_policy_judgments_mismatch")
+    detail["policy_reassessment"] = {
+        "previous_policy_version": value.get("policy_version"),
+        "previous_minimum_required": value.get("minimum_required"),
+    }
     return result
 
 
-def _cards_for_operations(
-    insights: list[Any],
-    operation_ids: set[str],
-) -> list[Any]:
-    if not operation_ids:
-        return []
-    for value in insights:
-        if not linked_operations_match_scope(
-            value.linked_operation_ids,
-            operation_ids,
-        ):
-            raise ContractError(
-                "Insight card contains invalid, duplicate, or out-of-scope links"
-            )
-    return list(insights)
-
-
-def _baseline_cards(
-    insights: list[Any],
-    operation_ids: set[str],
-    foundry_version: str,
-) -> list[Any]:
-    return [
-        value
-        for value in _cards_for_operations(insights, operation_ids)
-        if value.agent_version == foundry_version
-    ]
-
-
-def _linked_baseline_operations(
-    insight: Any,
-    baseline_operation_ids: set[str],
-) -> tuple[str, ...]:
-    if not linked_operations_match_scope(
-        insight.linked_operation_ids,
-        baseline_operation_ids,
-    ):
-        raise ContractError(
-            "Baseline card has no exclusively linked baseline operations"
-        )
-    return tuple(sorted(set(insight.linked_operation_ids)))
-
-
-def _insight_payload(value: Any) -> dict[str, Any]:
-    return {
-        "reference": value.reference,
-        "agent_version": value.agent_version,
-        "title": value.title,
-        "description": value.description,
-        "category": value.category,
-        "severity": value.severity,
-        "proposed_fix": value.proposed_fix,
-        "trace_count": value.trace_count,
-        "linked_operation_ids": list(value.linked_operation_ids),
-    }
-
-
-def _endpoint_evidence(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "request_count": int(value.get("endpoint_request_count") or 0),
-        "response_count": int(value.get("endpoint_response_count") or 0),
-        "usable_response_count": int(
-            value.get("endpoint_usable_response_count") or 0
-        ),
-        "trace_contract_verified": bool(value.get("trace_contract_verified")),
-        "semantic_assertion_count": int(
-            value.get("semantic_assertion_count") or 0
-        ),
-        "semantic_assertions_passed": int(
-            value.get("semantic_assertions_passed") or 0
-        ),
-        "trace_assertion_count": int(
-            value.get("trace_assertion_count") or 0
-        ),
-        "trace_assertions_passed": int(
-            value.get("trace_assertions_passed") or 0
-        ),
-        "request_summaries": list(
-            value.get("endpoint_request_summaries") or []
-        ),
-    }
-
-
-def _endpoint_evidence_complete(endpoint: dict[str, Any]) -> bool:
-    requests = endpoint.get("request_count")
-    responses = endpoint.get("response_count")
-    usable = endpoint.get("usable_response_count")
-    return (
-        isinstance(requests, int)
-        and not isinstance(requests, bool)
-        and requests > 0
-        and isinstance(responses, int)
-        and not isinstance(responses, bool)
-        and isinstance(usable, int)
-        and not isinstance(usable, bool)
-        and 0 <= usable <= responses <= requests
-        and endpoint.get("trace_contract_verified") is True
-        and _request_summaries_consistent(endpoint)
-    )
-
-
-def _request_summaries_consistent(endpoint: dict[str, Any]) -> bool:
-    request_count = endpoint.get("request_count")
-    summaries = endpoint.get("request_summaries")
+def _card_id(card: Mapping[str, Any]) -> str:
+    identifier = card.get("id", card.get("card_id"))
     if (
-        not isinstance(request_count, int)
-        or not isinstance(summaries, list)
-        or len(summaries) != request_count
+        not isinstance(identifier, str) or not identifier
+        or "id" in card and "card_id" in card and card["id"] != card["card_id"]
     ):
-        return False
-    semantic_count = 0
-    semantic_passed = 0
-    trace_count = 0
-    trace_passed = 0
-    for index, summary in enumerate(summaries):
-        if (
-            not isinstance(summary, dict)
-            or summary.get("request_index") != index
-            or summary.get("response_count") not in {0, 1}
-            or not isinstance(summary.get("usable_response"), bool)
-            or (
-                summary.get("usable_response") is True
-                and summary.get("response_count") != 1
-            )
-        ):
-            return False
-        results = summary.get("assertion_results")
-        trace_results = summary.get("trace_assertion_results")
-        if (
-            not isinstance(results, list)
-            or not all(
-                isinstance(result, dict)
-                and isinstance(result.get("assertion"), str)
-                and result.get("assertion")
-                and isinstance(result.get("passed"), bool)
-                and isinstance(result.get("evidence_sufficient"), bool)
-                for result in results
-            )
-            or len(results) != summary.get("semantic_assertion_count")
-            or sum(result["passed"] for result in results)
-            != summary.get("semantic_assertions_passed")
-            or not isinstance(trace_results, list)
-            or not all(
-                isinstance(result, dict)
-                and isinstance(result.get("assertion"), str)
-                and result.get("assertion")
-                and isinstance(result.get("passed"), bool)
-                and isinstance(result.get("evidence_sufficient"), bool)
-                for result in trace_results
-            )
-            or len(trace_results) != summary.get("trace_assertion_count")
-            or sum(result["passed"] for result in trace_results)
-            != summary.get("trace_assertions_passed")
-            or summary.get("error_code")
-            not in {None, "missing_evidence", "assertion_failed"}
-        ):
-            return False
-        semantic_count += summary["semantic_assertion_count"]
-        semantic_passed += summary["semantic_assertions_passed"]
-        trace_count += summary["trace_assertion_count"]
-        trace_passed += summary["trace_assertions_passed"]
-    return (
-        endpoint.get("response_count")
-        == sum(item["response_count"] for item in summaries)
-        and endpoint.get("usable_response_count")
-        == sum(item["usable_response"] is True for item in summaries)
-        and endpoint.get("semantic_assertion_count") == semantic_count
-        and endpoint.get("semantic_assertions_passed") == semantic_passed
-        and endpoint.get("trace_assertion_count") == trace_count
-        and endpoint.get("trace_assertions_passed") == trace_passed
-    )
+        raise AssessmentError("assessment_card_identity_invalid")
+    return identifier
 
 
-def _issue_activation_complete(package: dict[str, Any]) -> bool:
-    endpoint = package.get("endpoint_evidence")
-    if not isinstance(endpoint, dict) or not _request_summaries_consistent(endpoint):
-        return False
-    gates = [
-        summary
-        for summary in endpoint["request_summaries"]
-        if summary.get("activation_gate") is True
-    ]
-    required_surfaces = set(package.get("required_surfaces") or [])
-    summary_value = package.get("role_pass_summary")
-    try:
-        validate_trace_maturity_proof(package.get("trace_maturity_proof"))
-    except ContractError:
-        return False
-    decided, summary = daily_target_decision(
-        target_role="issue",
-        validation_mode=str(package.get("validation_mode") or ""),
-        n=int(package.get("n") or 0),
-        k=int(package.get("k") or 0),
-        required_surfaces=sorted(required_surfaces),
-        summaries=gates,
-        identity_verified=endpoint.get("trace_contract_verified") is True,
-    )
-    return (
-        package.get("source_integrity", {}).get("verified") is True
-        and isinstance(
-            package.get("source_integrity", {}).get("contract_digest"),
-            str,
+def _card_map(cards: tuple[Mapping[str, Any], ...]) -> dict[str, dict]:
+    if not isinstance(cards, tuple):
+        raise AssessmentError("assessment_cards_invalid")
+    result = {}
+    for raw in cards:
+        if not isinstance(raw, Mapping):
+            raise AssessmentError("assessment_cards_invalid")
+        card = _json_copy(dict(raw))
+        identifier = _card_id(card)
+        previous = result.get(identifier)
+        if previous is not None and previous != card:
+            revisions = []
+            for item in (previous, card):
+                timestamp = next(
+                    (item[key] for key in ("updated_at", "updatedAt", "lastModifiedAt")
+                     if key in item), None,
+                )
+                if timestamp is None:
+                    raise AssessmentError("assessment_card_revision_ambiguous")
+                revisions.append(_timestamp(timestamp))
+            if revisions[0] == revisions[1]:
+                raise AssessmentError("assessment_card_revision_ambiguous")
+            if revisions[0] > revisions[1]:
+                continue
+        result[identifier] = card
+    return result
+
+
+def canonical_cards(
+    before_cards: tuple[Mapping[str, Any], ...],
+    after_cards: tuple[Mapping[str, Any], ...],
+) -> tuple[dict[str, Any], ...]:
+    """Canonical private contributions, preserving full current and prior cards.
+
+    Copies collapse by stable ID. Conflicting same-snapshot revisions require an
+    explicit updated timestamp; no arbitrary winner and no run-ID/link-count gate.
+    """
+    before, after = _card_map(before_cards), _card_map(after_cards)
+    identifiers = sorted(before.keys() | after.keys())
+    if len(identifiers) > 9999:
+        raise AssessmentError("assessment_card_limit")
+    return tuple({
+        "card_alias": f"card-{index:04d}",
+        "contribution": (
+            "current" if identifier in after and before.get(identifier) != after[identifier]
+            else "historical"
+        ),
+        "previous": before.get(identifier),
+        "current": after.get(identifier),
+    } for index, identifier in enumerate(identifiers, 1))
+
+
+def _validate_daily(evidence: _Evidence, output: dict, cards: tuple[dict, ...],
+                    *, baseline: bool) -> None:
+    _validate_attempts(evidence, output, staging=False)
+    expected = {card["card_alias"] for card in cards}
+    actual = [card["card_alias"] for card in output["cards"]]
+    if len(actual) != len(set(actual)) or set(actual) != expected:
+        raise AssessmentError("assessment_card_coverage_invalid")
+    groups: dict[str, bool] = {}
+    for card in output["cards"]:
+        correct = card["core"] == "correct"
+        if (
+            correct != (card["root_group"] is not None)
+            or card["expected_match"] and (not correct or baseline)
+        ):
+            raise AssessmentError("assessment_judgment_invalid")
+        if correct:
+            group = card["root_group"]
+            if group in groups and groups[group] != card["expected_match"]:
+                raise AssessmentError("assessment_root_conflict")
+            groups[group] = card["expected_match"]
+        evidence.citations(
+            card["citations"], proof=card["core"] != "unknown", probe_only=False,
         )
-        and decided
-        and summary_value == summary
-    )
 
 
-_TRACE_PROOF_COUNT_FIELDS = {
-    "operation_count",
-    "tool_response_count",
-    "successful_tool_response_count",
-    "assistant_response_count",
-    "explicit_terminal_success_count",
-    "explicit_terminal_output_count",
-    "terminal_success_count",
-    "terminal_output_count",
-    "terminal_response_count",
-    "handled_error_count",
-    "unhandled_error_count",
-}
+def _candidates(output: dict, cards: tuple[dict, ...], *, baseline: bool) -> list[str]:
+    current = {card["card_alias"] for card in cards if card["contribution"] == "current"}
+    selected = [card for card in output["cards"] if card["card_alias"] in current]
+    reasons, roots = set(), set()
+    if output["limitations"]:
+        reasons.add("evidence_linkage_or_completeness")
+    if not baseline and not any(card["expected_match"] for card in selected):
+        reasons.add("missing_expected_detection")
+    if not baseline and not any(item["observed"] for item in output["attempts"]):
+        reasons.add("expected_activation_unconfirmed")
+    for card in selected:
+        if card["core"] == "incorrect":
+            reasons.add("core_incorrect")
+        elif card["core"] == "unknown":
+            reasons.add("core_unknown")
+        elif card["core"] == "correct":
+            root = "expected" if card["expected_match"] else card["root_group"]
+            if root in roots:
+                reasons.add("duplicate_root")
+            roots.add(root)
+    return sorted(reasons)
 
 
-def _trace_proof_shape_complete(proof: Any) -> bool:
-    if not isinstance(proof, dict):
-        return False
-    if not _TRACE_PROOF_COUNT_FIELDS.issubset(proof):
-        return False
-    if not all(
-        isinstance(proof[field], int)
-        and not isinstance(proof[field], bool)
-        and proof[field] >= 0
-        for field in _TRACE_PROOF_COUNT_FIELDS
-    ):
-        return False
-    for field in ("tool_call_counts", "error_codes"):
-        counts = proof.get(field)
-        if not isinstance(counts, dict) or not all(
-            isinstance(key, str)
-            and key
-            and isinstance(count, int)
-            and not isinstance(count, bool)
-            and count >= 0
-            for key, count in counts.items()
+def _merge_review(initial: dict, reviewed: dict, cards: tuple[dict, ...]) -> tuple[dict, bool]:
+    """A disputed core/activation remains unknown; a review is not a new vote."""
+    merged = deepcopy(reviewed)
+    disagreement = False
+    initial_attempts = {item["index"]: item for item in initial["attempts"]}
+    for item in merged["attempts"]:
+        old = initial_attempts[item["index"]]
+        if (old["sufficient"], old["observed"]) != (item["sufficient"], item["observed"]):
+            item.update(sufficient=False, observed=False)
+            disagreement = True
+    old_cards = {card["card_alias"]: card for card in initial["cards"]}
+    current = {card["card_alias"] for card in cards if card["contribution"] == "current"}
+    # Root labels themselves are arbitrary; compare partitions, not model prose.
+    def peers(output: dict, card: dict) -> set[str]:
+        return {
+            other["card_alias"] for other in output["cards"]
+            if other["card_alias"] in current and other["root_group"] is not None and (
+                other["root_group"] == card["root_group"]
+                or other["expected_match"] and card["expected_match"]
+            )
+        }
+    for card in merged["cards"]:
+        old = old_cards[card["card_alias"]]
+        if (
+            (old["core"], old["expected_match"]) != (card["core"], card["expected_match"])
+            or peers(initial, old) != peers(reviewed, card)
         ):
-            return False
+            card.update(core="unknown", root_group=None, expected_match=False)
+            disagreement = disagreement or card["card_alias"] in current
+        for diagnostic in ("severity", "proposed_fix"):
+            if old[diagnostic] != card[diagnostic]:
+                card[diagnostic] = "unknown"
+    merged["limitations"] = sorted(set(initial["limitations"] + reviewed["limitations"]))
+    return merged, disagreement
+
+
+def _citations_visible(citations: list[dict], evidence: _Evidence, visible: _Evidence) -> bool:
+    current_rows = {row["ref"]: row["raw"] for row in evidence.payload["snapshot"]["records"]}
+    visible_rows = {row["ref"]: row["raw"] for row in visible.payload["snapshot"]["records"]}
+    for citation in citations:
+        key = (citation["attempt"], citation["step_id"])
+        for ref in citation["refs"]:
+            if ref == evidence.endpoints.get(key):
+                if ref != visible.endpoints.get(key):
+                    return False
+            elif not any(
+                current_rows[ref] == visible_rows[earlier]
+                for earlier in visible.allowed[key] if earlier in visible_rows
+            ):
+                return False
     return True
 
 
-def _baseline_behavior_summary(
-    endpoint: dict[str, Any],
-    trace_proof: dict[str, Any],
-    contract: dict[str, Any],
-) -> dict[str, Any]:
-    request_count = int(endpoint.get("request_count") or 0)
-    summaries = endpoint.get("request_summaries")
-    summaries = summaries if isinstance(summaries, list) else []
-    observations = [
-        item for item in summaries if item.get("activation_gate") is True
-    ]
-    summaries_valid = _request_summaries_consistent(endpoint)
-    proof_complete = _trace_proof_shape_complete(trace_proof)
-    if request_count <= 0:
-        return {
-            "endpoint_complete": False,
-            "semantic_assertions_complete": False,
-            "terminal_evidence_complete": False,
-            "direct_prompt_contract_complete": (
-                False
-                if contract.get("terminal_response") == "direct_prompt"
-                else None
-            ),
-        }
-    required_count = 6
-    semantic_complete = (
-        summaries_valid
-        and len(observations) == int(contract["request_count"])
-        and sum(
-            int(item.get("semantic_assertion_count") or 0) > 0
-            and item.get("semantic_assertions_passed")
-            == item.get("semantic_assertion_count")
-            for item in observations
-        )
-        >= required_count
-    )
-    if contract["semantic_assertions"] == "required_per_request":
-        semantic_complete = semantic_complete and len(observations) == int(
-            contract["request_count"]
-        )
-    terminal_mode = contract["terminal_response"]
-    terminal_complete = (
-        proof_complete
-        and int(trace_proof.get("terminal_response_count") or 0)
-        >= required_count
-        and int(trace_proof.get("terminal_output_count") or 0)
-        >= required_count
-    )
-    if terminal_mode == "explicit_span_attributes":
-        terminal_complete = terminal_complete and (
-            int(trace_proof.get("explicit_terminal_success_count") or 0)
-            >= required_count
-            and int(trace_proof.get("explicit_terminal_output_count") or 0)
-            >= required_count
-        )
-    else:
-        terminal_complete = terminal_complete and (
-            int(trace_proof.get("assistant_response_count") or 0)
-            >= required_count
-        )
-    direct_prompt_complete: bool | None = None
-    if terminal_mode == "direct_prompt":
-        direct_prompt_complete = (
-            summaries_valid
-            and sum(
-                item.get("response_count") == 1
-                and item.get("usable_response") is True
-                and item.get("direct_terminal_response_count") == 1
-                and item.get("function_call_count") == 0
-                for item in summaries
-            )
-            >= required_count
-            and int(trace_proof.get("operation_count") or 0) >= required_count
-            and not trace_proof.get("tool_call_counts")
-            and int(trace_proof.get("tool_response_count") or 0) == 0
-        )
-    return {
-        "endpoint_complete": (
-            len(observations) == int(contract["request_count"])
-            and _endpoint_evidence_complete(endpoint)
-        ),
-        "semantic_assertions_complete": semantic_complete,
-        "terminal_evidence_complete": terminal_complete,
-        "direct_prompt_contract_complete": direct_prompt_complete,
-    }
-
-
-def _baseline_evidence_complete(package: dict[str, Any]) -> bool:
-    endpoint = package.get("endpoint_evidence")
-    trace_proof = package.get("full_request_trace_proof")
-    contract = package.get("expected", {}).get("behavior")
-    if not all(isinstance(item, dict) for item in (endpoint, trace_proof, contract)):
-        return False
-    try:
-        expected = _baseline_behavior_summary(endpoint, trace_proof, contract)
-    except (KeyError, TypeError, ValueError):
-        return False
-    summary_value = package.get("role_pass_summary")
-    try:
-        validate_trace_maturity_proof(package.get("trace_maturity_proof"))
-    except ContractError:
-        return False
-    summaries = [
-        item
-        for item in endpoint.get("request_summaries", [])
-        if isinstance(item, dict) and item.get("activation_gate") is True
-    ]
-    n = int(package.get("n") or 0)
-    k = int(package.get("k") or 0)
-    decided, summary = daily_target_decision(
-        target_role="baseline",
-        validation_mode="baseline",
-        n=n,
-        k=k,
-        required_surfaces=["semantic", "trace"],
-        summaries=summaries,
-        identity_verified=endpoint.get("trace_contract_verified") is True,
-    )
-    return (
-        package.get("behavior_summary") == expected
-        and expected["endpoint_complete"] is True
-        and expected["semantic_assertions_complete"] is True
-        and (
-            (
-                expected["terminal_evidence_complete"] is True
-                and expected["direct_prompt_contract_complete"] is not False
-            )
-        )
-        and decided
-        and summary_value == summary
-    )
-
-
-def load_assessments(
-    paths: list[Path],
-    expected_issue_ids: set[str],
-    packages_root: Path,
-    manifest: dict[str, Any],
-) -> dict[str, dict[str, Any]]:
-    schema = read_json(ROOT / "schemas" / "assessment.schema.json")
-    bindings = {
-        issue["issue_id"]: (agent["name"], issue["foundry_version"])
-        for agent in manifest["agents"]
-        for issue in agent["issues"]
-        if issue.get("status") not in SKIPPED_VERSION_STATUSES
-    }
-    if set(bindings) != expected_issue_ids:
-        raise ContractError("Manifest issue assessment coverage is inconsistent")
-    assessments: dict[str, dict[str, Any]] = {}
-    for path in paths:
-        value = read_json(path)
-        errors = list(Draft202012Validator(schema).iter_errors(value))
-        if errors:
-            raise ContractError(f"{path.name} assessment is invalid: {errors[0].message}")
-        issue_id = value["issue_id"]
-        if issue_id in assessments:
-            raise ContractError(f"Duplicate assessment for {issue_id}")
-        if issue_id not in bindings:
-            raise ContractError(f"{issue_id} is not in the current manifest")
-        package_path = packages_root / f"{issue_id}.json"
-        package = _load_package(package_path)
-        expected_agent, expected_version = bindings[issue_id]
-        if (
-            package["target_kind"] != "issue"
-            or package["issue_id"] != issue_id
-            or package["agent_name"] != expected_agent
-            or package["foundry_version"] != expected_version
-            or package["manifest_reference"] != manifest["manifest_hash"]
-            or package["source_integrity"] != manifest["source_integrity"]
-            or value["package_hash"] != package.get("package_hash")
-            or value["foundry_version"] != package.get("foundry_version")
-            or value["evidence_reference"] != package.get("evidence_reference")
-        ):
-            raise ContractError(f"{issue_id} assessment does not match current evidence")
-        _validate_issue_cards(value, package)
-        request_summaries = package.get("endpoint_evidence", {}).get(
-            "request_summaries",
-            [],
-        )
-        has_activation_gate = any(
-            isinstance(item, dict) and item.get("activation_gate") is True
-            for item in request_summaries
-        )
-        activation_required = (
-            issue_id in {f"issue-{number:03d}" for number in range(1, 13)}
-            or has_activation_gate
-        )
-        activation_failed = (
-            activation_required
-            and package.get("runtime_status") in {"observed", "not_at_bar"}
-            and not _issue_activation_complete(package)
-        )
-        if (
-            package.get("error_code") == "issue_activation_failed"
-            or activation_failed
-        ) and (
-            value["finding_type"] != "INCOMPLETE"
-            or value["ownership"] != "test_framework"
-        ):
-            raise ContractError(
-                f"{issue_id} failed activation must remain a test-framework "
-                "INCOMPLETE result"
-            )
-        if (
-            value["verdict"] == "correct" and value["ownership"] != "none"
-        ) or (
-            value["verdict"] != "correct" and value["ownership"] == "none"
-        ):
-            raise ContractError(f"{issue_id} assessment ownership is inconsistent")
-        allowed_types = {
-            "correct": {"MATCHED"},
-            "partially_useful": {"PARTIAL"},
-            "incorrect": {"MISMATCHED", "NOISE", "DUPLICATE"},
-            "missing": {"MISSING", "INCOMPLETE"},
-        }
-        if value["finding_type"] not in allowed_types[value["verdict"]]:
-            raise ContractError(f"{issue_id} assessment finding type is inconsistent")
-        if value["finding_type"] == "MATCHED":
-            observed = package.get("observed_insights")
-            minimum_traces = package.get("expected", {}).get("minimum_traces")
-            endpoint = package.get("endpoint_evidence")
-            full_trace_proof = package.get("full_request_trace_proof")
-            if (
-                package.get("runtime_status") != "observed"
-                or not isinstance(observed, list)
-                or len(observed) != 1
-                or not isinstance(minimum_traces, int)
-                or int(observed[0].get("trace_count") or 0) < 1
-                or not isinstance(endpoint, dict)
-                or not _endpoint_evidence_complete(endpoint)
-                or (
-                    activation_required
-                    and not _issue_activation_complete(package)
-                )
-                or not isinstance(full_trace_proof, dict)
-                or int(full_trace_proof.get("operation_count") or 0)
-                < minimum_traces
-            ):
-                raise ContractError(
-                    f"{issue_id} MATCHED assessment contradicts runtime evidence"
-                )
-        assessments[issue_id] = value
-    if set(assessments) != expected_issue_ids:
-        missing = sorted(expected_issue_ids - set(assessments))
-        extra = sorted(set(assessments) - expected_issue_ids)
-        raise ContractError(f"Assessment coverage mismatch: missing={missing}, extra={extra}")
-    return assessments
-
-
-def load_baseline_assessments(
-    paths: list[Path],
-    packages_root: Path,
-    manifest: dict[str, Any],
-) -> dict[str, dict[str, Any]]:
-    schema = read_json(ROOT / "schemas" / "baseline-assessment.schema.json")
-    bindings = {
-        agent["name"]: agent["baseline"]["foundry_version"]
-        for agent in manifest["agents"]
-        if agent["baseline"].get("status") not in SKIPPED_VERSION_STATUSES
-    }
-    values: dict[str, dict[str, Any]] = {}
-    for path in paths:
-        value = read_json(path)
-        errors = list(Draft202012Validator(schema).iter_errors(value))
-        if errors:
-            raise ContractError(
-                f"{path.name} baseline assessment is invalid: {errors[0].message}"
-            )
-        agent_name = value["agent_name"]
-        package = _load_package(
-            packages_root / f"baseline-{agent_name}.json"
-        )
-        if (
-            package["target_kind"] != "baseline"
-            or package["agent_name"] != agent_name
-            or package["foundry_version"] != bindings.get(agent_name)
-            or package["manifest_reference"] != manifest["manifest_hash"]
-            or package["source_integrity"] != manifest["source_integrity"]
-            or value["package_hash"] != package["package_hash"]
-            or value["foundry_version"] != package["foundry_version"]
-        ):
-            raise ContractError(
-                f"{agent_name} baseline assessment does not match current evidence"
-            )
-        _validate_baseline_cards(value, package)
-        if package.get("error_code") == "baseline_assertion_failed" and (
-            value["verdict"] != "inconclusive"
-            or value["ownership"] != "test_framework"
-        ):
-            raise ContractError(
-                f"{agent_name} failed assertions must remain a test-framework "
-                "inconclusive result"
-            )
-        observed_cards = package.get("observed_insights")
-        proven_clean = (
-            package.get("runtime_status") == "passed"
-            and _baseline_evidence_complete(package)
-            and isinstance(observed_cards, list)
-            and not observed_cards
-        )
-        if proven_clean and value["verdict"] != "clean":
-            raise ContractError(
-                f"{agent_name} zero-card passed baseline must be clean"
-            )
-        if value["verdict"] == "clean" and not proven_clean:
-            raise ContractError(
-                f"{agent_name} clean baseline contradicts runtime evidence"
-            )
-        expected_ownership = {
-            "clean": "none",
-            "noise": "insight_engine",
-            "agent_finding": "agent",
-        }.get(value["verdict"])
-        if (
-            expected_ownership is not None
-            and value["ownership"] != expected_ownership
-        ) or (
-            expected_ownership is None and value["ownership"] == "none"
-        ):
-            raise ContractError(
-                f"{agent_name} baseline ownership is inconsistent"
-            )
-        if agent_name in values:
-            raise ContractError(f"Duplicate baseline assessment for {agent_name}")
-        values[agent_name] = value
-    expected = set(bindings)
-    if set(values) != expected:
-        raise ContractError("Baseline assessment coverage is incomplete")
-    return values
-
-
-def _card_map(package: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    cards = package.get("observed_insights")
-    if not isinstance(cards, list):
-        raise ContractError("Assessment package has no observed card collection")
-    values = {
-        str(card.get("reference") or ""): card
-        for card in cards
-        if isinstance(card, dict)
-    }
-    if len(values) != len(cards) or "" in values:
-        raise ContractError("Assessment package card references are invalid")
-    return values
-
-
-def _validate_card_identity(
-    evaluation: dict[str, Any],
-    card: dict[str, Any],
-) -> None:
-    if any(
-        evaluation[field] != card.get(field)
-        for field in ("reference", "title", "category", "severity")
-    ):
-        raise ContractError("Card evaluation does not match current evidence")
-
-
-def _validate_issue_cards(
-    assessment: dict[str, Any],
-    package: dict[str, Any],
-) -> None:
-    cards = _card_map(package)
-    evaluations = assessment["card_evaluations"]
-    references = [item["reference"] for item in evaluations]
-    if len(references) != len(set(references)) or set(references) != set(cards):
-        raise ContractError(
-            f"{assessment['issue_id']} card evaluation coverage is inconsistent"
-        )
-    allowed_types = {
-        "correct": {"MATCHED"},
-        "partially_useful": {"PARTIAL"},
-        "incorrect": {"MISMATCHED", "NOISE", "DUPLICATE"},
-        "incomplete": {"INCOMPLETE"},
-    }
-    for evaluation in evaluations:
-        card = cards[evaluation["reference"]]
-        _validate_card_identity(evaluation, card)
-        card_proof = card.get("card_linked_trace_proof")
-        linked_operations = card.get("linked_operation_ids")
-        if (
-            not isinstance(card_proof, dict)
-            or int(card_proof.get("operation_count") or 0) < 1
-        ):
-            raise ContractError("Issue card-linked trace proof is incomplete")
-        terminal_proven = (
-            _trace_proof_shape_complete(card_proof)
-            and int(card_proof.get("terminal_response_count") or 0) >= 1
-            and int(card_proof.get("terminal_output_count") or 0) >= 1
-        )
-        if not terminal_proven and (
-            evaluation["verdict"] != "incomplete"
-            or evaluation["finding_type"] != "INCOMPLETE"
-        ):
-            raise ContractError(
-                "Issue card without terminal proof must remain INCOMPLETE"
-            )
-        if package.get("target_kind") == "issue" and (
-            not isinstance(linked_operations, list)
-            or not linked_operations
-            or len(linked_operations) != len(set(linked_operations))
-            or int(card.get("trace_count") or 0) != len(linked_operations)
-            or int(card_proof.get("operation_count") or 0)
-            != len(linked_operations)
-        ):
-            raise ContractError(
-                "Issue card-linked trace identity is incomplete"
-            )
-        if evaluation["finding_type"] not in allowed_types[evaluation["verdict"]]:
-            raise ContractError("Card evaluation finding type is inconsistent")
-        if (
-            evaluation["verdict"] == "correct"
-            and evaluation["ownership"] != "none"
-        ) or (
-            evaluation["verdict"] != "correct"
-            and evaluation["ownership"] == "none"
-        ):
-            raise ContractError("Card evaluation ownership is inconsistent")
-        if evaluation["finding_type"] == "MATCHED" and (
-            evaluation["verdict"] != "correct"
-            or not scoring_fields_pass(evaluation["fields"])
-        ):
-            raise ContractError(
-                "Correct MATCHED card requires every scoring field to pass"
-            )
-        if evaluation["verdict"] in {"partially_useful", "incorrect"} and (
-            scoring_fields_pass(evaluation["fields"])
-        ):
-            raise ContractError(
-                "Non-correct card evaluations require a failed scoring field"
-            )
-        if evaluation["finding_type"] in ATTRIBUTABLE_FINDING_TYPES:
-            failed_fields = {
-                field
-                for field, passed in evaluation["fields"].items()
-                if not passed
-            }
-            field_reasons = evaluation.get("field_reasons")
-            if failed_fields and (
-                not isinstance(field_reasons, dict)
-                or set(field_reasons) != failed_fields
-            ):
-                raise ContractError(
-                    "Attributable card evaluations require a field_reasons entry "
-                    "for exactly each failed field"
-                )
-    reference_types = {item["reference"]: item["finding_type"] for item in evaluations}
-    for evaluation in evaluations:
-        if evaluation["finding_type"] != "DUPLICATE":
+def _activation_visible(output: dict, evidence: _Evidence, visible: _Evidence) -> bool:
+    for item in output["attempts"]:
+        if not item["sufficient"] or not item["observed"]:
             continue
-        duplicate_of = evaluation.get("duplicate_of")
-        if (
-            not isinstance(duplicate_of, str)
-            or duplicate_of == evaluation["reference"]
-            or duplicate_of not in reference_types
-            or reference_types[duplicate_of]
-            not in {"MATCHED", "PARTIAL", "MISMATCHED"}
-        ):
-            raise ContractError(
-                "DUPLICATE card evaluations require duplicate_of to resolve to "
-                "another attributable card in the same issue's card evaluations"
-            )
-    incomplete_cards = [
-        item for item in evaluations if item["finding_type"] == "INCOMPLETE"
-    ]
-    if incomplete_cards and assessment["finding_type"] != "INCOMPLETE":
-        raise ContractError(
-            "Incomplete card evidence requires a top-level INCOMPLETE result"
-        )
-    if assessment["finding_type"] == "MATCHED" and (
-        len(evaluations) != 1
-        or evaluations[0]["finding_type"] != "MATCHED"
-        or evaluations[0]["verdict"] != "correct"
-        or assessment["fields"] != evaluations[0]["fields"]
-        or not scoring_fields_pass(assessment["fields"])
-    ):
-        raise ContractError(
-            "MATCHED assessment requires one terminal-proven card with "
-            "identical score-correct evidence"
-        )
-    card_types = [item["finding_type"] for item in evaluations]
-    top_type = assessment["finding_type"]
-    assessment_fields = assessment.get("fields")
-    if (
-        assessment.get("verdict") in {"partially_useful", "incorrect"}
-        and isinstance(assessment_fields, dict)
-        and assessment_fields
-        and scoring_fields_pass(assessment_fields)
-    ):
-        raise ContractError(
-            "Non-correct assessments require a failed scoring field"
-        )
-    if top_type == "PARTIAL" and (
-        "PARTIAL" not in card_types or "MATCHED" in card_types
-    ):
-        raise ContractError("PARTIAL assessment contradicts card evaluations")
-    if top_type == "MISMATCHED" and (
-        "MISMATCHED" not in card_types
-        or any(value in card_types for value in ("MATCHED", "PARTIAL"))
-    ):
-        raise ContractError("MISMATCHED assessment contradicts card evaluations")
-    if top_type == "NOISE" and (
-        not card_types or any(value != "NOISE" for value in card_types)
-    ):
-        raise ContractError("NOISE assessment contradicts card evaluations")
-    if top_type == "DUPLICATE" and (
-        "DUPLICATE" not in card_types or "INCOMPLETE" in card_types
-    ):
-        raise ContractError("DUPLICATE assessment contradicts card evaluations")
-    if top_type == "MISSING" and any(
-        value in card_types
-        for value in ("MATCHED", "PARTIAL", "MISMATCHED", "DUPLICATE", "INCOMPLETE")
-    ):
-        raise ContractError("MISSING assessment contradicts card evaluations")
+        if _citations_visible(item["citations"], evidence, visible):
+            return True
+    return False
 
 
-def _validate_baseline_cards(
-    assessment: dict[str, Any],
-    package: dict[str, Any],
-) -> None:
-    cards = _card_map(package)
-    evaluations = assessment["card_evaluations"]
-    references = [item["reference"] for item in evaluations]
-    if len(references) != len(set(references)) or set(references) != set(cards):
-        raise ContractError(
-            f"{assessment['agent_name']} baseline card coverage is inconsistent"
-        )
-    for evaluation in evaluations:
-        card = cards[evaluation["reference"]]
-        _validate_card_identity(evaluation, card)
-        card_proof = card.get("card_linked_trace_proof")
-        if (
-            not isinstance(card_proof, dict)
-            or int(card_proof.get("operation_count") or 0) < 1
-        ):
-            raise ContractError("Baseline card-linked trace proof is incomplete")
-        if not _trace_proof_shape_complete(card_proof) and (
-            evaluation["evaluation"] != "incomplete"
-            or evaluation["ownership"] not in {"test_framework", "unresolved"}
-        ):
-            raise ContractError(
-                "Truncated baseline card proof must remain incomplete"
-            )
-        if _baseline_card_has_contradictory_evidence(card, package) and (
-            evaluation["evaluation"] != "incomplete"
-            or evaluation["ownership"] not in {"test_framework", "unresolved"}
-        ):
-            raise ContractError(
-                "Contradictory baseline evidence must route to "
-                "test_framework or unresolved"
-            )
-        expected_ownership = {
-            "noise": "insight_engine",
-            "valid_agent_finding": "agent",
-        }.get(evaluation["evaluation"])
-        if (
-            expected_ownership is not None
-            and evaluation["ownership"] != expected_ownership
-        ) or (
-            expected_ownership is None and evaluation["ownership"] == "none"
-        ):
-            raise ContractError(
-                "Baseline card evaluation ownership is inconsistent"
-            )
-    if assessment["verdict"] == "clean" and evaluations:
-        raise ContractError("Clean baseline cannot contain card evaluations")
-    if assessment["verdict"] == "noise" and any(
-        item["evaluation"] != "noise" for item in evaluations
-    ):
-        raise ContractError("Baseline noise verdict contradicts card evaluations")
-    if assessment["verdict"] == "agent_finding" and (
-        not any(item["evaluation"] == "valid_agent_finding" for item in evaluations)
-        or any(item["evaluation"] == "incomplete" for item in evaluations)
-    ):
-        raise ContractError(
-            "Baseline Agent-finding verdict contradicts card evaluations"
-        )
-
-
-def _baseline_card_has_contradictory_evidence(
-    card: dict[str, Any],
-    package: dict[str, Any],
-) -> bool:
-    if not _baseline_evidence_complete(package):
-        return False
-    linked = card.get("card_linked_trace_proof")
-    if not isinstance(linked, dict):
-        return False
-    operation_count = int(linked.get("operation_count") or 0)
-    return operation_count > 0 and (
-        int(linked.get("terminal_response_count") or 0) < operation_count
-        or int(linked.get("terminal_success_count") or 0) < operation_count
-        or int(linked.get("terminal_output_count") or 0) < operation_count
+def _daily_result(
+    target: Target, cards: tuple[dict, ...], output: dict | None,
+    exclusions: set[ExclusionReason], reasons: set[str], detail: dict,
+) -> DailyAssessment:
+    verdicts = []
+    if output is not None:
+        by_alias = {card["card_alias"]: card for card in output["cards"]}
+        root_groups = sorted({
+            card["root_group"] for card in output["cards"]
+            if card["core"] == "correct" and not card["expected_match"]
+        })
+        roots = {group: f"root-{index:04d}" for index, group in enumerate(root_groups, 1)}
+        for canonical in cards:
+            card = by_alias[canonical["card_alias"]]
+            contribution = Contribution(canonical["contribution"])
+            core = CoreVerdict(card["core"])
+            root = None
+            if core is CoreVerdict.CORRECT:
+                root = target.unit_id.logical_version if card["expected_match"] else roots[card["root_group"]]
+            if contribution is Contribution.CURRENT and core is CoreVerdict.UNKNOWN:
+                exclusions.add(ExclusionReason.UNKNOWN_CORE)
+                reasons.add("current_core_unknown")
+            verdicts.append(CardVerdict(
+                canonical["card_alias"], core, root, contribution,
+                DiagnosticVerdict(card["severity"]), DiagnosticVerdict(card["proposed_fix"]),
+                SUMMARIES["historical" if contribution is Contribution.HISTORICAL else core.value],
+            ))
+    else:
+        # Retain known card identities even when no usable model output exists.
+        verdicts = [
+            CardVerdict(
+                card["card_alias"], CoreVerdict.UNKNOWN,
+                contribution=Contribution(card["contribution"]),
+                summary=SUMMARIES["unknown"],
+            ) for card in cards
+        ]
+    unit = UnitResult(
+        target.unit_id, tuple(verdicts),
+        tuple(sorted(exclusions, key=lambda reason: reason.value)),
+        SUMMARIES["incomplete" if exclusions else "assessed"],
     )
+    return DailyAssessment(unit, tuple(sorted(reasons)), detail)
+
+
+async def assess_daily(
+    target: Target, attempts: tuple[Attempt, ...],
+    invocations: Mapping[tuple[int, str], Invocation], snapshot: Snapshot, sol: SolPort,
+    *, before_cards: tuple[Mapping[str, Any], ...],
+    after_cards: tuple[Mapping[str, Any], ...], engine_started_at: str,
+    visible_snapshot: Snapshot | None = None, cards_complete: bool = True,
+    engine_window: Mapping[str, Any] | None = None,
+    max_payload_bytes: int = 2_000_000,
+) -> DailyAssessment:
+    """Return a private assessment and public-vocabulary whole-unit result.
+
+    ``snapshot`` is retained evidence; ``visible_snapshot`` records what was saved
+    before Insights admission. Its default is ``snapshot``, never a later poll
+    masquerading as earlier visibility. Exactly one review uses retained raw data.
+    """
+    if type(cards_complete) is not bool:
+        raise AssessmentError("assessment_cards_invalid")
+    evidence = _evidence(target, attempts, invocations, snapshot)
+    visible_snapshot = snapshot if visible_snapshot is None else visible_snapshot
+    visible = _evidence(target, attempts, invocations, visible_snapshot)
+    cards = canonical_cards(before_cards, after_cards)
+    payload = _json_copy({
+        **evidence.payload, "cards": cards,
+        "card_snapshots": {"before": before_cards, "after": after_cards},
+        "cards_complete": cards_complete, "engine_started_at": engine_started_at,
+        "visible_snapshot": visible_snapshot.to_private_dict(),
+        "measurement_facts": _measurement_facts(
+            evidence, visible, cards, baseline=target.is_baseline,
+            cards_complete=cards_complete, engine_started_at=engine_started_at,
+            engine_window=engine_window,
+        ),
+        **({"engine_window": _json_copy(engine_window)} if engine_window is not None else {}),
+    })
+    detail = {"input": payload, "initial": None, "review": None, "resolved": None}
+    exclusions, reasons = set(), set()
+    if len(evidence.executed) < 6:
+        exclusions.add(ExclusionReason.INCOMPLETE_EXECUTION)
+        reasons.add("insufficient_executed_attempts")
+    if len(evidence.ready) < 6 or not snapshot.query_complete:
+        exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
+        reasons.add("insufficient_attributable_evidence")
+    if not cards_complete:
+        exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
+        reasons.add("card_snapshot_incomplete")
+    visible_in_time = _timestamp(visible_snapshot.observed_at) <= _timestamp(engine_started_at)
+    if not visible_in_time or len(visible.ready) < 6:
+        exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
+        reasons.add("pre_insights_evidence_unavailable")
+    transport = _daily_transport(payload, max_payload_bytes)
+    if transport is not payload:
+        detail["transport_input"] = transport
+    if not _fits(transport, max_payload_bytes):
+        exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
+        reasons.add("assessment_context_incomplete")
+        detail["partition_plan"] = [
+            {
+                "indices": list(partition.indices),
+                "input": partition.payload,
+                "oversized": partition.oversized,
+                "status": "not_submitted_holistic_context_required",
+            }
+            for partition in partition_payload(payload, max_payload_bytes, intern=True)
+        ]
+        return _daily_result(target, cards, None, exclusions, reasons, detail)
+    try:
+        output = await _complete(sol, transport, daily=True)
+        detail["initial"] = deepcopy(output)
+        _validate_daily(evidence, output, cards, baseline=target.is_baseline)
+    except QualityError as error:
+        _retain_error(error, detail)
+        raise
+    candidates = _candidates(output, cards, baseline=target.is_baseline)
+    if candidates:
+        review_payload = {**payload, "review": {
+            "candidate_reasons": candidates, "initial": output,
+        }}
+        review_transport = _daily_transport(review_payload, max_payload_bytes)
+        detail["review_input"] = review_payload
+        if review_transport is not review_payload:
+            detail["review_transport_input"] = review_transport
+        if _fits(review_transport, max_payload_bytes):
+            try:
+                reviewed = await _complete(sol, review_transport, daily=True)
+                detail["review"] = reviewed
+                _validate_daily(evidence, reviewed, cards, baseline=target.is_baseline)
+            except QualityError as error:
+                _retain_error(error, detail)
+                raise
+            output, disagreement = _merge_review(output, reviewed, cards)
+            if disagreement:
+                exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
+                reasons.add("focused_review_disagreement")
+        else:
+            exclusions.add(ExclusionReason.INCOMPLETE_ASSESSMENT)
+            reasons.add("focused_review_input_too_large")
+    exclusions.update(ExclusionReason(reason) for reason in output["limitations"])
+    reasons.update(output["limitations"])
+    current = {card["card_alias"] for card in cards if card["contribution"] == "current"}
+    if any(
+        card["card_alias"] in current and card["core"] != "unknown"
+        and not _citations_visible(card["citations"], evidence, visible)
+        for card in output["cards"]
+    ):
+        exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
+        reasons.add("card_proof_not_visible_before_insights")
+    if not target.is_baseline and not (
+        visible_in_time and _activation_visible(output, evidence, visible)
+    ):
+        exclusions.add(ExclusionReason.INCOMPLETE_EVIDENCE)
+        reasons.add("expected_defect_unconfirmed_or_not_visible")
+    detail["resolved"] = output
+    return _daily_result(target, cards, output, exclusions, reasons, detail)

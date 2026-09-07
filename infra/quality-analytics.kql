@@ -213,3 +213,307 @@
         WhatHappened = tostring(HighlightMetric.what_happened),
         NeededBehavior = tostring(HighlightMetric.needed_behavior)
 }
+
+// Current framework data is deliberately separate from the historical v3 rows
+// and views above. Stored QualityResult scores are never recomputed here.
+.create-merge table QualityReportsV1 (
+    ReportDate:datetime,
+    FrameworkRunId:string,
+    SourceCommit:string,
+    Region:string,
+    ContentHash:string,
+    PayloadVersion:string,
+    Payload:dynamic
+)
+
+.alter-merge table QualityReportsV1 policy retention softdelete = 730d recoverability = enabled
+
+.alter table QualityReportsV1 policy caching hot = 90d
+
+.alter table QualityReportsV1 policy ingestiontime true
+
+.create-merge table QualityOperationsV1 (
+    FrameworkRunId:string,
+    Profile:string,
+    EventId:string,
+    ContentHash:string,
+    EventVersion:string,
+    Event:dynamic
+)
+
+.alter-merge table QualityOperationsV1 policy retention softdelete = 730d recoverability = enabled
+
+.alter table QualityOperationsV1 policy caching hot = 90d
+
+.alter table QualityOperationsV1 policy ingestiontime true
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Immutable current reports. Exact replay is deduplicated; conflicting run content is not scored.'
+) AIQReportsV1() {
+    QualityReportsV1
+    | where PayloadVersion == '1'
+    | extend PublishedAt = ingestion_time()
+    // Replays must not make an older run look newly published.
+    | summarize ContentHashes = make_set(ContentHash, 2), arg_min(PublishedAt, *) by FrameworkRunId
+    | where array_length(ContentHashes) == 1
+    | project ReportDate, FrameworkRunId, PublishedAt, SourceCommit, Region, ContentHash, PayloadVersion, Payload
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Stored score and recorded v1/v2 policy with numeric whole-unit coverage. No rescoring or healthy bonus.'
+) AIQRunsV1() {
+    AIQReportsV1()
+    | project
+        ReportDate, FrameworkRunId, PublishedAt, SourceCommit, Region,
+        QualityScore = todouble(Payload.score),
+        CoverageStatus = tostring(Payload.status),
+        TeamReportEligible = tobool(Payload.team_report_eligible),
+        ScoringPolicy = tostring(Payload.scoring_policy.version),
+        ScoreFormula = tostring(Payload.scoring_policy.formula),
+        NoiseWeight = todouble(Payload.scoring_policy.noise_weight),
+        DuplicateWeight = todouble(Payload.scoring_policy.duplicate_weight),
+        MissWeight = todouble(Payload.scoring_policy.miss_weight),
+        ScoreRounding = tostring(Payload.scoring_policy.rounding),
+        CoveragePolicy = tostring(Payload.coverage_policy.version),
+        CorrectIssues = tolong(Payload.counts.correct_issues),
+        ExpectedIssues = tolong(Payload.counts.expected_issues),
+        NoiseCards = tolong(Payload.counts.noise_cards),
+        DuplicateCards = tolong(Payload.counts.duplicate_cards),
+        PlannedIssues = tolong(Payload.coverage.planned_issues),
+        ScoredIssues = tolong(Payload.coverage.scored_issues),
+        PlannedBaselines = tolong(Payload.coverage.planned_baselines),
+        ScoredBaselines = tolong(Payload.coverage.scored_baselines),
+        ExcludedUnits = tolong(Payload.coverage.excluded_units)
+    | extend MissedIssues = ExpectedIssues - CorrectIssues
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Actual UnitId/kind/scorable/counts/findings shape, including wholly excluded units and their reasons.'
+) AIQUnitsV1() {
+    AIQReportsV1()
+    | mv-expand Unit = Payload.units to typeof(dynamic)
+    | project
+        ReportDate, FrameworkRunId, Region,
+        CoverageStatus = tostring(Payload.status),
+        ScoringPolicy = tostring(Payload.scoring_policy.version),
+        Agent = tostring(Unit.unit_id.agent),
+        LogicalVersion = tostring(Unit.unit_id.logical_version),
+        Kind = tostring(Unit.kind),
+        ExpectedIssueAlias = tostring(Unit.expected_issue_alias),
+        Scorable = tobool(Unit.scorable),
+        CorrectIssues = tolong(Unit.counts.correct_issues),
+        ExpectedIssues = tolong(Unit.counts.expected_issues),
+        NoiseCards = tolong(Unit.counts.noise_cards),
+        DuplicateCards = tolong(Unit.counts.duplicate_cards),
+        ExclusionReasons = Unit.exclusion_reasons,
+        Findings = Unit.findings,
+        Summary = tostring(Unit.summary)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Public aliases and closed verdict vocabulary, not raw cards/model prose. Unscored findings remain visible.'
+) AIQFindingsV1() {
+    AIQUnitsV1()
+    | mv-expand Finding = Findings to typeof(dynamic)
+    | project
+        ReportDate, FrameworkRunId, Region, CoverageStatus, ScoringPolicy,
+        Agent, LogicalVersion, Kind, Scorable, ExclusionReasons,
+        CardAlias = tostring(Finding.card_alias),
+        RootCauseAlias = tostring(Finding.root_cause_alias),
+        Core = tostring(Finding.core),
+        Contribution = tostring(Finding.contribution),
+        Classification = tostring(Finding.classification),
+        Scored = tobool(Finding.scored),
+        SeverityDiagnostic = tostring(Finding.severity),
+        ProposedFixDiagnostic = tostring(Finding.proposed_fix),
+        Summary = tostring(Finding.summary)
+}
+
+// Dashboard-only read models. The V1 suffix denotes the storage contract, not
+// the scoring policy: historical scores and absent v1 MissWeight stay unchanged.
+.create-or-alter function with (
+    folder = 'Agent Insights Quality dashboard',
+    docstring = 'One snapshot per report date, normalized region and recorded scoring/coverage policy. First ingestion orders same-date revisions; replay cannot change selection.'
+) AIQSnapshotsV1() {
+    let Cohorts = AIQUnitsV1()
+        | extend UnitKey = strcat(Agent, '/', LogicalVersion, '/', Kind, '/', ExpectedIssueAlias)
+        | summarize
+            UnitRows = count(),
+            PlannedCohort = make_set(UnitKey),
+            ScoredCohort = make_set_if(UnitKey, Scorable),
+            BaselineCohort = make_set_if(UnitKey, Scorable and Kind == 'baseline'),
+            UnitPlannedIssues = countif(Kind == 'issue'),
+            UnitScoredIssues = countif(Scorable and Kind == 'issue'),
+            UnitPlannedBaselines = countif(Kind == 'baseline'),
+            UnitScoredBaselines = countif(Scorable and Kind == 'baseline'),
+            UnitCorrect = sumif(CorrectIssues, Scorable and Kind == 'issue'),
+            UnitExpected = sumif(ExpectedIssues, Scorable and Kind == 'issue'),
+            UnitNoise = sumif(NoiseCards, Scorable),
+            UnitDuplicates = sumif(DuplicateCards, Scorable)
+          by FrameworkRunId
+        | extend
+            PlannedCohort = tostring(array_sort_asc(PlannedCohort)),
+            ScoredCohort = tostring(array_sort_asc(ScoredCohort)),
+            BaselineCohort = tostring(array_sort_asc(BaselineCohort));
+    AIQRunsV1()
+    | extend RegionKey = tolower(replace_string(Region, ' ', ''))
+    | extend SnapshotOrder = strcat(format_datetime(PublishedAt, 'yyyyMMddHHmmssfffffff'), '/', FrameworkRunId)
+    | summarize arg_max(SnapshotOrder, *) by ReportDate, RegionKey, ScoringPolicy, CoveragePolicy
+    | join kind=leftouter Cohorts on FrameworkRunId
+    | extend PolicyValid = coalesce(
+        NoiseWeight == 1.0 and ScoreRounding == 'half-up-one-decimal' and (
+            (ScoringPolicy == 'unique-issues-noise-1-duplicate-025-v1'
+             and ScoreFormula == '100*C/(E_scored+N_scored+0.25*D_scored)'
+             and DuplicateWeight == 0.25 and isnull(MissWeight))
+            or (ScoringPolicy == 'unique-issues-noise-1-duplicate-05-miss-025-v2'
+                and ScoreFormula == '100*C/(C+N_scored+0.5*D_scored+0.25*(E_scored-C))'
+                and DuplicateWeight == 0.5 and MissWeight == 0.25)), false)
+    | extend CohortComplete = coalesce(
+        UnitRows == PlannedIssues + PlannedBaselines
+        and UnitPlannedIssues == PlannedIssues and UnitScoredIssues == ScoredIssues
+        and UnitPlannedBaselines == PlannedBaselines and UnitScoredBaselines == ScoredBaselines
+        and ExcludedUnits == UnitRows - ScoredIssues - ScoredBaselines
+        and UnitCorrect == CorrectIssues and UnitExpected == ExpectedIssues
+        and UnitNoise == NoiseCards and UnitDuplicates == DuplicateCards, false)
+    | extend
+        PolicyLabel = case(
+            ScoringPolicy == 'unique-issues-noise-1-duplicate-05-miss-025-v2', 'v2',
+            ScoringPolicy == 'unique-issues-noise-1-duplicate-025-v1', 'v1', ScoringPolicy),
+        WeightedNoise = iff(PolicyValid, NoiseWeight * NoiseCards, real(null)),
+        WeightedDuplicates = iff(PolicyValid, DuplicateWeight * DuplicateCards, real(null)),
+        // v1 has no separately recorded miss weight; misses are already in E.
+        WeightedMisses = iff(PolicyValid, MissWeight * MissedIssues, real(null))
+    | project-away FrameworkRunId1, Unit*
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality dashboard',
+    docstring = 'Immediate earlier report-date snapshot in the same region/scoring/coverage policy, before any dashboard date filter. Changed unit mix is disclosed, not skipped to find a nicer comparison.'
+) AIQSnapshotChangesV1() {
+    AIQSnapshotsV1()
+    | sort by RegionKey asc, ScoringPolicy asc, CoveragePolicy asc, ReportDate asc
+    | serialize
+    | extend SameSeries = coalesce(
+        RegionKey == prev(RegionKey) and ScoringPolicy == prev(ScoringPolicy)
+        and CoveragePolicy == prev(CoveragePolicy), false)
+    | extend
+        PreviousRunId = iff(SameSeries, prev(FrameworkRunId), ''),
+        PreviousDate = iff(SameSeries, prev(ReportDate), datetime(null)),
+        PreviousScore = iff(SameSeries, prev(QualityScore), real(null)),
+        PreviousCorrect = iff(SameSeries, prev(CorrectIssues), long(null)),
+        PreviousExpected = iff(SameSeries, prev(ExpectedIssues), long(null)),
+        PreviousMissed = iff(SameSeries, prev(MissedIssues), long(null)),
+        PreviousNoise = iff(SameSeries, prev(NoiseCards), long(null)),
+        PreviousDuplicates = iff(SameSeries, prev(DuplicateCards), long(null)),
+        PreviousExcluded = iff(SameSeries, prev(ExcludedUnits), long(null)),
+        PreviousScoredIssues = iff(SameSeries, prev(ScoredIssues), long(null)),
+        PreviousPlannedIssues = iff(SameSeries, prev(PlannedIssues), long(null)),
+        PreviousScoredBaselines = iff(SameSeries, prev(ScoredBaselines), long(null)),
+        PreviousPlannedBaselines = iff(SameSeries, prev(PlannedBaselines), long(null)),
+        PreviousWeightedNoise = iff(SameSeries, prev(WeightedNoise), real(null)),
+        PreviousWeightedDuplicates = iff(SameSeries, prev(WeightedDuplicates), real(null)),
+        PreviousWeightedMisses = iff(SameSeries, prev(WeightedMisses), real(null)),
+        PreviousSourceCommit = iff(SameSeries, prev(SourceCommit), ''),
+        LimitReasons = set_difference(pack_array(
+            iff(not(SameSeries), 'no previous snapshot', ''),
+            iff(isnull(PublishedAt) or (SameSeries and isnull(prev(PublishedAt))), 'publication ordering unavailable', ''),
+            iff(not(PolicyValid) or (SameSeries and not(prev(PolicyValid))), 'unrecognized recorded policy', ''),
+            iff(not(CohortComplete) or (SameSeries and not(prev(CohortComplete))), 'unit details incomplete', ''),
+            iff(SameSeries and PlannedCohort != prev(PlannedCohort), 'planned cohort / rotation changed', ''),
+            iff(SameSeries and ScoredCohort != prev(ScoredCohort), 'scored unit coverage changed', ''),
+            iff(SameSeries and (BaselineCohort != prev(BaselineCohort)
+                or PlannedBaselines != prev(PlannedBaselines)), 'baseline coverage changed', '')
+        ), dynamic(['']))
+    | extend
+        ComparisonLimited = array_length(LimitReasons) > 0,
+        ComparisonNote = iff(array_length(LimitReasons) > 0,
+            strcat('Limited: ', strcat_array(LimitReasons, '; ')),
+            'Same recorded cohort and coverage; descriptive, not causal'),
+        DeltaCorrect = CorrectIssues - PreviousCorrect,
+        DeltaMissed = MissedIssues - PreviousMissed,
+        DeltaNoise = NoiseCards - PreviousNoise,
+        DeltaDuplicates = DuplicateCards - PreviousDuplicates
+    | project-away SameSeries
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality dashboard',
+    docstring = 'Current/previous unit identities, counts and exclusions. Full outer join retains rotated-out units; absent or excluded units are not misses.'
+) AIQUnitChangesV1(frameworkRunId:string) {
+    let PreviousRun = toscalar(AIQSnapshotChangesV1()
+        | where FrameworkRunId == frameworkRunId | project PreviousRunId);
+    let Current = AIQUnitsV1()
+        | where FrameworkRunId == frameworkRunId
+        | project Agent, LogicalVersion, Kind, ExpectedIssueAlias,
+            CurrentPresent = true, CurrentScorable = Scorable,
+            C = iff(Scorable and Kind == 'issue', CorrectIssues, long(null)),
+            E = iff(Scorable and Kind == 'issue', ExpectedIssues, long(null)),
+            M = iff(Scorable and Kind == 'issue', ExpectedIssues - CorrectIssues, long(null)),
+            N = iff(Scorable, NoiseCards, long(null)), D = iff(Scorable, DuplicateCards, long(null)),
+            CurrentReasons = ExclusionReasons;
+    let Previous = AIQUnitsV1()
+        | where FrameworkRunId == PreviousRun
+        | project Agent, LogicalVersion, Kind, ExpectedIssueAlias,
+            PreviousPresent = true, PreviousScorable = Scorable,
+            PreviousC = iff(Scorable and Kind == 'issue', CorrectIssues, long(null)),
+            PreviousE = iff(Scorable and Kind == 'issue', ExpectedIssues, long(null)),
+            PreviousM = iff(Scorable and Kind == 'issue', ExpectedIssues - CorrectIssues, long(null)),
+            PreviousN = iff(Scorable, NoiseCards, long(null)),
+            PreviousD = iff(Scorable, DuplicateCards, long(null)),
+            PreviousReasons = ExclusionReasons;
+    Current
+    | join kind=fullouter Previous on Agent, LogicalVersion, Kind, ExpectedIssueAlias
+    | extend Agent = coalesce(Agent, Agent1), LogicalVersion = coalesce(LogicalVersion, LogicalVersion1),
+        Kind = coalesce(Kind, Kind1), ExpectedIssueAlias = coalesce(ExpectedIssueAlias, ExpectedIssueAlias1)
+    | extend CurrentStatus = case(isnull(CurrentPresent), 'not planned',
+            not(CurrentScorable), 'excluded', Kind == 'baseline', 'scored baseline',
+            C == 1, 'detected', 'missed'),
+        PreviousStatus = case(isempty(PreviousRun), 'no previous snapshot',
+            isnull(PreviousPresent), 'not planned', not(PreviousScorable), 'excluded',
+            Kind == 'baseline', 'scored baseline', PreviousC == 1, 'detected', 'missed')
+    | extend DeltaC = C - PreviousC, DeltaM = M - PreviousM,
+        DeltaN = N - PreviousN, DeltaD = D - PreviousD
+    | project-away Agent1, LogicalVersion1, Kind1, ExpectedIssueAlias1
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Independent allowlisted operations, including staging; EventId deduplicates exact retries.'
+) AIQOperationsV1() {
+    QualityOperationsV1
+    | where EventVersion == '1'
+    | extend IngestedAt = ingestion_time()
+    | summarize ContentHashes = make_set(ContentHash, 2), arg_max(IngestedAt, *) by FrameworkRunId, EventId
+    | where array_length(ContentHashes) == 1
+    | project
+        FrameworkRunId, Profile, EventId, IngestedAt,
+        Utc = todatetime(Event.utc),
+        ElapsedMs = tolong(Event.elapsed_ms),
+        Kind = tostring(Event.kind),
+        Stage = tostring(Event.stage),
+        Code = tostring(Event.code),
+        Counters = Event.counters,
+        Agent = tostring(Event.agent),
+        LogicalVersion = tostring(Event.logical_version),
+        Attempt = tolong(Event.attempt),
+        Turn = tolong(Event.turn)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality v1',
+    docstring = 'Explicit report/event identity conflicts, excluded from current score/operation views rather than silently overwritten.'
+) AIQPublicationConflictsV1() {
+    union
+        (QualityReportsV1
+         | where PayloadVersion == '1'
+         | project Kind = 'report', FrameworkRunId, Identity = FrameworkRunId, ContentHash),
+        (QualityOperationsV1
+         | where EventVersion == '1'
+         | project Kind = 'event', FrameworkRunId, Identity = EventId, ContentHash)
+    | summarize ContentHashes = make_set(ContentHash, 2) by Kind, FrameworkRunId, Identity
+    | where array_length(ContentHashes) > 1
+}

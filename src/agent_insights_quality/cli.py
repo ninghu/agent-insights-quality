@@ -1,1131 +1,656 @@
+"""Offline commands and a narrow, private production entry point.
+
+Run commands construct qualification ports; private-report-flush opens only storage.
+Email commands cannot send.
+Test injection is Python-only; there is no CLI runtime-root override.
+Unified mode/destination inputs are validated and frozen before provider work.
+"""
+
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import time
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import date
+import json
 from pathlib import Path
-from typing import Any
+import subprocess
+import sys
+import uuid
 
-from agent_insights_quality.adx import (
-    publish_daily_report,
-    publish_daily_report_best_effort,
-    render_dashboard,
-    resolve_dashboard_link,
+from .errors import QualityError
+from .delivery_recipient import (
+    configured_private_recipient, freeze_private_recipient, validate_test_recipient_input,
 )
-from agent_insights_quality.assessment import (
-    load_assessments,
-    load_baseline_assessments,
-    rehydrate_packages,
-)
-from agent_insights_quality.automation_policy import load_automation_policy
-from agent_insights_quality.azure import (
-    deploy_analytics_infrastructure,
-    deploy_infrastructure,
-)
-from agent_insights_quality.catalogs import (
-    catalog_hashes,
-    catalog_summary,
-    generate_docs,
-    load_catalogs,
-    agent_model_contract,
-)
-from agent_insights_quality.daily_coordinator import (
-    assert_daily_finalization_inputs,
-    assert_daily_receipt_import,
-    claim_daily_email,
-    complete_daily_publication,
-    compose_daily,
-    daily_guide,
-    daily_status,
-    fail_daily,
-    prepare_daily,
-    provision_daily,
-    record_daily_email_receipt,
-    record_daily_finalization,
-    record_daily_improvement_input,
-    run_daily_agent,
-    validate_daily_assessment_outputs,
-)
-from agent_insights_quality.email import (
-    build_runtime_links,
-    create_request,
-    import_receipt,
-    resolve_recipient,
-    write_private_report_preview,
-)
-from agent_insights_quality.generated_paths import validate_generated_paths
-from agent_insights_quality.github_preview import (
-    bind_preview_publication,
-    preview_links,
-    publish_daily_email_test_preview,
-    validate_preview_publication,
-    verify_daily_email_test_preview,
-)
-from agent_insights_quality.live import LiveRuntime
-from agent_insights_quality.models import SKIPPED_VERSION_STATUSES
-from agent_insights_quality.improvement_memory import (
-    build_normalized_summary,
-    validate_analysis_against_summary,
-    validate_published_improvement,
-    write_improvement_memory,
-    write_improvement_preview,
-)
-from agent_insights_quality.profiles import RuntimeProfile
-from agent_insights_quality.provisioning import (
-    create_promotion_receipt,
-    provision_profile,
-)
-from agent_insights_quality.registry import load_registry, sync_registry
-from agent_insights_quality.reporting import (
-    apply_score_comparison,
-    apply_staging_score_comparison,
-    build_report,
-    score_comparison,
-    update_trend,
-    updated_trend,
-    write_report,
-    validate_published_report,
-    render_markdown,
-    render_agent_markdown,
-)
-from agent_insights_quality.run_manifest import (
-    OFFICIAL_DELIVERY,
-    TEST_EMAIL_ONLY_DELIVERY,
-    build_manifest,
-    run_id,
-    validate_manifest,
-)
-from agent_insights_quality.runner import execute
-from agent_insights_quality.runtime_state import (
-    ActiveQualificationError,
-    VersionCheckpointStore,
-    profile_run_lock,
-)
-from agent_insights_quality.selection import select_daily, select_full
-from agent_insights_quality.telemetry_cleanup import (
-    apply_cleanup_plan,
-    write_cleanup_plan,
-)
-from agent_insights_quality.util import (
-    ROOT,
-    ContractError,
-    atomic_json,
-    atomic_text,
-    content_hash,
-    file_hash,
-    immutable_json,
-    read_json,
-    runtime_root,
-)
-from agent_insights_quality.validation import validate_repository
-from agent_insights_quality.validation_coordinator import (
-    compose_test_agent_validation,
-    deploy_test_agent_validation_shard,
-    import_test_agent_validation_assessment,
-    invoke_test_agent_validation_shard,
-    prepare_test_agent_validation,
-    prepare_test_agent_validation_assessment,
-    reconcile_test_agent_validation_deployment,
-    recover_test_agent_validation,
-    release_test_agent_validation_assessment,
-    run_test_agent_validation,
-)
-from agent_insights_quality.validation_rules import validation_matrix
-from agent_insights_quality.work_items import (
-    fetch_quality_work_items,
-    load_quality_work_items,
-)
+from .integration import RunIntegration, command_status
+from .integration import private_path as _private_path, read_object as _read_object
+from .performance import RunMetrics, begin_metrics, current_metrics, metric_session, scope
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aiq-quality")
-    commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("validate")
-    docs = commands.add_parser("generate-docs")
-    docs.add_argument("--check", action="store_true")
-    select = commands.add_parser("select")
-    select.add_argument("--report-date", required=True, type=date.fromisoformat)
-    select.add_argument("--full", action="store_true")
-    commands.add_parser("deploy-infrastructure")
-    commands.add_parser("deploy-analytics")
-    publish_adx = commands.add_parser("publish-adx")
-    publish_adx.add_argument("--report", type=Path, action="append", required=True)
-    dashboard = commands.add_parser("render-adx-dashboard")
-    dashboard.add_argument("--output", type=Path)
-    provision = commands.add_parser("provision")
-    provision.add_argument("--profile", choices=("daily", "staging"), required=True)
-    for name in ("run-full",):
-        run = commands.add_parser(name)
-        run.add_argument("--report-date", required=True, type=date.fromisoformat)
-        run.add_argument("--rerun", type=int, default=0)
-        run.add_argument("--state-root", type=Path, default=runtime_root())
-        run.add_argument("--work-items", type=Path, required=True)
-    daily_prepare = commands.add_parser(
-        "daily-prepare",
-        help="Start Daily after a human chooses to run it; staging is advisory.",
-        description=(
-            "Start a Daily lifecycle from the exact clean checkout and private "
-            "work-item snapshot. Test Agent Validation is advisory and is not "
-            "an admission input."
-        ),
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(prog="aiq-quality")
+    commands = root.add_subparsers(dest="command", required=True)
+    commands.add_parser("validate", help="Validate reviewed catalogs, schemas and source offline")
+    commands.add_parser("generate-docs", help="Generate reviewed catalog views; never alter traffic")
+    staging = commands.add_parser("run-staging", help="Run or resume incremental staging")
+    staging.add_argument("--full", action="store_true")
+    staging.add_argument("--new-run", action="store_true", help="Start a new full run after the previous full run completed")
+    daily = commands.add_parser("run-daily", help="Run or resume today's Daily measurement")
+    daily.add_argument("--report-mode", choices=("test", "official"),
+                       help="Unified launch: automatic private TEST identity or official date singleton")
+    daily.add_argument("--to-address", metavar="TO_ADDRESS",
+                       help="One literal mailbox, required with --report-mode; frozen before traffic")
+    daily.add_argument("--test-run", action="store_true", default=None,
+                       help="Legacy private mode; requires a positive --rerun")
+    daily.add_argument("--rerun", type=int, default=None)
+    daily.add_argument(
+        "--test-to", metavar="TEST_TO_ADDRESS",
+        help="One human-provided private TEST recipient; requires --test-run and positive --rerun. "
+             "Frozen before traffic; never an official recipient override",
     )
-    daily_prepare.add_argument("--report-date", required=True, type=date.fromisoformat)
-    daily_prepare.add_argument("--rerun", type=int, default=0)
-    daily_prepare.add_argument("--work-items", type=Path, required=True)
-    daily_prepare.add_argument("--test-run", action="store_true")
-    daily_prepare.add_argument("--publish-preview", action="store_true")
-    commands.add_parser("daily-provision")
-    daily_agent = commands.add_parser("daily-run-agent")
-    daily_agent.add_argument(
-        "--agent",
-        choices=(
-            "weather-agent",
-            "healthcare-agent",
-            "finance-agent",
-            "travel-agent",
-            "support-ticket-agent",
-        ),
-        required=True,
+    daily.add_argument(
+        "--fresh-traffic", action="store_true", default=None,
+        help="Start a NEW private --test-run --rerun identity without reusing prior traffic; "
+             "resume keeps the frozen intent even if this flag is omitted",
     )
-    commands.add_parser("daily-compose")
-    commands.add_parser("daily-status")
-    commands.add_parser("daily-guide")
-    daily_assessments = commands.add_parser("daily-validate-assessments")
-    daily_assessments.add_argument(
-        "--assessment",
-        type=Path,
-        action="append",
-        required=True,
+    status = commands.add_parser("status", help="Show safe local run status")
+    status.add_argument("--profile", choices=("daily", "staging"), default="daily")
+    publication = commands.add_parser(
+        "private-report-flush", help="Reconcile/retry one frozen private report; never remeasure or send",
     )
-    daily_assessments.add_argument(
-        "--baseline-assessment",
-        type=Path,
-        action="append",
-        required=True,
+    publication.add_argument("--delivery-id", required=True)
+    publication.add_argument(
+        "--read-only", action="store_true",
+        help="Read/reconcile remote blobs and save local receipts, without remote writes",
     )
-    daily_assessments.add_argument(
-        "--recheck-assessment",
-        type=Path,
-        action="append",
-        default=[],
+    access = commands.add_parser(
+        "private-report-refresh-access", help="Create a private access revision/preview only; never send",
     )
-    daily_assessments.add_argument(
-        "--recheck-baseline-assessment",
-        type=Path,
-        action="append",
-        default=[],
+    access.add_argument("--delivery-id", required=True)
+    access.add_argument("--access-revision", required=True)
+    preview = commands.add_parser("email-preview", help="Export private local HTML/EML; never claim or send")
+    preview.add_argument("--delivery-id", required=True)
+    preview.add_argument(
+        "--restyle", action="store_true",
+        help="Render current presentation from this delivery's frozen result; no remeasurement",
     )
-    commands.add_parser("daily-email-claim")
-    daily_fail = commands.add_parser("daily-fail")
-    daily_fail.add_argument("--reason-code", required=True)
-    daily_fail.add_argument("--confirm", action="store_true")
-    daily_publication = commands.add_parser("daily-complete-publication")
-    daily_publication.add_argument("--pr-number", type=int, required=True)
-    daily_publication.add_argument("--path", action="append", required=True)
-    finalize = commands.add_parser("finalize")
-    finalize.add_argument("--manifest", type=Path, required=True)
-    finalize.add_argument("--assessment", type=Path, action="append", required=True)
-    finalize.add_argument(
-        "--baseline-assessment",
-        type=Path,
-        action="append",
-        required=True,
+    preview.add_argument(
+        "--rescore", action="store_true",
+        help="With --restyle, derive a private preview under the current scoring policy; "
+             "keep original results, judgments and email unchanged",
     )
-    finalize.add_argument("--output-root", type=Path, default=ROOT / "reports")
-    finalize.add_argument("--work-items", type=Path, required=True)
-    finalize.add_argument("--improvement-analysis", type=Path)
-    finalize.add_argument(
-        "--prepare-improvement-input",
-        action="store_true",
+    preview.add_argument(
+        "--scoring-revision",
+        help="Verify a published GitHub commit's QUALITY_BAR.md against the reviewed local file",
     )
-    work_items = commands.add_parser("fetch-quality-work-items")
-    work_items.add_argument("--query-url", required=True)
-    work_items.add_argument("--report-date", required=True, type=date.fromisoformat)
-    work_items.add_argument("--output", type=Path, required=True)
-    receipt = commands.add_parser("email-receipt-import")
-    receipt.add_argument("--request", type=Path, required=True)
-    receipt.add_argument("--receipt", type=Path, required=True)
-    receipt.add_argument("--output", type=Path, required=True)
-    replay = commands.add_parser("replay-run")
-    replay.add_argument("--manifest", type=Path, required=True)
-    paths = commands.add_parser("validate-generated-paths")
-    paths.add_argument("--path", action="append", default=[])
-    published = commands.add_parser("validate-published-report")
-    published.add_argument("--report", type=Path, required=True)
-    published.add_argument("--report-relative-path", required=True)
-    published.add_argument("--report-markdown", type=Path, required=True)
-    published.add_argument("--latest-json", type=Path, required=True)
-    published.add_argument("--latest-markdown", type=Path, required=True)
-    published.add_argument("--trend", type=Path, required=True)
-    published.add_argument("--base-trend", type=Path, required=True)
-    published.add_argument("--improvement-json", type=Path, required=True)
-    published.add_argument("--improvement-markdown", type=Path, required=True)
-    published.add_argument(
-        "--base-improvement-json",
-        type=Path,
-        required=True,
-    )
-    published.add_argument(
-        "--base-improvement-markdown",
-        type=Path,
-        required=True,
-    )
-    published.add_argument(
-        "--improvement-snapshot-json",
-        type=Path,
-        required=True,
-    )
-    published.add_argument(
-        "--improvement-snapshot-markdown",
-        type=Path,
-        required=True,
-    )
-    published.add_argument(
-        "--agent-report",
-        type=Path,
-        action="append",
-        required=True,
-    )
-    promotion = commands.add_parser("create-promotion-receipt")
-    promotion.add_argument("--report", type=Path, required=True)
-    promotion.add_argument("--registry", type=Path, required=True)
-    promotion.add_argument("--manifest", type=Path, required=True)
-    promotion.add_argument("--output", type=Path, required=True)
-    promotion.add_argument("--human-reviewed", action="store_true")
-    cleanup = commands.add_parser("cleanup-telemetry")
-    cleanup.add_argument("--plan", type=Path, required=True)
-    cleanup.add_argument("--receipt", type=Path)
-    cleanup.add_argument("--human-reviewed", action="store_true")
-    commands.add_parser("run-test-agent-validation")
-    commands.add_parser("prepare-test-agent-validation")
-    commands.add_parser("recover-test-agent-validation")
-    deploy_validation = commands.add_parser(
-        "deploy-test-agent-validation-shard"
-    )
-    deploy_validation.add_argument("--shard-id", type=int, required=True)
-    commands.add_parser("reconcile-test-agent-validation-deployment")
-    invoke_validation = commands.add_parser(
-        "invoke-test-agent-validation-shard"
-    )
-    invoke_validation.add_argument("--shard-id", type=int, required=True)
-    commands.add_parser("prepare-test-agent-validation-assessment")
-    commands.add_parser("release-test-agent-validation-assessment")
-    commands.add_parser("import-test-agent-validation-assessment")
-    commands.add_parser("compose-test-agent-validation")
-    return parser
+    for command in ("email-claim", "email-result"):
+        child = commands.add_parser(command, help="Claim app-native send" if command == "email-claim"
+                                    else "Record actual app-native send evidence")
+        child.add_argument("--delivery-id", required=True)
+        child.add_argument("--claim-id", required=True)
+        if command == "email-result":
+            child.add_argument("--outcome", choices=("accepted", "delivered", "rejected", "unknown"), required=True)
+            child.add_argument("--result-file", type=Path, required=True)
+            child.add_argument("--reconciliation", action="store_true")
+    return root
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+def _recipient(runtime) -> str:
+    return configured_private_recipient(runtime)
+
+
+def _daily_arguments(args) -> None:
+    from .automation_launch import validate_input
+    unified = args.report_mode is not None or args.to_address is not None
+    if unified:
+        if any(value is not None for value in (
+            args.test_run, args.rerun, args.test_to, args.fresh_traffic,
+        )):
+            raise QualityError("automation_mixed_identity_flags")
+        validate_input(args.report_mode, args.to_address)
+        args.test_run = args.report_mode == "test"
+        args.rerun = 0
+        args.fresh_traffic = True if args.test_run else None
+    else:
+        args.test_run = bool(args.test_run)
+        args.rerun = args.rerun if args.rerun is not None else 0
+        if (args.rerun < 1 if args.test_run else args.rerun != 0):
+            raise QualityError("runner_test_identity_invalid")
+        validate_test_recipient_input(test_run=args.test_run, test_to=args.test_to)
+        if args.fresh_traffic and not args.test_run:
+            raise QualityError("fresh_traffic_requires_test_rerun")
+
+
+def _official_source(root: Path) -> None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "refs/remotes/origin/main"],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=root,
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode or head.returncode or result.stdout.strip() != head.stdout.strip():
+        raise QualityError("official_source_not_fetched_main")
+
+
+def _committed_inputs(root: Path) -> None:
+    # An uncommitted deployment edit must not reuse an older Git-bound version.
+    result = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--",
+         "src", "agents", "catalogs", "schemas", "config", "pyproject.toml"],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    if result.returncode or result.stdout.strip():
+        raise QualityError("source_inputs_not_committed")
+
+
+@asynccontextmanager
+async def production_ports(catalog, runtime, run_id, assessment_settings):
+    from .bootstrap import azure_json, discover_environment
+    from .providers import AcrImageBuilder, AzureRuntime, AzureSol
+    from .providers.hosted import hosted_environment
+    from .registry import AzureRegistryBlob, DeploymentRegistry
+
+    environment = await discover_environment(runtime.environment)
+    telemetry = await asyncio.to_thread(azure_json, [
+        "resource", "show", "--ids", environment.application_insights_resource_id,
+        "--api-version", "2020-02-02",
+    ])
+    properties = telemetry.get("properties") if isinstance(telemetry, dict) else None
+    connection = properties.get("ConnectionString") if isinstance(properties, dict) else None
+    if not isinstance(connection, str) or not connection:
+        raise QualityError("telemetry_connection_unavailable")
+    records = runtime.run(run_id)
+    image_records = (records.read("images", missing_ok=True) or {"records": {}})["records"]
+    def persist(value):
+        image_records[value["artifact_key"]] = value
+        records.save_progress("images", {"records": image_records})
+    images = AcrImageBuilder(
+        environment.registry_name, workspace=records.directory / "build",
+        persist=persist, records=image_records,
+    )
+    hosted_variables = hosted_environment(environment, connection)
+    records.save_completed("hosted-environment", hosted_variables)
+    cloud = AzureRuntime(environment, images=images, hosted_environment=hosted_variables)
+    metrics = current_metrics()
+    output_mode = "json_text" if (
+        assessment_settings.model, assessment_settings.model_version
+    ) == ("gpt-6-astra", "2026-09-03") else "json_schema"
+    sol = AzureSol(
+        environment, deployment=assessment_settings.deployment_name, output_mode=output_mode,
+        **({"observer": metrics.observe_sol} if metrics is not None else {}),
+    )
+    blob = AzureRegistryBlob(environment)
+    registry = DeploymentRegistry(blob, runtime.outbox("registry"))
     try:
-        result = _dispatch(args)
-    except ContractError as error:
-        parser.exit(1, f"error: {error}\n")
-    if result is not None:
-        print(result)
+        await registry.load()
+        yield cloud, sol, registry
+    finally:
+        await blob.close()
 
 
-def _dispatch(args: argparse.Namespace) -> str | None:
-    if args.command == "run-test-agent-validation":
-        return json.dumps(run_test_agent_validation(), sort_keys=True)
-    if args.command == "prepare-test-agent-validation":
-        return json.dumps(prepare_test_agent_validation(), sort_keys=True)
-    if args.command == "recover-test-agent-validation":
-        return json.dumps(recover_test_agent_validation(), sort_keys=True)
-    if args.command == "deploy-test-agent-validation-shard":
-        return json.dumps(
-            deploy_test_agent_validation_shard(shard_id=args.shard_id),
-            sort_keys=True,
-        )
-    if args.command == "reconcile-test-agent-validation-deployment":
-        return json.dumps(
-            reconcile_test_agent_validation_deployment(),
-            sort_keys=True,
-        )
-    if args.command == "invoke-test-agent-validation-shard":
-        return json.dumps(
-            invoke_test_agent_validation_shard(shard_id=args.shard_id),
-            sort_keys=True,
-        )
-    if args.command == "prepare-test-agent-validation-assessment":
-        return json.dumps(
-            prepare_test_agent_validation_assessment(),
-            sort_keys=True,
-        )
-    if args.command == "release-test-agent-validation-assessment":
-        return json.dumps(
-            release_test_agent_validation_assessment(),
-            sort_keys=True,
-        )
-    if args.command == "import-test-agent-validation-assessment":
-        return json.dumps(
-            import_test_agent_validation_assessment(),
-            sort_keys=True,
-        )
-    if args.command == "compose-test-agent-validation":
-        return json.dumps(compose_test_agent_validation(), sort_keys=True)
-    if args.command == "daily-prepare":
-        return json.dumps(
-            prepare_daily(
-                report_date=args.report_date,
-                work_items_path=args.work_items,
-                rerun=args.rerun,
-                test_run=args.test_run,
-                publish_preview=args.publish_preview,
-            ),
-            sort_keys=True,
-        )
-    if args.command == "daily-provision":
-        return json.dumps(provision_daily(), sort_keys=True)
-    if args.command == "daily-run-agent":
-        return json.dumps(run_daily_agent(args.agent), sort_keys=True)
-    if args.command == "daily-compose":
-        return json.dumps(compose_daily(), sort_keys=True)
-    if args.command == "daily-status":
-        return json.dumps(daily_status(), sort_keys=True)
-    if args.command == "daily-guide":
-        return json.dumps(daily_guide(), sort_keys=True)
-    if args.command == "daily-validate-assessments":
-        return json.dumps(
-            validate_daily_assessment_outputs(
-                assessments=args.assessment,
-                baseline_assessments=args.baseline_assessment,
-                recheck_assessments=args.recheck_assessment,
-                recheck_baseline_assessments=args.recheck_baseline_assessment,
-            ),
-            sort_keys=True,
-        )
-    if args.command == "daily-email-claim":
-        return json.dumps(claim_daily_email(), sort_keys=True)
-    if args.command == "daily-fail":
-        return json.dumps(
-            fail_daily(
-                reason_code=args.reason_code,
-                confirmed=args.confirm,
-            ),
-            sort_keys=True,
-        )
-    if args.command == "daily-complete-publication":
-        return json.dumps(
-            complete_daily_publication(
-                pr_number=args.pr_number,
-                generated_paths=args.path,
-            ),
-            sort_keys=True,
-        )
-    if args.command == "validate":
-        validate_repository()
-        return catalog_summary()
-    if args.command == "generate-docs":
-        generate_docs(check=args.check)
-        return None
-    if args.command == "fetch-quality-work-items":
-        count = fetch_quality_work_items(
-            args.query_url,
-            args.report_date,
-            args.output,
-        )
-        return json.dumps(
-            {"quality_work_items": count, "output": str(args.output)},
-            sort_keys=True,
-        )
-    if args.command == "cleanup-telemetry":
-        if args.human_reviewed:
-            if args.receipt is None:
-                raise ContractError("Reviewed telemetry cleanup requires a receipt path")
-            receipt = apply_cleanup_plan(args.plan, args.receipt)
-            return json.dumps(
-                {
-                    "deleted_resource_count": receipt["deleted_resource_count"],
-                    "remaining_owned_resource_count": receipt[
-                        "remaining_owned_resource_count"
-                    ],
-                },
-                sort_keys=True,
-            )
-        if args.receipt is not None:
-            raise ContractError("Telemetry cleanup planning does not accept a receipt")
-        plan = write_cleanup_plan(args.plan)
-        return json.dumps(
-            {"planned_resource_count": len(plan["resources"])},
-            sort_keys=True,
-        )
-    agents, issues = load_catalogs()
-    hashes = catalog_hashes(agents, issues)
-    if args.command == "select":
-        selected = (
-            select_full(agents)
-            if args.full
-            else select_daily(args.report_date, agents, issues, hashes["issues"])
-        )
-        return json.dumps(selected, indent=2, sort_keys=True)
-    if args.command == "deploy-infrastructure":
-        deploy_infrastructure()
-        return "Infrastructure deployment completed."
-    if args.command == "deploy-analytics":
-        deploy_analytics_infrastructure()
-        return "Analytics infrastructure deployment completed."
-    if args.command == "publish-adx":
-        receipts = [
-            publish_daily_report(
-                read_json(path),
-                source_path=path,
-                catalogs=(agents, issues),
-            )
-            for path in args.report
-        ]
-        return json.dumps({"publications": receipts}, sort_keys=True)
-    if args.command == "render-adx-dashboard":
-        return str(render_dashboard(args.output))
-    if args.command == "provision":
-        if args.profile == "daily":
-            raise ContractError(
-                "Daily provisioning requires daily-prepare then daily-provision "
-                "under the lifecycle quiescence lock"
-            )
-        profile = RuntimeProfile.from_env(args.profile)
-        approved_digests = None
-        provision_profile(
-            profile=profile,
-            agents=agents,
-            issues=issues,
-            approved_digests=approved_digests,
-        )
-        return f"{args.profile} profile provisioned."
-    if args.command == "run-full":
-        policy = load_automation_policy()
-        profile_name = "staging"
-        test_run = bool(getattr(args, "test_run", False))
-        if test_run and args.rerun <= 0:
-            raise ContractError("Test runs require a nonzero --rerun identity")
-        delivery_mode = (
-            TEST_EMAIL_ONLY_DELIVERY if test_run else OFFICIAL_DELIVERY
-        )
-        work_items = load_quality_work_items(
-            args.work_items,
-            report_date=args.report_date,
-        )
-        selected = (
-            select_daily(args.report_date, agents, issues, hashes["issues"])
-            if profile_name == "daily"
-            else select_full(agents)
-        )
-        state = args.state_root / profile_name / run_id(args.report_date, args.rerun)
-        immutable_json(
-            state / "work-items-reference.json",
-            {
-                "schema_version": "1.0.0",
-                "run_id": run_id(args.report_date, args.rerun),
-                "report_date": args.report_date.isoformat(),
-                "content_digest": content_hash(work_items),
-            },
-        )
-        profile = RuntimeProfile.from_env(profile_name)
-        profile.assert_insights_connection()
-        profile.assert_test_agent_model(agent_model_contract(agents))
-        test_region = profile.resolve_test_region()
-        sync_registry(profile)
-        registry = load_registry(
-            profile.registry_path,
-            profile=profile_name,
-            catalog_hashes=hashes,
-        )
-        if registry["test_region"] != test_region:
-            raise ContractError(
-                "Live Foundry Project region does not match the deployment registry"
-            )
-        runtime = LiveRuntime(profile)
-        seed = int(hashes["issues"].split(":")[1][:16], 16)
-        run_contract_digest = _run_contract_digest(
-            profile_name=profile_name,
-            report_date=args.report_date.isoformat(),
-            rerun=args.rerun,
-            delivery_mode=delivery_mode,
-            catalog_hashes=hashes,
-            selected=selected,
-            registry=registry,
-            work_items=work_items,
-            policy=policy,
-            seed=seed,
-            test_region=test_region,
-            test_region_registry=registry["test_region"],
-        )
-        checkpoint_store = VersionCheckpointStore(
-            state / "stage-checkpoints",
-            run_contract_digest,
-        )
-        try:
-            with profile_run_lock(
-                profile_name,
-                run_id(args.report_date, args.rerun),
-            ):
-                results = execute(
-                    agents=agents,
-                    issues=issues,
-                    selected=selected,
-                    registry=registry,
-                    runtime=runtime,
-                    seed=seed,
-                    lookback_hours=policy.insight_lookback_hours,
-                    clean_window_poll_seconds=policy.clean_window_poll_seconds,
-                    clean_window_ingestion_margin_seconds=(
-                        policy.clean_window_ingestion_margin_seconds
-                    ),
-                    clean_window_max_wait_seconds=(
-                        policy.clean_window_max_wait_seconds
-                    ),
-                    trace_assertion_stabilization_seconds=(
-                        policy.trace_assertion_stabilization_seconds
-                    ),
-                    insight_start_margin_seconds=policy.insight_start_margin_seconds,
-                    max_recovery_versions=policy.max_recovery_versions,
-                    agent_start_stagger_seconds=(
-                        policy.agent_start_stagger_seconds
-                    ),
-                    checkpoint_store=checkpoint_store,
-                )
-                _assert_insight_state_resolved(checkpoint_store)
-                manifest = build_manifest(
-                    report_date=args.report_date,
-                    profile=profile_name,
-                    rerun=args.rerun,
-                    delivery_mode=delivery_mode,
-                    insight_lookback_hours=policy.insight_lookback_hours,
-                    telemetry_resource_set=policy.telemetry_resource_set,
-                    test_region=test_region,
-                    test_region_registry=registry["test_region"],
-                    catalog_hashes=hashes,
-                    agent_catalog=agents,
-                    issue_catalog=issues,
-                    selected=selected,
-                    registry=registry,
-                    results=results,
-                )
-                immutable_json(state / "run-manifest.json", manifest)
-                packages = _rehydrate_with_retries(
-                    manifest,
-                    issues,
-                    registry,
-                    runtime,
-                    state / "assessment-packages",
-                    checkpoint_store,
-                )
-        except ActiveQualificationError:
-            raise
-        except Exception as error:
-            if (state / "run-manifest.json").is_file():
-                raise ContractError(
-                    "Qualification evidence was checkpointed; resume the same run "
-                    "before finalization"
-                ) from error
-            atomic_json(
-                state / "qualification-failure.json",
-                {
-                    "schema_version": "1.0.0",
-                    "run_id": run_id(args.report_date, args.rerun),
-                    "profile": profile_name,
-                    "failure_code": type(error).__name__,
-                },
-            )
-            raise ContractError(
-                "Qualification failed before a complete score; no report was produced"
-            ) from error
-        return json.dumps(
-            {
-                "manifest": str(state / "run-manifest.json"),
-                "assessment_packages": len(packages),
-                "delivery_mode": delivery_mode,
-            },
-            sort_keys=True,
-        )
-    if args.command == "finalize":
-        manifest = read_json(args.manifest)
-        validate_manifest(manifest)
-        daily_active = assert_daily_finalization_inputs(
-            manifest_path=args.manifest,
-            assessments=args.assessment,
-            baseline_assessments=args.baseline_assessment,
-            prepare_improvement_input=args.prepare_improvement_input,
-        )
-        test_run = manifest["delivery_mode"] == TEST_EMAIL_ONLY_DELIVERY
-        publish_preview = bool(
-            daily_active is not None
-            and daily_active.value["bindings"]["publish_preview"]
-        )
-        if publish_preview and not test_run:
-            raise ContractError(
-                "GitHub preview publication requires an email-only test run"
-            )
-        planned_preview_links = (
-            preview_links(manifest["run_id"]) if publish_preview else None
-        )
-        work_items = load_quality_work_items(
-            args.work_items,
-            report_date=date.fromisoformat(manifest["report_date"]),
-        )
-        work_items_reference = read_json(
-            args.manifest.parent / "work-items-reference.json"
-        )
-        expected_reference = {
-            "schema_version": "1.0.0",
-            "run_id": manifest["run_id"],
-            "report_date": manifest["report_date"],
-            "content_digest": content_hash(work_items),
-        }
-        if work_items_reference != expected_reference:
-            raise ContractError(
-                "Quality work-item snapshot does not match the qualification run"
-            )
-        issue_ids = {
-            item["issue_id"]
-            for agent in manifest["agents"]
-            for item in agent["issues"]
-            if item.get("status") not in SKIPPED_VERSION_STATUSES
-        }
-        assessments = load_assessments(
-            args.assessment,
-            issue_ids,
-            args.manifest.parent / "assessment-packages",
-            manifest,
-        )
-        baseline_assessments = load_baseline_assessments(
-            args.baseline_assessment,
-            args.manifest.parent / "assessment-packages",
-            manifest,
-        )
-        report = build_report(
-            manifest,
-            issues,
-            assessments,
-            baseline_assessments,
-        )
-        improvement_analysis = None
-        if manifest["profile"] == "daily":
-            living_state_path = (
-                args.output_root / "insight-engine-improvement.json"
-            )
-            previous_improvement_state = (
-                read_json(living_state_path)
-                if not test_run and living_state_path.exists()
-                else None
-            )
-            normalized_summary = (
-                build_normalized_summary(report, previous_improvement_state)
-                if previous_improvement_state is not None
-                else build_normalized_summary(report)
-            )
-            analysis_input = (
-                args.manifest.parent / "insight-engine-improvement-input.json"
-            )
-            atomic_json(analysis_input, normalized_summary)
-            if args.prepare_improvement_input:
-                if args.improvement_analysis is not None:
-                    raise ContractError(
-                        "Improvement input preparation does not accept analysis output"
-                    )
-                if daily_active is not None:
-                    record_daily_improvement_input(daily_active, analysis_input)
-                return json.dumps(
-                    {"improvement_analysis_input": str(analysis_input)},
-                    sort_keys=True,
-                )
-            if args.improvement_analysis is None:
-                raise ContractError(
-                    "Daily finalization requires a schema-valid GPT-5.6 Sol "
-                    "Insight Engine improvement analysis; normalized input was "
-                    f"written to {analysis_input}"
-                )
-            improvement_analysis = read_json(args.improvement_analysis)
-            validate_analysis_against_summary(
-                improvement_analysis,
-                normalized_summary,
-            )
-        elif (
-            args.improvement_analysis is not None
-            or args.prepare_improvement_input
+def _artifact_path(records, key: str) -> str:
+    # Let RecordStore validate every path component, including reserved Windows names.
+    return str(records._path("artifacts", key))
+
+
+def _staging_plan(args, catalog, runtime, revision: str, today: date):
+    from .runner import choose_staging, reconcile_staging_work
+    from .selection import Selection
+    from .state import StateError
+
+    if args.new_run and not args.full:
+        raise QualityError("staging_new_run_requires_full")
+    reconcile_staging_work(catalog, runtime)
+    key = "full" if args.full else "incremental"
+    active = runtime.outbox("staging").read(key, missing_ok=True)
+    if active is not None:
+        if set(active) != {"run_id", "source_revision", "report_date", "full", "completed"} or (
+            type(active["completed"]) is not bool or active["full"] is not args.full
         ):
-            raise ContractError(
-                "Insight Engine improvement analysis applies only to Daily"
-            )
-        if manifest["profile"] == "daily":
-            apply_score_comparison(report, args.output_root / "trend.json")
-        else:
-            apply_staging_score_comparison(
-                report,
-                runtime_root() / "promotion-receipts",
-            )
-        output = (
-            args.manifest.parent / "final-report"
-            if test_run
-            else args.output_root
-            / "daily"
-            / manifest["report_date"].replace("-", os.sep)
-            if manifest["profile"] == "daily"
-            else args.output_root
-            / "staging"
-            / manifest["report_date"].replace("-", os.sep)
-            / manifest["run_id"]
+            raise StateError("staging_resume_invalid")
+        if args.new_run and not active["completed"]:
+            raise QualityError("staging_unfinished_run_exists")
+    if active and active["source_revision"] == revision and not args.new_run:
+        report_date = date.fromisoformat(active["report_date"])
+        records = runtime.run(active["run_id"])
+        saved = records.read_completed("selection")
+        selections = tuple(
+            Selection(catalog.target(item["key"]), item["action"], tuple(item["reasons"]))
+            for item in saved["targets"]
         )
-        official_daily = manifest["profile"] == "daily" and not test_run
-        if improvement_analysis is not None:
-            if test_run:
-                write_improvement_preview(
-                    report=report,
-                    analysis=improvement_analysis,
-                    output=(
-                        args.manifest.parent
-                        / "insight-engine-improvement-preview"
-                    ),
-                )
-        recipient = resolve_recipient(test_run=test_run)
-        runtime_profile = RuntimeProfile.from_env(manifest["profile"])
-        official_report_candidate = (
-            args.manifest.parent / "official-report-candidate.json"
-        )
-        if official_daily:
-            atomic_json(official_report_candidate, report)
-        adx_publication = (
-            {"status": "skipped_test", "error_code": None}
-            if test_run
-            else
-            publish_daily_report_best_effort(
-                report,
-                source_path=official_report_candidate,
-                catalogs=(agents, issues),
-            )
-            if manifest["profile"] == "daily"
-            else None
-        )
-        dashboard_link = (
-            resolve_dashboard_link()
-            if manifest["profile"] == "daily" and not test_run
-            else None
-        )
-        project_link, agent_links = build_runtime_links(
-            runtime_profile,
-            [agent["name"] for agent in manifest["agents"]],
-        )
-        request = create_request(
-            report,
-            recipient,
-            project_link=project_link,
-            agent_links=agent_links,
-            dashboard_link=dashboard_link,
-            adx_publication=adx_publication,
-            work_items=work_items,
-            test_run=test_run,
-            preview_links=planned_preview_links,
-        )
-        report["delivery"]["content_digest"] = request["content_digest"]
-        if official_daily:
-            atomic_json(
-                official_report_candidate,
-                report,
-            )
-            write_improvement_memory(
-                report=report,
-                analysis=improvement_analysis,
-                reports_root=args.output_root,
-                living_state_path=living_state_path,
-                report_output=output,
-            )
-        else:
-            write_report(
-                report,
-                output,
-                include_improvement_link=not test_run,
-            )
-        preview_publication_path = None
-        if publish_preview:
-            preview_publication_path = (
-                args.manifest.parent / "github-preview-publication.json"
-            )
-            if preview_publication_path.is_file():
-                preview_publication = read_json(preview_publication_path)
-                validate_preview_publication(
-                    preview_publication,
-                    run_id=manifest["run_id"],
-                )
-                verify_daily_email_test_preview(
-                    output,
-                    preview_publication,
-                )
-            else:
-                preview_publication = publish_daily_email_test_preview(
-                    output,
-                    run_id=manifest["run_id"],
-                )
-                immutable_json(preview_publication_path, preview_publication)
-            request = bind_preview_publication(request, preview_publication)
-        private_request = args.manifest.parent / "email-send-request.json"
-        immutable_json(private_request, request)
-        private_preview = args.manifest.parent / "report-preview.html"
-        write_private_report_preview(request, private_preview)
-        if manifest["profile"] == "daily" and not test_run:
-            atomic_json(args.output_root / "latest.json", report)
-            atomic_text(
-                args.output_root / "latest.md",
-                (output / "report.md").read_text(encoding="utf-8"),
-            )
-            update_trend(report, args.output_root / "trend.json")
-        if daily_active is not None:
-            record_daily_finalization(
-                daily_active,
-                report_path=output / "report.json",
-                email_request_path=private_request,
-                improvement_analysis_path=args.improvement_analysis,
-                adx_publication_status=(
-                    adx_publication["status"]
-                    if adx_publication is not None
-                    else "not_applicable"
-                ),
-                preview_publication_path=preview_publication_path,
-            )
-        validation_policy = None
-        if test_run:
-            n, k = validation_matrix("baseline")
-            validation_policy = {
-                "schema_version": "1.0.0",
-                "policy": "unified_target_evidence_v1",
-                "attempts_per_target": n,
-                "required_conclusive_attempts": k,
-                "maximum_trace_unknown_attempts": n - k,
-            }
-            validation_policy["policy_digest"] = content_hash(
-                validation_policy
-            )
-        return json.dumps(
-            {
-                "quality_score": report["summary"]["quality_score"],
-                "report": str(output / "report.json"),
-                "email_request": str(private_request),
-                "report_preview": str(private_preview),
-                "adx_publication": (
-                    adx_publication["status"]
-                    if adx_publication is not None
-                    else "not_applicable"
-                ),
-                "adx_error_code": (
-                    adx_publication.get("error_code")
-                    if adx_publication is not None
-                    else None
-                ),
-                "delivery_mode": manifest["delivery_mode"],
-                "generated_report": not test_run,
-                "validation_policy": validation_policy,
-                "github_preview": (
-                    str(preview_publication_path)
-                    if preview_publication_path is not None
-                    else None
-                ),
-                "pull_request": (
-                    "skipped_test"
-                    if test_run
-                    else "required"
-                    if manifest["profile"] == "daily"
-                    else "not_applicable"
-                ),
-            },
-            sort_keys=True,
-        )
-    if args.command == "email-receipt-import":
-        daily_active = assert_daily_receipt_import(args.request, args.output)
-        import_receipt(read_json(args.request), args.receipt, args.output)
-        if daily_active is not None:
-            record_daily_email_receipt(daily_active, args.output)
-        return "Email receipt imported."
-    if args.command == "replay-run":
-        manifest = read_json(args.manifest)
-        validate_manifest(manifest)
-        profile = RuntimeProfile.from_env(
-            manifest["profile"],
-            manifest["telemetry_resource_set"],
-        )
-        profile.assert_insights_connection()
-        result = LiveRuntime(profile).replay_manifest(manifest)
-        return json.dumps(result, indent=2, sort_keys=True)
-    if args.command == "validate-generated-paths":
-        validate_generated_paths(args.path)
-        return None
-    if args.command == "validate-published-report":
-        report = read_json(args.report)
-        if report.get("catalog_hashes") != hashes:
-            raise ContractError("Published report does not match trusted base catalogs")
-        expected_selection = select_daily(
-            date.fromisoformat(report["report_date"]),
-            agents,
-            issues,
-            hashes["issues"],
-        )
-        validate_published_report(report, issues, expected_selection)
-        expected_path = (
-            "reports/daily/"
-            + report["report_date"].replace("-", "/")
-            + "/report.json"
-        )
-        if args.report_relative_path.replace("\\", "/") != expected_path:
-            raise ContractError("Published report date does not match its path")
-        expected_markdown = render_markdown(report)
-        if (
-            args.report_markdown.read_text(encoding="utf-8") != expected_markdown
-            or args.latest_markdown.read_text(encoding="utf-8") != expected_markdown
-            or read_json(args.latest_json) != report
-        ):
-            raise ContractError("Published report and latest views are inconsistent")
-        expected_agent_reports = {
-            item["agent"]: render_agent_markdown(report, item["agent"])
-            for item in report["baseline"]
-        }
-        actual_agent_reports = {
-            path.stem: path.read_text(encoding="utf-8")
-            for path in args.agent_report
-        }
-        if actual_agent_reports != expected_agent_reports:
-            raise ContractError("Published per-Agent reports are inconsistent")
-        validate_published_improvement(
-            report=report,
-            living_state=read_json(args.improvement_json),
-            living_markdown=args.improvement_markdown.read_text(
-                encoding="utf-8"
-            ),
-            snapshot=read_json(args.improvement_snapshot_json),
-            snapshot_markdown=args.improvement_snapshot_markdown.read_text(
-                encoding="utf-8"
-            ),
-            previous_state=read_json(args.base_improvement_json),
-            previous_markdown=args.base_improvement_markdown.read_text(
-                encoding="utf-8"
-            ),
-        )
-        trend = read_json(args.trend)
-        base_trend = read_json(args.base_trend)
-        matching_days = [
-            item
-            for item in trend.get("days", [])
-            if isinstance(item, dict)
-            and item.get("report_date") == report["report_date"]
-        ]
-        expected_day = {
-            "report_date": report["report_date"],
-            "baseline_passed": report["summary"]["baseline_passed"],
-            "issues_correct": report["summary"]["issues_correct"],
-            "issues_incorrect": report["summary"]["issues_incorrect"],
-            "issues_missing": report["summary"]["issues_missing"],
-            "issues_expected": report["summary"]["issues_expected"],
-            "noise_cards": report["summary"]["noise_cards"],
-            "duplicate_cards": report["summary"]["duplicate_cards"],
-            "quality_score": report["summary"]["quality_score"],
-        }
-        if matching_days != [expected_day]:
-            raise ContractError("Published trend does not match the report")
-        if trend != updated_trend(report, base_trend):
-            raise ContractError("Published trend rewrites historical results")
-        if report.get("score_comparison") != score_comparison(report, base_trend):
-            raise ContractError("Published score comparison does not match the trend")
-        return None
-    if args.command == "create-promotion-receipt":
-        report = read_json(args.report)
-        registry = read_json(args.registry)
-        manifest = read_json(args.manifest)
-        receipt = create_promotion_receipt(
-            report=report,
-            registry=registry,
-            manifest=manifest,
-            issue_catalog=issues,
-            human_reviewed=args.human_reviewed,
-        )
-        atomic_json(args.output, receipt)
-        return "Staging promotion receipt created."
-    raise AssertionError("unreachable")
-def _run_contract_digest(
-    *,
-    profile_name: str,
-    report_date: str,
-    rerun: int,
-    delivery_mode: str,
-    catalog_hashes: dict[str, str],
-    selected: dict[str, list[str]],
-    registry: dict[str, Any],
-    work_items: dict[str, Any],
-    policy: Any,
-    seed: int,
-    test_region: str,
-    test_region_registry: str,
-) -> str:
-    runtime_files = {
-        path.relative_to(ROOT).as_posix(): file_hash(path)
-        for path in sorted((ROOT / "src" / "agent_insights_quality").glob("*.py"))
+        return active, report_date, selections
+    run_id = f"staging-{today.isoformat()}-{revision[:12]}" + ("-full" if args.full else "")
+    run_id += "-" + uuid.uuid4().hex[:8]
+    selections = choose_staging(catalog, runtime, full=args.full)
+    runtime.run(run_id).save_completed("selection", {"targets": [
+        {"key": item.target.key, "action": item.action, "reasons": list(item.reasons)}
+        for item in selections
+    ]})
+    active = {
+        "run_id": run_id, "source_revision": revision, "report_date": today.isoformat(),
+        "full": args.full, "completed": False,
     }
-    runtime_files["config/automation.yaml"] = file_hash(
-        ROOT / "config" / "automation.yaml"
-    )
-    for relative in (
-        "schemas/run-manifest.schema.json",
-        "schemas/prompt-traffic.schema.json",
-        "schemas/assessment-package.schema.json",
-        "src/agent_insights_quality/prompts/assessment.md",
-    ):
-        runtime_files[relative] = file_hash(ROOT / relative)
-    return content_hash(
-        {
-            "schema_version": "1.0.0",
-            "profile": profile_name,
-            "report_date": report_date,
-            "rerun": rerun,
-            "delivery_mode": delivery_mode,
-            "catalog_hashes": catalog_hashes,
-            "selected": selected,
-            "registry_hash": content_hash(registry),
-            "work_items_hash": content_hash(work_items),
-            "lookback_hours": policy.insight_lookback_hours,
-            "max_parallel_agents": policy.max_parallel_agents,
-            "agent_start_stagger_seconds": policy.agent_start_stagger_seconds,
-            "telemetry_resource_set": policy.telemetry_resource_set,
-            "seed": seed,
-            "test_region": test_region,
-            "test_region_registry": test_region_registry,
-            "runtime_files": runtime_files,
-        }
-    )
+    # Publish the resume reference before any provider calls or target work.
+    runtime.outbox("staging").save_progress(key, active)
+    return active, today, selections
 
 
-def _assert_insight_state_resolved(
-    checkpoint_store: VersionCheckpointStore,
-) -> None:
-    if checkpoint_store.has_unresolved_insight_state():
-        raise ContractError(
-            "Qualification has unresolved Agent Insights state; resume before "
-            "creating the immutable manifest"
+def _staging_status(runtime, records, active, result, warnings=()):
+    statuses = [item["status"] for item in result["results"]]
+    complete = "INCOMPLETE" not in statuses and not result["integrity_failure"]
+    runtime.outbox("staging").save_progress(
+        "full" if active["full"] else "incremental", {**active, "completed": complete},
+    )
+    return {
+        "run_id": active["run_id"], "profile": "staging", "selected": len(statuses),
+        "report_date": active["report_date"],
+        "statuses": {status: statuses.count(status) for status in ("PASS", "FAIL", "INCOMPLETE")},
+        "result_path": str(records._path("progress", "staging-result")), "warnings": sorted(warnings),
+    }, 0 if complete else 2
+
+
+def _assessment_for_run(runtime, records):
+    from .settings import AssessmentSettings, load_assessment_settings
+    from .state import StateError
+
+    frozen = records.read_completed("assessment-settings", missing_ok=True)
+    if frozen is not None:
+        return AssessmentSettings.from_dict(frozen)
+    if records.read_completed("run", missing_ok=True) is not None:
+        raise StateError("assessment_settings_missing")
+    path = None
+    if runtime.environment == "daily":
+        override = _private_path(runtime, runtime.root / "config" / "daily-assessment.json")
+        if override.is_file():
+            path = override
+    if path is None:
+        shared = _private_path(runtime, runtime.root / "config" / "assessment.json")
+        path = shared if shared.is_file() else None
+    settings = load_assessment_settings(
+        path, require_complete=path is not None and path.name == "daily-assessment.json",
+    )
+    records.save_completed("assessment-settings", settings.to_dict())
+    return settings
+
+
+async def _run(
+    args, catalog, runtime, *, ports, integrations, today: date, staging_policy_migration=None,
+) -> tuple[dict, int]:
+    from .contracts import Environment
+    from .runner import Runner, daily_traffic_intent, planned_units, source_revision
+    from .selection import select_daily
+    from .settings import load_settings
+
+    is_daily = args.command == "run-daily"
+    if staging_policy_migration is not None:
+        from .staging_policy import STAGING_POLICY, StagingPolicyMigration
+        if is_daily or not isinstance(staging_policy_migration, StagingPolicyMigration) or (
+            staging_policy_migration.destination_policy != STAGING_POLICY
+        ):
+            raise QualityError("staging_policy_migration_invalid")
+    test_run = is_daily and args.test_run
+    unified = is_daily and getattr(args, "report_mode", None) is not None
+    if is_daily and not unified and (args.rerun < 1 if test_run else args.rerun != 0):
+        raise QualityError("runner_test_identity_invalid")
+    if is_daily and args.fresh_traffic and not test_run:
+        raise QualityError("fresh_traffic_requires_test_rerun")
+    def checked_source():
+        if is_daily and not test_run and not unified:
+            _official_source(catalog.root)
+        _committed_inputs(catalog.root)
+        return source_revision(catalog)
+
+    launch = None
+    if unified:
+        from .automation_launch import resolve_launch
+        launch = resolve_launch(
+            runtime, report_mode=args.report_mode, to_address=args.to_address,
+            today=today, source=checked_source,
+            validate_new_source=(lambda: _official_source(catalog.root)) if not test_run else None,
         )
+        today = date.fromisoformat(launch["report_date"])
+        args.rerun = launch["rerun"]
+        revision = launch["source_revision"]
+    else:
+        revision = checked_source()
+    if is_daily:
+        run_id = f"daily-{today.isoformat()}" + (f"-test-{args.rerun}" if test_run else "")
+        from .automation_launch import read_launch
+        retained_launch = read_launch(runtime, run_id)
+        if retained_launch is not None and retained_launch["source_revision"] != revision:
+            raise QualityError("automation_resume_source_changed")
+        targets = select_daily(catalog, today, test_run=test_run)
+        selections = None
+    else:
+        active, today, selections = _staging_plan(args, catalog, runtime, revision, today)
+        run_id = active["run_id"]
+        targets = tuple(item.target for item in selections)
+    records = runtime.run(run_id)
+    private_recipient = freeze_private_recipient(
+        runtime, run_id, test_run=test_run,
+        test_to=launch["to_address"] if launch and test_run else getattr(args, "test_to", None),
+    ) if is_daily else None
+    if is_daily and (
+        records.read_completed("delivery-inputs", missing_ok=True) is None
+        and runtime.outbox("email").read(run_id, missing_ok=True) is not None
+    ):
+        raise QualityError("delivery_inputs_missing")
+    traffic_intent = None
+    if is_daily:
+        reuse_run_id = None
+        if test_run and not args.fresh_traffic and (
+            records.read_completed("run", missing_ok=True) is None
+            and records.read_completed("traffic-intent", missing_ok=True) is None
+        ):
+            last = runtime.outbox("trials").read(today.isoformat(), missing_ok=True)
+            if last and last["run_id"] != run_id:
+                reuse_run_id = last["run_id"]
+        traffic_intent = daily_traffic_intent(
+            records, test_run=test_run, rerun=args.rerun, revision=revision,
+            fresh_traffic=args.fresh_traffic, reuse_run_id=reuse_run_id,
+        )
+    metrics = begin_metrics(records)
+    if not is_daily and active["completed"]:
+        settings_path = catalog.root / "config" / "runtime.json"
+        requested = load_settings(settings_path if settings_path.is_file() else None)
+        if requested.staging_travel_session_lookahead:
+            policy = records.read_completed("staging-session-lookahead", missing_ok=True)
+            if policy != {"travel_sessions_ahead": 1} or type(policy.get("travel_sessions_ahead")) is not int:
+                raise QualityError("staging_session_trial_frozen_off")
+        if metrics:
+            metrics.reuse("run", "staging")
+        return _staging_status(runtime, records, active, records.read("staging-result"))
+    frozen = records.read_completed("delivery-inputs", missing_ok=True) if is_daily else None
+    assessment = _assessment_for_run(runtime, records)
+    if frozen is None:
+        settings_path = catalog.root / "config" / "runtime.json"
+        settings = load_settings(settings_path if settings_path.is_file() else None)
+    # An empty staging selection has no reason to discover credentials or create providers.
+    if not is_daily and not targets:
+        if settings.staging_travel_session_lookahead:
+            raise QualityError("staging_session_trial_requires_fresh_travel")
+        value = {"profile": "staging", "selected": 0, "status": "unchanged", "results": [], "integrity_failure": False}
+        records.save_progress("staging-result", value)
+        return _staging_status(runtime, records, active, value)
+    async with integrations(
+        catalog.root, runtime, run_id, allowed_units=planned_units(targets),
+        report_date=today, test_run=test_run,
+    ) as integration:
+        if frozen is not None:
+            if metrics:
+                metrics.reuse("run", "daily")
+            result = integration.frozen_result()
+            environment = Environment(**records.read_completed("environment"))
+            with scope(metrics, "stage", "delivery_report"):
+                published = integration.publish_report(result, environment, frozen["source_revision"])
+                await integration.finish_publication()
+                if metrics and metrics.health_warnings:
+                    integration.warn("logging_failed")
+                email = integration.prepare_delivery(
+                    result, environment, frozen["source_revision"], rerun=args.rerun,
+                    recipient=lambda: private_recipient, assessment_settings=assessment,
+                )
+            return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
+        async with ports(catalog, runtime, run_id, assessment) as (cloud, sol, registry):
+            runner = Runner(
+                catalog, runtime, run_id, cloud, sol, registry, settings=settings,
+                test_run=test_run, rerun=args.rerun if is_daily else 0,
+                revision=revision,
+                reuse_run_id=traffic_intent["reuse_run_id"] if traffic_intent else None,
+                fresh_traffic=traffic_intent["fresh_traffic"] if traffic_intent else None,
+                event_outbox=integration.queue_event,
+                staging_policy_migration=staging_policy_migration,
+                metrics=metrics, assessment_settings=assessment,
+            )
+            try:
+                integration.attach_logger(runner.logger)
+                runner.initialize(targets, today, kind=runtime.environment)
+                if is_daily:
+                    result = await runner.run_daily(targets)
+                    with scope(metrics, "stage", "delivery_report"):
+                        published = integration.publish_report(result, cloud.environment, revision)
+                        await integration.finish_publication()
+                        if metrics and metrics.health_warnings:
+                            integration.warn("logging_failed")
+                        email = integration.prepare_delivery(
+                            result, cloud.environment, revision, rerun=args.rerun,
+                            recipient=lambda: private_recipient,
+                            assessment_settings=assessment,
+                        )
+                    if test_run:
+                        runtime.outbox("trials").save_progress(today.isoformat(), {"run_id": run_id})
+                    return _daily_status(runtime, records, run_id, result, email, published, integration.warnings)
+                result = await runner.run_staging(selections)
+                await integration.finish_publication()
+                return _staging_status(runtime, records, active, result, integration.warnings)
+            finally:
+                runner.logger.close()
 
 
-def _rehydrate_with_retries(
-    manifest: dict[str, Any],
-    issues: dict[str, Any],
-    registry: dict[str, Any],
-    runtime: Any,
-    output: Path,
-    checkpoint_store: VersionCheckpointStore,
-) -> list[Path]:
-    for attempt in range(3):
-        try:
-            return rehydrate_packages(
-                manifest,
-                issues,
-                registry,
-                runtime,
-                output,
-                checkpoint_store,
+def _daily_status(runtime, records, run_id, result, email, published, warnings):
+    pointer = records.read("quality-result")
+    frozen = records.read_completed("delivery-inputs", missing_ok=True)
+    presentation = frozen.get("presentation", {}) if frozen else {}
+    return {
+        "run_id": run_id, "profile": "daily", "status": result.status.value,
+        "score": result.score, "counts": result.counts.to_dict(),
+        "coverage": result.coverage.to_dict(), "result_path": _artifact_path(records, pointer["artifact"]),
+        "delivery_id": email.request.delivery_id,
+        "email_record_path": str(runtime.outbox("email")._path("progress", run_id)),
+        "email_status": email.status, "warnings": sorted(warnings), **published,
+        **({
+            "private_report_markdown_path": str(
+                records._path("artifacts", "presentation/report").with_suffix(".md"),
+            ),
+            "presentation_blockers": presentation["blockers"],
+        } if presentation else {}),
+    }, 0 if result.team_report_eligible else 2
+
+
+def _unavailable_report_state(error):
+    return {
+        "status": "unavailable",
+        "code": error.code if isinstance(error, QualityError) else "private_report_unavailable",
+        "human_validation_available": False,
+    }
+
+
+def _private_report_status(runtime, run_id, *, access_descriptor=None):
+    from .private_publication import PrivateReportOutbox
+    from .report_access import VerifiedReportAccess, read_report_access
+
+    try:
+        outbox = PrivateReportOutbox(runtime, run_id)
+        request = outbox.request()
+        publication = outbox.status(request)
+    except (QualityError, OSError) as error:
+        return {
+            **_unavailable_report_state(error),
+            "access": _unavailable_report_state(error),
+        }
+    try:
+        access = (
+            read_report_access(runtime, access_descriptor, delivery_id=run_id)
+            if access_descriptor is not None else VerifiedReportAccess(
+                runtime, run_id + "/" + request["presentation_id"] + "/access/initial",
             )
-        except ContractError:
-            if attempt == 2:
-                raise
-            runtime.report_progress(
-                "assessment package generation failed transiently; "
-                f"retrying ({attempt + 2}/3)"
+        )
+        publication["access"] = access.status()
+    except (QualityError, OSError) as error:
+        publication["access"] = _unavailable_report_state(error)
+    return publication
+
+
+def _status(runtime) -> dict:
+    runs = []
+    directory = runtime.directory / "runs"
+    for path in sorted(directory.iterdir()) if directory.exists() else ():
+        if not path.is_dir():
+            continue
+        records = runtime.run(path.name)
+        metadata = records.read_completed("run", missing_ok=True)
+        if metadata is None:
+            status = records.read("command-status", missing_ok=True)
+            if status and status["status"] == "blocked":
+                runs.append({"run_id": path.name, "status": status["status"], "code": status["code"]})
+            continue
+        pointer = records.read("quality-result", missing_ok=True)
+        if pointer:
+            value = records.read_artifact(pointer["artifact"])
+            runs.append({
+                "run_id": path.name, "status": value["status"],
+                "result_path": _artifact_path(records, pointer["artifact"]),
+            })
+        else:
+            staged = records.read("staging-result", missing_ok=True)
+            runs.append({"run_id": path.name, "status": "recorded" if staged else "unfinished"})
+        performance = records.read("performance/latest", missing_ok=True)
+        if performance:
+            runs[-1]["performance_path"] = _artifact_path(records, performance["artifact"])
+        if runtime.environment == "daily":
+            from .email import read_email
+            email = None
+            try:
+                if runtime.outbox("email").read(path.name, missing_ok=True) is not None:
+                    email = read_email(runtime.outbox("email"), path.name)
+                    runs[-1].update(
+                        email_status=email.status, inbox_delivery_confirmed=email.inbox_delivery_confirmed,
+                    )
+            except (QualityError, OSError) as error:
+                runs[-1]["email_status"] = "unavailable"
+                runs[-1]["email_status_code"] = (
+                    error.code if isinstance(error, QualityError) else "email_record_unavailable"
+                )
+            runs[-1]["private_report"] = _private_report_status(
+                runtime, path.name,
+                access_descriptor=email.request.report_access if email else None,
             )
-            time.sleep(2**attempt)
-    raise ContractError("Assessment package retry loop did not execute")
+    return {"profile": runtime.environment, "runs": runs}
+
+
+def _catalog(root):
+    from .catalogs import load_catalog
+    from jsonschema.exceptions import ValidationError
+    import yaml
+    try:
+        return load_catalog(root)
+    except (OSError, ValueError, ValidationError, yaml.YAMLError) as error:
+        raise QualityError("catalog_input_invalid") from error
+
+
+def main(
+    argv=None, *, root: Path | None = None, runtime_factory=None, ports=None, integrations=None,
+    today=None, staging_policy_migration=None, metrics_factory=RunMetrics,
+) -> int:
+    args = parser().parse_args(argv)
+    from .catalogs import validate_catalog
+    from .email import claim_email, record_email_outcome
+    from .state import RuntimeStore
+    root = Path.cwd() if root is None else root
+    runtime_factory = RuntimeStore if runtime_factory is None else runtime_factory
+    ports = production_ports if ports is None else ports
+    integrations = RunIntegration if integrations is None else integrations
+    try:
+        if args.command == "run-daily":
+            _daily_arguments(args)
+        if staging_policy_migration is not None and args.command != "run-staging":
+            raise QualityError("staging_policy_migration_invalid")
+        if args.command in {"validate", "generate-docs"}:
+            catalog = _catalog(root)
+            if args.command == "generate-docs":
+                from .catalog_docs import generate_catalog_views
+                print(json.dumps({"generated_paths": list(generate_catalog_views(catalog))}))
+            else:
+                validate_catalog(catalog)
+                print(json.dumps({"status": "validated", "targets": len(catalog.targets)}))
+            return 0
+        profile = "staging" if args.command == "run-staging" else getattr(args, "profile", "daily")
+        runtime = runtime_factory(profile)
+        if args.command == "status":
+            print(json.dumps(_status(runtime)))
+            return 0
+        with runtime.ownership():
+            if args.command.startswith("run-"):
+                with command_status(runtime, args.command):
+                    with metric_session(metrics_factory) as performance:
+                        value, code = asyncio.run(_run(
+                            args, _catalog(root), runtime, ports=ports, integrations=integrations,
+                            today=today or date.today(),
+                            staging_policy_migration=staging_policy_migration,
+                        ))
+                    if performance[0] is not None:
+                        if performance[0].artifact_path:
+                            value["performance_path"] = performance[0].artifact_path
+                        if performance[0].health_warnings:
+                            value["warnings"] = sorted({*value.get("warnings", []), "logging_failed"})
+            elif args.command == "private-report-refresh-access":
+                from .report_access import refresh_report_access
+                with command_status(runtime, args.command):
+                    status = refresh_report_access(
+                        runtime, args.delivery_id, revision=args.access_revision,
+                    )
+                    value, code = {
+                        "delivery_id": args.delivery_id, "report_access": status,
+                    }, 0 if status["status"] == "ready" else 2
+            elif args.command == "private-report-flush":
+                from .private_publication import flush_private_report
+                with command_status(runtime, args.command):
+                    status = flush_private_report(
+                        runtime, args.delivery_id, read_only=args.read_only,
+                    )
+                    value, code = {
+                        "delivery_id": args.delivery_id, "private_report": status,
+                    }, 0 if status["status"] == "delivered" else 2
+            elif args.command == "email-preview":
+                from .email_preview import export_email_preview
+                preview = export_email_preview(
+                    runtime, args.delivery_id, root=root, restyle=args.restyle,
+                    scoring_revision=args.scoring_revision, rescore=args.rescore,
+                )
+                value, code = preview.to_dict(), 0
+            elif args.command == "email-claim":
+                outbox = runtime.outbox("email")
+                request = claim_email(outbox, args.delivery_id, claim_id=args.claim_id)
+                artifact = f"claims/{args.delivery_id}/{args.claim_id}"
+                outbox.save_artifact(artifact, request.to_private_dict())
+                value, code = {
+                    "delivery_id": args.delivery_id, "status": "claimed",
+                    "request_path": _artifact_path(outbox, artifact),
+                }, 0
+            else:
+                path = _private_path(runtime, args.result_file)
+                record = record_email_outcome(
+                    runtime.outbox("email"), args.delivery_id, claim_id=args.claim_id,
+                    outcome=args.outcome, provider_result=_read_object(path),
+                    reconciliation=args.reconciliation,
+                )
+                value, code = {
+                    "delivery_id": args.delivery_id, "status": record.status,
+                    "inbox_delivery_confirmed": record.inbox_delivery_confirmed,
+                }, 0
+            print(json.dumps(value))
+            return code
+    except QualityError as error:
+        print(json.dumps({
+            "status": "blocked", "code": error.code,
+            "request_accepted": error.request_accepted, "retryable": error.retryable,
+        }), file=sys.stderr)
+        return 2
+    except OSError:
+        print(json.dumps({"status": "blocked", "code": "command_io_failed"}), file=sys.stderr)
+        return 2
+
+
+def entrypoint() -> int:
+    """Safe terminal boundary; unexpected bugs remain failing, not soft unknowns."""
+    try:
+        return main()
+    except Exception:
+        print(json.dumps({"status": "failed", "code": "unexpected_failure"}), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(entrypoint())

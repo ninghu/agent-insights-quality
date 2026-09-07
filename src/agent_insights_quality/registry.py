@@ -1,229 +1,208 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import tempfile
-import time
-from pathlib import Path
-from typing import Any
+import asyncio
+import json
+from collections.abc import Mapping
+from dataclasses import asdict
+from typing import Any, Protocol
 
-from jsonschema import Draft202012Validator
-
-from agent_insights_quality.automation_policy import load_automation_policy
-from agent_insights_quality.azure_cli import azure_cli
-from agent_insights_quality.catalogs import agent_model_contract
-from agent_insights_quality.progress import ProgressReporter
-from agent_insights_quality.util import ROOT, ContractError, read_json, read_yaml
-
-PROFILE_PROJECTS = {
-    "daily": "aiq-daily-swedencentral",
-    "staging": "aiq-staging-swedencentral",
-}
-ENVIRONMENT_ID = "swedencentral-g30"
-PROFILE_LOCATION = "swedencentral"
-TELEMETRY_RESOURCE_SET = "g30"
-DEPLOYMENT_REGISTRY_SCHEMA_VERSION = "3.0.0"
-REGISTRY_CONTAINER = load_automation_policy().deployment_registry_container
-_PROGRESS = ProgressReporter("aiq-registry")
+from agent_insights_quality.contracts import Deployment, Environment
+from agent_insights_quality.errors import QualityError
+from agent_insights_quality.state import RecordStore, _unique_object
 
 
-def sync_registry(profile: Any) -> None:
-    account = str(profile.registry_storage_account_name or "").strip()
-    if not account:
-        raise ContractError("Private registry storage account could not be resolved")
-    profile.registry_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=f".{profile.name}-registry.",
-        dir=profile.registry_path.parent,
-    )
-    os.close(descriptor)
-    try:
-        process = _run_registry_command(
-            [
-                azure_cli(),
-                "storage",
-                "blob",
-                "download",
-                "--account-name",
-                account,
-                "--container-name",
-                REGISTRY_CONTAINER,
-                "--name",
-                f"{profile.environment_id}/{profile.name}.json",
-                "--file",
-                temporary,
-                "--auth-mode",
-                "login",
-                "--overwrite",
-                "true",
-                "--only-show-errors",
-                "--output",
-                "none",
-            ],
+class BlobPort(Protocol):
+    async def read(self) -> tuple[bytes, str] | None: ...
+    async def write(self, data: bytes, etag: str | None) -> str: ...
+
+
+class AzureRegistryBlob:
+    def __init__(self, environment: Environment) -> None:
+        self.environment = environment
+        self._client = None
+        self._credential = None
+
+    def _get_client(self):
+        if self._client is None:
+            from azure.identity.aio import AzureCliCredential
+            from azure.storage.blob.aio import BlobClient
+
+            self._credential = AzureCliCredential()
+            self._client = BlobClient(
+                account_url=(
+                    f"https://{self.environment.storage_account_name}.blob.core.windows.net"
+                ),
+                container_name="deployment-registries",
+                blob_name=f"swedencentral-g30/runner-v1/{self.environment.profile}.json",
+                credential=self._credential,
+                retry_total=0,
+            )
+        return self._client
+
+    async def read(self) -> tuple[bytes, str] | None:
+        from azure.core.exceptions import (
+            AzureError, HttpResponseError, ResourceNotFoundError,
         )
-        if process.returncode != 0:
-            raise ContractError("Private deployment registry download failed")
-        os.replace(temporary, profile.registry_path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
 
-
-def publish_registry(profile: Any) -> None:
-    account = str(profile.registry_storage_account_name or "").strip()
-    if not account:
-        raise ContractError("Private registry storage account could not be resolved")
-    process = _run_registry_command(
-        [
-            azure_cli(),
-            "storage",
-            "blob",
-            "upload",
-            "--account-name",
-            account,
-            "--container-name",
-            REGISTRY_CONTAINER,
-            "--name",
-            f"{profile.environment_id}/{profile.name}.json",
-            "--file",
-            str(profile.registry_path),
-            "--auth-mode",
-            "login",
-            "--overwrite",
-            "true",
-            "--only-show-errors",
-            "--output",
-            "none",
-        ],
-    )
-    if process.returncode != 0:
-        raise ContractError("Private deployment registry upload failed")
-
-
-def publish_validation_registry(profile: Any, path: Path) -> None:
-    account = str(profile.registry_storage_account_name or "").strip()
-    if (
-        profile.environment_id != ENVIRONMENT_ID
-        or profile.name != "staging"
-        or not account
-        or not path.is_file()
-    ):
-        raise ContractError("Validation registry publication binding is invalid")
-    process = _run_registry_command(
-        [
-            azure_cli(),
-            "storage",
-            "blob",
-            "upload",
-            "--account-name",
-            account,
-            "--container-name",
-            REGISTRY_CONTAINER,
-            "--name",
-            f"{ENVIRONMENT_ID}/test-agent-validation.json",
-            "--file",
-            str(path),
-            "--auth-mode",
-            "login",
-            "--overwrite",
-            "true",
-            "--only-show-errors",
-            "--output",
-            "none",
-        ],
-    )
-    if process.returncode != 0:
-        raise ContractError("Private validation registry upload failed")
-
-
-def _run_registry_command(
-    arguments: list[str],
-) -> subprocess.CompletedProcess[str]:
-    process: subprocess.CompletedProcess[str] | None = None
-    for attempt in range(3):
         try:
-            with _PROGRESS.heartbeat(
-                f"private registry operation attempt {attempt + 1}/3"
-            ) as outcome:
-                process = subprocess.run(
-                    arguments,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    check=False,
-                )
-                if process.returncode != 0:
-                    outcome.fail()
-        except subprocess.TimeoutExpired:
-            if attempt == 2:
-                raise ContractError(
-                    "Registry command timed out after bounded retries"
-                ) from None
-            time.sleep(2**attempt)
-            continue
-        if process.returncode == 0:
-            return process
-        if attempt < 2:
-            time.sleep(2**attempt)
-    if process is None:
-        raise ContractError("Registry command retry loop did not execute")
-    return process
+            download = await self._get_client().download_blob()
+            data = await download.readall()
+            return data, _etag(download.properties.etag)
+        except ResourceNotFoundError as error:
+            code = getattr(error.error_code, "value", error.error_code)
+            if code == "BlobNotFound":
+                return None
+            raise QualityError("registry_resource_missing", status=error.status_code) from None
+        except HttpResponseError as error:
+            raise QualityError("registry_read_failed", status=error.status_code) from None
+        except (AzureError, OSError):
+            raise QualityError("registry_read_failed") from None
+
+    async def write(self, data: bytes, etag: str | None) -> str:
+        from azure.core import MatchConditions
+        from azure.core.exceptions import AzureError, HttpResponseError
+
+        if etag is not None:
+            _etag(etag)
+        options: dict[str, Any] = {"overwrite": etag is not None}
+        if etag is not None:
+            options.update(etag=etag, match_condition=MatchConditions.IfNotModified)
+        try:
+            result = await self._get_client().upload_blob(data, **options)
+            return _etag(result.get("etag"))
+        except HttpResponseError as error:
+            status = error.status_code
+            rejected = status is not None and 400 <= status < 500 and status != 408
+            raise QualityError(
+                "registry_write_failed", status=status,
+                request_accepted=False if rejected else None,
+            ) from None
+        except (AzureError, OSError):
+            raise QualityError("registry_write_failed", request_accepted=None) from None
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+        if self._credential is not None:
+            await self._credential.close()
 
 
-def load_registry(
-    path: Path,
-    *,
-    profile: str,
-    catalog_hashes: dict[str, str],
-) -> dict[str, Any]:
-    registry = read_json(path)
-    schema = read_json(ROOT / "schemas" / "deployment-registry.schema.json")
-    errors = sorted(
-        Draft202012Validator(schema).iter_errors(registry),
-        key=lambda error: list(error.absolute_path),
-    )
-    if errors:
-        raise ContractError(f"Deployment registry is invalid: {errors[0].message}")
-    if profile not in PROFILE_PROJECTS:
-        raise ContractError("Profile must be daily or staging")
-    if (
-        registry["profile"] != profile
-        or registry["project_name"] != PROFILE_PROJECTS[profile]
-        or registry["account_name"] != PROFILE_PROJECTS[profile]
-        or registry["environment_id"] != ENVIRONMENT_ID
-        or registry["location"] != PROFILE_LOCATION
-        or registry["telemetry_resource_set"] != TELEMETRY_RESOURCE_SET
-    ):
-        raise ContractError("Deployment registry belongs to a different profile")
-    if registry["catalog_hashes"] != catalog_hashes:
-        raise ContractError("Deployment registry catalog hashes are stale")
-    agent_catalog = read_yaml(ROOT / "catalogs" / "AGENT_CATALOG.yaml")
-    if registry["test_agent_model"] != agent_model_contract(agent_catalog):
-        raise ContractError("Deployment registry Test Agent model is stale")
-    expected = {
-        agent["name"]: {"v0", *agent["issue_ids"]}
-        for agent in agent_catalog["agents"]
-    }
-    if set(registry["agents"]) != set(expected) or any(
-        set(registry["agents"][name]["versions"]) != logical_versions
-        for name, logical_versions in expected.items()
-    ):
-        raise ContractError("Deployment registry version inventory is incomplete")
-    return registry
+def _etag(value: Any) -> str:
+    if not isinstance(value, str) or not value or value == "*":
+        raise QualityError("registry_etag_invalid")
+    return value
 
 
-def version_entry(
-    registry: dict[str, Any],
-    agent_name: str,
-    logical_version: str,
-) -> dict[str, str]:
+def _decode(data: bytes) -> dict[str, Deployment]:
     try:
-        value = registry["agents"][agent_name]["versions"][logical_version]
-    except KeyError as error:
-        raise ContractError(
-            f"Deployment registry has no {agent_name}/{logical_version}"
-        ) from error
+        document = json.loads(data, object_pairs_hook=_unique_object)
+        json.dumps(document, allow_nan=False)
+        if set(document) != {"schema_version", "targets"} or document["schema_version"] != "1.0":
+            raise ValueError("Wrong registry format")
+        if not isinstance(document["targets"], dict):
+            raise ValueError("Wrong registry entries")
+        result = {}
+        for key, value in document["targets"].items():
+            record = Deployment(**value)
+            if (
+                key != record.target_key
+                or not all(isinstance(part, str) and part for part in (
+                    key, record.agent_name, record.agent_type, record.source_revision,
+                ))
+                or not isinstance(record.provider_version, str)
+                or not isinstance(record.details, Mapping)
+                or (
+                    record.details.get("provisioning_state") == "active"
+                    and not record.provider_version
+                )
+            ):
+                raise ValueError("Invalid registry entry")
+            result[key] = record
+        return result
+    except (TypeError, ValueError, KeyError, UnicodeError):
+        raise QualityError("registry_format_invalid") from None
+
+
+def _document(records: Mapping[str, Deployment]) -> dict[str, Any]:
     return {
-        "foundry_version": str(value["foundry_version"]),
-        "content_digest": str(value["content_digest"]),
+        "schema_version": "1.0",
+        "targets": {key: asdict(item) for key, item in records.items()},
     }
+
+
+class DeploymentRegistry:
+    """One current-format private blob, with a validated local cache."""
+
+    def __init__(self, blob: BlobPort, cache: RecordStore) -> None:
+        self.blob = blob
+        self.cache = cache
+        self.records: dict[str, Deployment] = {}
+        self.etag: str | None = None
+        self._lock = asyncio.Lock()
+        self._pending: dict[str, Deployment] | None = None
+        self._loaded = False
+
+    async def load(self) -> None:
+        async with self._lock:
+            records, etag = await self._read()
+            self._accept(records, etag)
+
+    async def _read(self) -> tuple[dict[str, Deployment], str | None]:
+        try:
+            value = await self.blob.read()
+        except OSError:
+            raise QualityError("registry_read_failed") from None
+        if value is None:
+            return {}, None
+        records = _decode(value[0])
+        return records, _etag(value[1])
+
+    def _accept(self, records: dict[str, Deployment], etag: str | None) -> None:
+        self.cache.save_progress("deployment-registry", _document(records))
+        self.records = records
+        self.etag = etag
+        self._pending = None
+        self._loaded = True
+
+    async def _reconcile(self, *, conflict: bool = False) -> None:
+        records, etag = await self._read()
+        if records != self._pending or etag is None:
+            raise QualityError(
+                "registry_write_conflict" if conflict else "registry_write_unresolved",
+                request_accepted=False if conflict else None,
+            )
+        self._accept(records, etag)
+
+    def get(self, key: str) -> Deployment | None:
+        return self.records.get(key)
+
+    async def save(self, deployment: Deployment) -> None:
+        async with self._lock:
+            if not self._loaded:
+                raise QualityError("registry_not_loaded", request_accepted=False)
+            if self._pending is not None:
+                await self._reconcile()
+            updated = {**self.records, deployment.target_key: deployment}
+            try:
+                payload = json.dumps(_document(updated), sort_keys=True, allow_nan=False).encode("utf-8")
+            except (TypeError, ValueError):
+                raise QualityError("registry_format_invalid", request_accepted=False) from None
+            updated = _decode(payload)
+            if self.records == updated:
+                return
+            self._pending = updated
+            try:
+                etag = _etag(await self.blob.write(payload, self.etag))
+            except (QualityError, OSError) as error:
+                conflict = isinstance(error, QualityError) and error.status in {409, 412}
+                if isinstance(error, QualityError) and error.request_accepted is False and not conflict:
+                    self._pending = None
+                    raise
+                # Conditional writes can have committed even when their reply was lost.
+                # Read the exact result before retrying or letting another lane write.
+                try:
+                    await self._reconcile(conflict=conflict)
+                except QualityError as reconciliation:
+                    raise reconciliation from None
+                return
+            self._accept(updated, etag)

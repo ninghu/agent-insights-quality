@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version", "agent_name", "logical_version", "requests", "attempts",
+    "data_class", "traffic_source"
+  ],
+  "properties": {
+    "contract_version": {"const": "2.0"},
+    "agent_name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "logical_version": {"type": "string", "pattern": "^(v0|issue-[0-9]{3})$"},
+    "data_class": {"const": "synthetic_public_safe"},
+    "traffic_source": {"const": "endpoint_requests"},
+    "coverage": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/text"}},
+    "requests": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "request", "expected"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "request": {"$ref": "#/$defs/request"},
+          "expected": {"$ref": "#/$defs/expected"}
+        }
+      }
+    },
+    "attempts": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "setup_steps", "probe_steps"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 1, "maximum": 10},
+          "setup_steps": {"type": "array", "items": {"$ref": "#/$defs/id"}},
+          "probe_steps": {
+            "type": "array", "minItems": 1, "items": {"$ref": "#/$defs/id"}
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"case_id": {"$ref": "#/$defs/id"}}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "terms": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/text"}},
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "headers", "body"],
+      "properties": {
+        "method": {"const": "POST"},
+        "path": {"const": "/responses"},
+        "headers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["content-type"],
+          "properties": {"content-type": {"const": "application/json"}}
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input"],
+          "properties": {
+            "max_output_tokens": {"type": "integer", "minimum": 1, "maximum": 4096},
+            "input": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["role", "content"],
+                "properties": {
+                  "role": {"const": "user"},
+                  "content": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["type", "text"],
+                      "properties": {
+                        "type": {"const": "input_text"},
+                        "text": {"$ref": "#/$defs/text"}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["http_status"],
+      "properties": {
+        "http_status": {"type": "integer", "minimum": 100, "maximum": 599},
+        "behavior": {"$ref": "#/$defs/text"},
+        "required_operations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["invoke_agent", "chat", "execute_tool"]}
+        },
+        "identity_assertions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent_name", "agent_version"],
+          "properties": {
+            "agent_name": {"const": "$runtime_agent_name"},
+            "agent_version": {"const": "$runtime_agent_version"}
+          }
+        },
+        "semantic_assertions": {"$ref": "#/$defs/semantic"},
+        "trace_assertions": {"type": "array", "items": {"$ref": "#/$defs/trace"}}
+      }
+    },
+    "semantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "response_format": {"enum": ["json", "non_json"]},
+        "exact_text": {"$ref": "#/$defs/text"},
+        "json_schema": {"type": "object", "minProperties": 1},
+        "exact_json_fields": {"type": "object", "minProperties": 1},
+        "casefold_json_fields": {
+          "type": "object", "minProperties": 1,
+          "additionalProperties": {"type": "string"}
+        },
+        "exact_json": {"type": "object", "minProperties": 1},
+        "required_terms_all": {"$ref": "#/$defs/terms"},
+        "required_terms_any": {"$ref": "#/$defs/terms"},
+        "forbidden_terms": {"$ref": "#/$defs/terms"},
+        "required_claims": {"$ref": "#/$defs/terms"},
+        "forbidden_claims": {"$ref": "#/$defs/terms"},
+        "question_only": {"const": true},
+        "minimum_term_occurrences": {
+          "type": "object", "minProperties": 1,
+          "additionalProperties": {"type": "integer", "minimum": 2}
+        },
+        "max_words": {"type": "integer", "minimum": 1},
+        "min_words": {"type": "integer", "minimum": 1},
+        "max_characters": {"type": "integer", "minimum": 1}
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "kind": {
+          "enum": [
+            "tool_call_count", "tool_argument_presence", "scope_relation",
+            "tool_result_class", "retry_sequence", "terminal_claim_relation",
+            "payload_multiplicity", "span_relation", "operation_sequence"
+          ]
+        },
+        "tool_name": {"$ref": "#/$defs/text"},
+        "count": {"type": "integer", "minimum": 0},
+        "argument": {"$ref": "#/$defs/text"},
+        "present": {"type": "boolean"},
+        "scope_kind": {"enum": ["account", "trip"]},
+        "request_scope": {"enum": ["first", "last"]},
+        "result_field": {"$ref": "#/$defs/text"},
+        "request_tool_equal": {"type": "boolean"},
+        "request_result_equal": {"type": "boolean"},
+        "tool_result_equal": {"type": "boolean"},
+        "result_class": {"enum": ["success", "error", "mixed"]},
+        "result_sequence": {
+          "type": "array", "minItems": 1,
+          "items": {"enum": ["success", "error"]}
+        },
+        "result_path": {"$ref": "#/$defs/text"},
+        "relation": {"enum": ["includes_result", "excludes_result", "overlap", "ordered"]},
+        "required_terms_all": {"$ref": "#/$defs/terms"},
+        "forbidden_terms": {"$ref": "#/$defs/terms"},
+        "source": {"enum": ["input_messages", "tool_result"]},
+        "path": {"$ref": "#/$defs/text"},
+        "minimum": {"type": "integer", "minimum": 1},
+        "maximum": {"type": "integer", "minimum": 1},
+        "first_tool": {"$ref": "#/$defs/text"},
+        "second_tool": {"$ref": "#/$defs/text"},
+        "operations": {
+          "type": "array", "minItems": 1,
+          "items": {"enum": ["invoke_agent", "chat", "execute_tool"]}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "tool_call_count"}}},
+          "then": {"required": ["tool_name", "count"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "tool_argument_presence"}}},
+          "then": {"required": ["tool_name", "argument", "present"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "scope_relation"}}},
+          "then": {
+            "required": ["tool_name", "scope_kind", "request_scope", "argument", "request_tool_equal"]
+          }
+        },
+        {
+          "if": {"properties": {"kind": {"const": "tool_result_class"}}},
+          "then": {"required": ["tool_name", "result_class"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "retry_sequence"}}},
+          "then": {"required": ["tool_name", "result_sequence"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "terminal_claim_relation"}}},
+          "then": {"required": ["tool_name"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "payload_multiplicity"}}},
+          "then": {"required": ["source", "minimum"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "span_relation"}}},
+          "then": {"required": ["first_tool", "second_tool", "relation"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "operation_sequence"}}},
+          "then": {"required": ["operations"]}
+        }
+      ]
+    }
+  }
+}

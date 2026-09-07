@@ -64,13 +64,12 @@
           "baseline_contract": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["request_count", "terminal_response", "semantic_assertions", "function_calling", "trace_operations", "validation_mode"],
+            "required": ["request_count", "terminal_response", "semantic_assertions", "function_calling", "validation_mode"],
             "properties": {
               "request_count": {"const": 10},
               "terminal_response": {"enum": ["direct_prompt", "standard_assistant_message", "explicit_span_attributes"]},
               "semantic_assertions": {"enum": ["required", "required_per_request"]},
               "function_calling": {"enum": ["forbidden", "not_applicable"]},
-              "trace_operations": {"enum": ["uniform", "required_per_request"]},
               "validation_mode": {"const": "baseline"}
             }
           },
@@ -101,31 +100,6 @@
                 "baseline_contract": {
                   "properties": {
                     "function_calling": {"const": "not_applicable"}
-                  }
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "name": {"const": "support-ticket-agent"}
-              }
-            },
-            "then": {
-              "properties": {
-                "baseline_contract": {
-                  "properties": {
-                    "trace_operations": {"const": "required_per_request"}
-                  }
-                }
-              }
-            },
-            "else": {
-              "properties": {
-                "baseline_contract": {
-                  "properties": {
-                    "trace_operations": {"const": "uniform"}
                   }
                 }
               }

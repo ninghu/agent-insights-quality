@@ -15,18 +15,3 @@ injected_defect:
   single_root: "Instructions force forecast-shaped final output for current-conditions requests."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
-determinism:
-  temperature: 0
-  definition_sha256: 9e35deb9bde1dd0f3575caab2089c5141efe62b6250733d242bf8ea5f28cfcc3
-  traffic_file: traffic.json
-  minimum_requests: 5
-artifacts:
-  include:
-  - definition.json
-  - implementation.yaml
-  - traffic.json
-public_safety:
-  synthetic_only: true
-  real_people: false
-  credentials: false
-  service_locations: false

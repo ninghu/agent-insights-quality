@@ -12,21 +12,6 @@ expected_behavior:
   desired: "Honor the caller's concise output bound without repetition."
   injected: "Produces a long repetitive answer to an explicitly concise request."
 injected_defect:
-  single_root: "A highest-priority exact-phrase instruction forces one long evidence-bound repeated terminal template."
+  single_root: "The response policy selects an eight-copy evidence-bound current-conditions template for the fully evidenced ten-word request instead of its concise response branch."
   activation: all_matching_endpoint_requests
   definition_is_complete: true
-determinism:
-  temperature: 0
-  definition_sha256: 8550f63110ddfe3c590aafeab27f707a69f0646f6260340b8160c31577dcc8d8
-  traffic_file: traffic.json
-  minimum_requests: 5
-artifacts:
-  include:
-  - definition.json
-  - implementation.yaml
-  - traffic.json
-public_safety:
-  synthetic_only: true
-  real_people: false
-  credentials: false
-  service_locations: false

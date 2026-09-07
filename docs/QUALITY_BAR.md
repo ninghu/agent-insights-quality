@@ -1,74 +1,136 @@
-# Quality Score
+# Evidence and quality rules
 
-## Quality score
+These rules apply to the replacement runner. Historical reports retain their recorded scoring
+and coverage policies; do not reinterpret an older report using newer weights or requirements.
 
-Every complete Daily or staging run produces one score from `0` to `100`:
+## Staging
+
+Staging normally selects changed, missing or incomplete targets. First use or an explicit full run
+covers five baselines and 36 issues with ten attempts per target. There is no deployed paired-v0.
+
+Baselines require eight adequately evidenced healthy attempts with no proven healthy-contract
+violation. Deterministic issues require eight proven defect observations with no proven contradiction
+of the deterministic contract. Probability-tolerant issues also require eight observations out of ten.
+Evaluate all ten attempts, not just the first eight successes.
+
+Missing evidence is not the same as a behavior failure. Preserve PASS, FAIL and INCOMPLETE
+separately, and never resample a behavioral miss until it passes.
+
+For example, seven observations plus three sufficiently evidenced nonobservations fail the
+observation threshold. Six observations plus four insufficient attempts are INCOMPLETE, not a
+proven behavioral failure. Eight healthy observations cannot hide a proven baseline violation.
+Record the policy with each assessment. Historical six-of-ten judgments remain historical;
+apply the new policy to retained valid evidence without overwriting the original result.
+
+### Scoped single-root hygiene
+
+`staging-root-hygiene-v3` retains the eight-of-ten observation minimum and adds a separate
+root-hygiene judgment in the same bounded staging assessment calls. Expected activation
+still requires probe proof. Additional findings may cite a paired endpoint and attributable
+trace from the same setup or probe turn, only within their owned attempt and partition.
+Unowned or sibling rows do not become proof by sharing an operation ID; attributable
+causal child-Agent work remains context.
+
+An issue must adequately exhibit its expected causal defect without an independently proven
+additional Agent defect in the scoped runtime evidence. Baselines have zero injected roots.
+Multiple symptoms, exceptions or categories do not mean multiple causes. A separate proven
+Agent defect fails hygiene even when the expected defect is observed and even for
+model-mediated issues. A missed expected activation is not renamed an additional defect.
+
+Private `additional_findings` records retain relation, central cause, actual behavior,
+violated healthy contract, causal-independence explanation, affected component/surface,
+material impact, unresolved evidence and current citations. Relations distinguish independent
+Agent defects, consequences of the expected root, handled behavior/operational observations,
+and genuinely unresolved additional roots. Correct fallback with real dependency errors can
+be a true operational observation without an Agent-contract violation. Internal quality defects
+need demonstrated surface and material impact; fewer selected options alone is not proof.
+Model self-labels, catalog claims and diagnoses' own prose are not independent evidence.
+
+Only proven independent Agent defects fail hygiene. A credible material additional-root
+candidate with cited behavior but essential unresolved evidence makes it INCOMPLETE, not
+a failure or silent pass. Generic improvement ideas and uncited assertions are not candidates.
+An empty finding list cannot establish hygiene when fewer than eight attempts have
+adequate attributable evidence; hygiene remains INCOMPLETE alongside the evidence gap.
+All partition records remain private with their input/output provenance; repeated observations
+of one root earn no bonus or separate score. No extra unconditional AI pass, resampling,
+deployed paired baseline, Insights run or public/team finding publication is added.
+
+`root_hygiene_status` is separate from overall status and expected observation counts.
+Historical `staging-observations-v2` (eight) and older six-observation records keep their actual
+policy/status/date. Their absent hygiene fields mean `NOT_EVALUATED`, never a v3 hygiene PASS.
+A pure threshold reaggregation cannot establish the new causal contract: new v3 eligibility
+needs assessment of retained valid evidence under the new schema/prompt, without rewriting
+history or automatically repeating traffic. Offline fakes verify schema, policy, ownership,
+merge and recovery mechanics, not semantic model accuracy. Deployed staging acceptance of
+these causal/materiality judgments remains required.
+
+## Daily readiness and assessment
+
+Daily plans 20 issues and five baselines. Six distinct attributable probe attempts out of ten
+establish telemetry readiness, not defect correctness. It does not require every child span or
+repeat staging's deep behavioral checks before Insights.
+The eight-observation staging policy does not raise this six-attempt Daily readiness requirement.
+
+Core diagnosis, reasonable category and independently supporting current evidence determine
+correctness. Severity and suggested fixes are diagnostic only. A candidate gap receives bounded
+review using already-generated evidence, not new Agent traffic.
+
+- **Detected:** a correct card identifies the expected defect; each expected issue counts once.
+- **Noise:** an in-scope card's core judgment is demonstrably incorrect, including wrong diagnosis,
+  material category error or wrong evidence.
+- **Duplicate:** an otherwise correct extra distinct card repeats the same causal problem.
+- **Unexpected real finding:** a supported problem outside the expected issue, including a genuine
+  baseline defect; it is not Noise and does not inflate expected-issue detection.
+- **Unconfirmed:** evidence cannot establish a reliable core verdict.
+
+The same card is never both Noise and Duplicate. Repeated incorrect cards remain Noise. Same-ID
+updates, reopenings and transport duplicates are not additional duplicate cards.
+
+Retained categories are not remediation instructions. Human review must distinguish an unresolved
+Agent defect from an ambiguous claim and from correctly handled recovery (no Agent change needed).
+Disagreement found during report review is documented for review, not silently rescored.
+
+## Score and coverage
+
+New measurements use precision-first scoring v2:
 
 ```text
-score = 100 * correct issues / (expected issues + noise cards + duplicate cards)
+M = E_scored - C
+score = 100 * C / (C + N_scored + 0.5 * D_scored + 0.25 * M)
 ```
 
-The score is rounded to one decimal place. Whole-number scores render without a decimal.
+`C` is the number of distinct correctly detected scored issues. `M` is the number of missed
+scored issues, not excluded units. Noise weighs 1, Duplicate 0.5 and Miss 0.25. Noise and
+Duplicate include scorable baselines as well as issues; baselines add no healthy bonus.
+Display one decimal using half-up rounding. There is no overall quality PASS/FAIL threshold.
+A fully measured zero is valid; an unmeasured run is not zero.
 
-An expected issue is **Correct** when at least one attributable Insight passes all four scoring
-fields:
+For an illustrative arithmetic example with `C=8`, `E_scored=10`, `N_scored=1` and
+`D_scored=1`, there are two misses and the v2 score is `100*8/(8+1+0.5+0.5) = 80.0`.
+This is an example, not a published measurement.
 
-- title
-- description
-- category
-- linked traces
+Full covers all 25 units. Partial permits at most two unscorable baseline/issue units and at
+least one scorable issue. Exclude each entire unit from all score counts, not just unfavorable
+cards, and show planned/scored coverage, exclusions and reasons. Confirmed findings in excluded
+units remain visible as unscored diagnostics.
 
-Severity and proposed fix remain assessed and visible for diagnosis, but they do not affect the
-score. There are no field weights or partial points.
+More than two unscorable units, no scorable issue or systemic integrity failure produces no team
+score/report and only a private failure notice. Compare trends with scoring policy and coverage
+visible; Partial is not interchangeable with Full.
 
-Linked traces pass when at least one exact-run, exact-version trace independently supports the
-Insight's core conclusion. Extra linked traces are accepted unless they are attributed to the wrong
-run or version, or contradict the conclusion.
+### Historical scoring policies
 
-## Result categories
-
-- **Correct**: an attributable Insight passes all four scoring fields.
-- **Incorrect**: an attributable Insight exists, but none passes all four scoring fields.
-- **Missing**: no attributable Insight covers the expected issue.
-- **Noise**: an extra false-positive Insight is unrelated to every expected issue.
-- **Duplicate**: an extra Insight repeats an attributable Insight for the same expected issue.
-
-`correct + incorrect + missing = expected`. Incorrect and Missing issues already occupy an expected
-issue slot, so they do not expand the denominator. Noise and Duplicate cards are extra output and do
-expand it.
-
-For example:
+Version 1 remains valid for its recorded results:
 
 ```text
-20 expected = 17 correct + 2 incorrect + 1 missing
-1 noise + 1 duplicate
-score = 100 * 17 / (20 + 1 + 1) = 77.3
+score_v1 = 100 * C / (E_scored + N_scored + 0.25 * D_scored)
 ```
 
-Daily selects 20 issues, four per Agent, but its score denominator contains only issues whose runtime
-pipeline reached assessment. Explicit `skipped_telemetry`, `skipped_agent_activation`, and
-`skipped_insight` issues are excluded from numerator and denominator and remain visible with exact
-reasons. Noise and Duplicate penalties count only eligible assessed issue cards. If no issue remains
-eligible, no numeric score is produced. Full staging uses all 36 issues. Baseline cards remain
-diagnostic ownership evidence and do not change the issue score.
+Since `E_scored = C + M`, v1 implicitly weights a miss at 1 and a duplicate at 0.25.
+Do not relabel v1 output as v2 or compare scores across policies as if the weights were
+unchanged. Restoring an old result uses its recorded policy, not the current default.
 
-The report shows only the numeric score, its same-formula delta, and the raw category counts. There
-is no PASS/FAIL label, threshold, or automated public-preview decision. Humans use the score and
-supporting evidence to decide readiness.
-
-## Complete evidence only
-
-A score is published only when every eligible issue has complete identity, endpoint, trace, Agent
-Insights, attribution, assessment, source-integrity, and report evidence. Every exclusion and missing
-baseline coverage must be explicit; no report may imply 20-issue coverage when fewer issues were
-eligible.
-
-If any required evidence is incomplete, the qualification fails internally. Private durable
-diagnostics are retained, but no report, email request, ADX row, trend point, generated pull request,
-or promotion receipt is produced.
-
-The living Insight Engine improvement memory remains advisory and score-neutral. It can synthesize
-only `insight_engine`-owned findings and never changes per-card assessment, ownership, score, or
-promotion.
-
-See [Insight Result Labels](INSIGHT_RESULTS.md) for detailed field examples.
+An explicitly requested scoring preview may derive a new score from the same saved
+classifications, counts and coverage. Preserve the original result, evidence and prepared
+email; record both policies and result hashes with the derived preview. A weight change is
+not a new measurement, reassessment, publication or email-send authorization.

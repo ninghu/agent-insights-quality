@@ -1,1987 +1,694 @@
+"""Read-only renderers of the one aggregated result. No traffic or sink writes."""
+
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Mapping
-from pathlib import Path
+from collections.abc import Iterable
+from html import escape, unescape
+import json
 import re
-from typing import Any
 
-from jsonschema import Draft202012Validator, FormatChecker
-
-from agent_insights_quality.models import SKIPPED_VERSION_STATUSES
-from agent_insights_quality.scoring import (
-    ASSESSMENT_FIELDS,
-    ATTRIBUTABLE_FINDING_TYPES,
-    QUALITY_SCORE_FORMULA,
-    calculate_quality_score,
-    issue_outcome,
-    scoring_fields_pass,
-)
-from agent_insights_quality.selection import (
-    DAILY_ISSUE_COUNT,
-    DAILY_ISSUES_PER_AGENT,
-    STAGING_ISSUE_COUNT,
-)
-from agent_insights_quality.util import (
-    ROOT,
-    ContractError,
-    atomic_json,
-    atomic_text,
-    read_json,
-)
-from agent_insights_quality.azure_regions import (
-    location_display_name,
-    regions_match,
-)
-from agent_insights_quality.validation_rules import issue_observation_context
-from agent_insights_quality.validation_trace_gap_policy import (
-    daily_target_decision,
-    validate_trace_maturity_proof,
-)
-
-REQUIRED_FIELDS = set(ASSESSMENT_FIELDS)
-_QUALITY_SCORE_DOC_URL = (
-    "https://github.com/ninghu/agent-insights-quality/blob/main/"
-    "docs/QUALITY_BAR.md#quality-score"
-)
-
-def resolve_test_region(
-    live_location: Any,
-    registry_location: Any = None,
-    *,
-    location_metadata: dict[str, str] | None = None,
-) -> str:
-    """Validate the ARM-derived canonical region carried by the run manifest."""
-    if location_metadata is not None:
-        canonical = location_display_name(
-            str(live_location or ""),
-            [
-                {"name": name, "displayName": display_name}
-                for name, display_name in location_metadata.items()
-            ],
-        )
-    else:
-        canonical = str(live_location or "").strip()
-    if not canonical:
-        raise ContractError(
-            "Report test_region requires a live read-only ARM GET of the "
-            "Foundry Project location; none was provided, and a registry, "
-            "manifest, or config value cannot supply or fall back for it"
-        )
-    if re.fullmatch(r"[A-Z][A-Za-z]*[0-9]*", canonical) is None:
-        raise ContractError(
-            "Report test_region must be the canonical display resolved from "
-            "live Azure location metadata"
-        )
-    if registry_location is not None and not regions_match(
-        canonical,
-        registry_location,
-    ):
-        raise ContractError(
-            "Report test_region live Foundry Project location does not "
-            "match the registry/manifest/config cross-check value"
-        )
-    return canonical
+from .privacy import public_projection, warning_text
+from .report_context import ReportContextError, ReportMetadata, ReviewedReportContext
+from .report_links import VerifiedScoringLink, validate_foundry_link
+from .report_review import RetainedReviewContext
+from .results import PlannedUnit, QualityResult, UnitId
 
 
-def _request_summaries_complete(value: dict[str, Any]) -> bool:
-    requests = value.get("endpoint_request_count")
-    summaries = value.get("endpoint_request_summaries")
-    if not isinstance(requests, int) or not isinstance(summaries, list):
-        return False
-    if len(summaries) != requests:
-        return False
-    for index, summary in enumerate(summaries):
-        if (
-            not isinstance(summary, dict)
-            or summary.get("request_index") != index
-            or summary.get("response_count") not in {0, 1}
-            or not isinstance(summary.get("usable_response"), bool)
-            or (
-                summary.get("usable_response") is True
-                and summary.get("response_count") != 1
-            )
-        ):
-            return False
-        trace_results = summary.get("trace_assertion_results")
-        if (
-            not isinstance(trace_results, list)
-            or not all(isinstance(item, dict) for item in trace_results)
-            or len(trace_results) != summary.get("trace_assertion_count")
-            or sum(item.get("passed") is True for item in trace_results)
-            != summary.get("trace_assertions_passed")
-            or any(
-                not isinstance(item.get("evidence_sufficient"), bool)
-                for item in trace_results
-            )
-            or summary.get("error_code")
-            not in {None, "missing_evidence", "assertion_failed"}
-        ):
-            return False
-        results = summary.get("assertion_results")
-        if (
-            not isinstance(results, list)
-            or not all(isinstance(item, dict) for item in results)
-            or len(results) != summary.get("semantic_assertion_count")
-            or sum(item.get("passed") is True for item in results)
-            != summary.get("semantic_assertions_passed")
-            or any(
-                not isinstance(item.get("evidence_sufficient"), bool)
-                for item in results
-            )
-        ):
-            return False
-    return True
+def _identity(unit: dict) -> UnitId:
+    return UnitId(**unit["unit_id"])
 
 
-def _runtime_evidence_complete(
-    value: dict[str, Any],
-    *,
-    traffic_path: Path | None = None,
-) -> bool:
-    requests = value.get("endpoint_request_count")
-    responses = value.get("endpoint_response_count")
-    usable = value.get("endpoint_usable_response_count")
-    complete = (
-        isinstance(requests, int)
-        and not isinstance(requests, bool)
-        and requests > 0
-        and isinstance(responses, int)
-        and not isinstance(responses, bool)
-        and responses >= 0
-        and isinstance(usable, int)
-        and not isinstance(usable, bool)
-        and usable >= 0
-        and usable <= responses <= requests
-        and value.get("trace_contract_verified") is True
-        and _request_summaries_complete(value)
-        and responses
-        == sum(
-            int(item["response_count"])
-            for item in value["endpoint_request_summaries"]
-        )
-        and usable
-        == sum(
-            item["usable_response"] is True
-            for item in value["endpoint_request_summaries"]
-        )
+def _unit_name(unit: dict, context: dict) -> str:
+    identity = _identity(unit)
+    name = f"{identity.agent} / {identity.logical_version}"
+    return f"{name} - {context[identity].title}" if context else name
+
+
+def _inputs(result, allowed_units, report_context, metadata):
+    plan = tuple(allowed_units)
+    value = public_projection(result, allowed_units=plan)
+    if report_context is not None and type(report_context) is not ReviewedReportContext:
+        raise ReportContextError("report_context_invalid")
+    if metadata is not None and type(metadata) is not ReportMetadata:
+        raise ReportContextError("report_metadata_invalid")
+    context = report_context.for_plan(plan) if report_context is not None else {}
+    return value, context
+
+
+def _metadata_lines(metadata: ReportMetadata | None) -> tuple[str, ...]:
+    if metadata is None:
+        return ()
+    return (
+        f"Report date: {metadata.report_date}",
+        f"Region: {metadata.region_display}",
+        f"Source commit: {metadata.source_revision}",
     )
-    if not complete or traffic_path is None:
-        return complete
-    context = issue_observation_context(traffic_path)
-    if {
-        key: value.get(key)
-        for key in context
-    } != context:
-        return False
-    observations = [
-        item
-        for item in value["endpoint_request_summaries"]
-        if item.get("activation_gate") is True
-    ]
-    summary_value = value.get("role_pass_summary")
-    try:
-        validate_trace_maturity_proof(value.get("trace_maturity_proof"))
-    except ContractError:
-        return False
-    decided, summary = daily_target_decision(
-        target_role="issue",
-        validation_mode=str(context["validation_mode"]),
-        n=int(context["n"]),
-        k=int(context["k"]),
-        required_surfaces=context["required_surfaces"],
-        summaries=observations,
-        identity_verified=value.get("trace_contract_verified") is True,
-    )
-    return decided and summary_value == summary
 
 
-def _baseline_runtime_evidence_complete(
-    agent: dict[str, Any],
-    value: dict[str, Any],
-) -> bool:
-    trace = value.get("trace_behavior_summary")
-    summaries = value.get("endpoint_request_summaries")
-    observations = [
-        item
-        for item in summaries or []
-        if isinstance(item, dict) and item.get("activation_gate") is True
-    ]
-    summary_value = value.get("role_pass_summary")
-    try:
-        validate_trace_maturity_proof(value.get("trace_maturity_proof"))
-    except ContractError:
-        return False
-    decided, summary = daily_target_decision(
-        target_role="baseline",
-        validation_mode="baseline",
-        n=int(value.get("n") or 0),
-        k=int(value.get("k") or 0),
-        required_surfaces=["semantic", "trace"],
-        summaries=observations,
-        identity_verified=value.get("trace_contract_verified") is True,
-    )
-    required_count = int(summary["pass_count"]) if summary is not None else 0
-    terminal_mode = agent["baseline_contract"]["terminal_response"]
-    if (
-        not _runtime_evidence_complete(value)
-        or not decided
-        or summary_value != summary
-        or len(observations) != agent["baseline_contract"]["request_count"]
-        or not isinstance(trace, dict)
-        or not isinstance(summaries, list)
-        or not observations
-        or int(trace.get("terminal_response_count") or 0) < required_count
-        or int(trace.get("terminal_output_count") or 0) < required_count
-    ):
-        return False
-    if terminal_mode == "explicit_span_attributes":
-        if (
-            int(trace.get("explicit_terminal_success_count") or 0)
-            < required_count
-            or int(trace.get("explicit_terminal_output_count") or 0)
-            < required_count
-        ):
-            return False
-    elif int(trace.get("assistant_response_count") or 0) < required_count:
-        return False
-    if agent["baseline_contract"]["semantic_assertions"] == "required_per_request":
-        if len(observations) != agent["baseline_contract"]["request_count"]:
-            return False
-    if agent["type"] == "prompt":
-        return (
-            int(trace.get("operation_count") or 0) >= required_count
-            and sum(
-                item.get("direct_terminal_response_count") == 1
-                and item.get("function_call_count") == 0
-                for item in summaries
-            )
-            >= required_count
-        )
-    return True
-
-
-def _activation_evidence(value: dict[str, Any]) -> dict[str, int]:
-    gates = [
-        item
-        for item in value.get("endpoint_request_summaries", [])
-        if isinstance(item, dict) and item.get("activation_gate") is True
-    ]
-    return {
-        "request_count": len(gates),
-        "assertion_count": sum(
-            int(item.get("semantic_assertion_count") or 0)
-            + int(item.get("trace_assertion_count") or 0)
-            for item in gates
-        ),
-        "assertions_passed": sum(
-            int(item.get("semantic_assertions_passed") or 0)
-            + int(item.get("trace_assertions_passed") or 0)
-            for item in gates
-        ),
-    }
-
-
-def _summary_metrics(
-    baseline: list[dict[str, Any]],
-    issues: list[dict[str, Any]],
-) -> dict[str, Any]:
-    scored_issues = [
-        item for item in issues if item["outcome"] != "skipped"
-    ]
-    if not scored_issues:
-        raise ContractError(
-            "No eligible issue evidence remains; no numeric score was produced"
-        )
-    baseline_passed = sum(
-        item["status"] == "passed"
-        and item["insight_count"] == 0
-        and item["assessment"]["verdict"] == "clean"
-        for item in baseline
-    )
-    issues_correct = sum(item["outcome"] == "correct" for item in scored_issues)
-    issues_incorrect = sum(item["outcome"] == "incorrect" for item in scored_issues)
-    issues_missing = sum(item["outcome"] == "missing" for item in scored_issues)
-    noise_cards = sum(
-        sum(
-            card.get("finding_type") == "NOISE"
-            for card in item["assessment"].get("card_evaluations", [])
-        )
-        if "card_evaluations" in item["assessment"]
-        else item["observed_count"]
-        if item["detail"] in {"NOISE", "DUPLICATE"}
-        else 0
-        for item in scored_issues
-    )
-    duplicate_cards = sum(
-        sum(
-            card.get("finding_type") == "DUPLICATE"
-            for card in item["assessment"].get("card_evaluations", [])
-        )
-        for item in scored_issues
-    )
-    quality_score = calculate_quality_score(
-        correct_issues=issues_correct,
-        expected_issues=len(scored_issues),
-        noise_cards=noise_cards,
-        duplicate_cards=duplicate_cards,
-    )
-    return {
-        "baseline_passed": baseline_passed,
-        "baseline_coverage": {
-            "eligible_agents": [
-                item["agent"]
-                for item in baseline
-                if item["status"] not in SKIPPED_VERSION_STATUSES
-            ],
-            "missing_agents": [
-                item["agent"]
-                for item in baseline
-                if item["status"] in SKIPPED_VERSION_STATUSES
-            ],
-        },
-        "eligible_issue_count": len(scored_issues),
-        "skipped_issue_count": len(issues) - len(scored_issues),
-        "skipped_issues": [
-            {
-                "issue_id": item["issue_id"],
-                "status": item["status"],
-                "reason_code": item["error_code"],
-            }
-            for item in issues
-            if item["outcome"] == "skipped"
-        ],
-        "issues_expected": len(scored_issues),
-        "issues_skipped": len(issues) - len(scored_issues),
-        "issues_correct": issues_correct,
-        "issues_incorrect": issues_incorrect,
-        "issues_missing": issues_missing,
-        "noise_cards": noise_cards,
-        "duplicate_cards": duplicate_cards,
-        "quality_score": quality_score,
-        "quality_score_formula": QUALITY_SCORE_FORMULA,
-    }
-
-
-def _skipped_assessment(status: str) -> dict[str, Any]:
-    if status == "skipped_agent_activation":
-        ownership = "agent"
-        reason = "Test Agent activation produced fewer than six complete role passes."
-    elif status == "skipped_insight":
-        ownership = "infrastructure"
-        reason = "Agent Insights did not produce a conclusive provider result."
-    else:
-        ownership = "infrastructure"
-        reason = "Telemetry validation exceeded the bounded maturity horizon."
-    return {
-        "verdict": "skipped",
-        "ownership": ownership,
-        "ownership_reason": reason,
-        "confidence": 1.0,
-        "card_evaluations": [],
-    }
-
-
-def build_report(
-    manifest: dict[str, Any],
-    issues: dict[str, Any],
-    assessments: dict[str, dict[str, Any]],
-    baseline_assessments: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    issue_by_id = {item["id"]: item for item in issues["issues"]}
-    baseline = []
-    results = []
-    incomplete = False
-    for agent in manifest["agents"]:
-        baseline_value = agent["baseline"]
-        baseline_skipped = baseline_value["status"] in SKIPPED_VERSION_STATUSES
-        baseline_assessment = (
-            _skipped_assessment(baseline_value["status"])
-            if baseline_skipped
-            else baseline_assessments[agent["name"]]
-        )
-        baseline_runtime_complete = (
-            False
-            if baseline_skipped
-            else _baseline_runtime_evidence_complete(
-                agent,
-                baseline_value,
-            )
-        )
-        trace_summary = baseline_value.get("trace_behavior_summary") or {}
-        baseline.append(
-            {
-                "agent": agent["name"],
-                "logical_version": "v0",
-                "foundry_version": baseline_value["foundry_version"],
-                "status": baseline_value["status"],
-                "error_code": baseline_value.get("error_code"),
-                "runtime_evidence_complete": baseline_runtime_complete,
-                "insight_count": len(baseline_value["insight_references"]),
-                "terminal_evidence": {
-                    "response_count": int(
-                        trace_summary.get("terminal_response_count") or 0
-                    ),
-                    "success_count": int(
-                        trace_summary.get("terminal_success_count") or 0
-                    ),
-                    "explicit_success_count": int(
-                        trace_summary.get("explicit_terminal_success_count") or 0
-                    ),
-                    "output_count": int(
-                        trace_summary.get("terminal_output_count") or 0
-                    ),
-                    "explicit_output_count": int(
-                        trace_summary.get("explicit_terminal_output_count") or 0
-                    ),
-                    "handled_error_count": int(
-                        trace_summary.get("handled_error_count") or 0
-                    ),
-                    "unhandled_error_count": int(
-                        trace_summary.get("unhandled_error_count") or 0
-                    ),
-                },
-                "assessment": {
-                    "verdict": baseline_assessment["verdict"],
-                    "ownership": baseline_assessment["ownership"],
-                    "ownership_reason": baseline_assessment["ownership_reason"],
-                    "confidence": baseline_assessment["confidence"],
-                    "card_evaluations": baseline_assessment["card_evaluations"],
-                },
-            }
-        )
-        if not baseline_skipped and (
-            baseline_value["status"] not in {"passed", "not_at_bar"}
-            or not baseline_runtime_complete
-            or baseline_assessments[agent["name"]]["verdict"] == "inconclusive"
-            or any(
-                card.get("evaluation") == "incomplete"
-                for card in baseline_assessments[agent["name"]][
-                    "card_evaluations"
-                ]
-            )
-        ):
-            incomplete = True
-        for value in agent["issues"]:
-            issue_id = value["issue_id"]
-            if value["status"] in SKIPPED_VERSION_STATUSES:
-                skipped_assessment = _skipped_assessment(value["status"])
-                results.append(
-                    {
-                        "issue_id": issue_id,
-                        "agent": agent["name"],
-                        "logical_version": issue_id,
-                        "foundry_version": value["foundry_version"],
-                        "title": issue_by_id[issue_id]["title"],
-                        "status": value["status"],
-                        "error_code": value.get("error_code"),
-                        "runtime_evidence_complete": False,
-                        "activation_evidence": _activation_evidence(value),
-                        "outcome": "skipped",
-                        "detail": "SKIPPED",
-                        "observed_count": 0,
-                        "assessment": {
-                            "verdict": "skipped",
-                            "confidence": 1.0,
-                            "fields": {
-                                field: False for field in REQUIRED_FIELDS
-                            },
-                            "ownership": skipped_assessment["ownership"],
-                            "finding_type": "SKIPPED",
-                            "ownership_reason": (
-                                skipped_assessment["ownership_reason"]
-                            ),
-                            "reasoning": (
-                                "Excluded from scoring without endpoint retraffic."
-                            ),
-                            "card_evaluations": [],
-                        },
-                        "evidence_reference": None,
-                    }
-                )
-                continue
-            assessment = assessments[issue_id]
-            runtime_complete = _runtime_evidence_complete(
-                value,
-                traffic_path=(
-                    ROOT
-                    / issue_by_id[issue_id]["implementation"]
-                    / "traffic.json"
-                ),
-            )
-            complete = (
-                value["status"] != "inconclusive"
-                and runtime_complete
-                and assessment["finding_type"] != "INCOMPLETE"
-            )
-            if not complete:
-                incomplete = True
-            outcome = issue_outcome(assessment["card_evaluations"])
-            results.append(
-                {
-                    "issue_id": issue_id,
-                    "agent": agent["name"],
-                    "logical_version": issue_id,
-                    "foundry_version": value["foundry_version"],
-                    "title": issue_by_id[issue_id]["title"],
-                    "status": value["status"],
-                    "error_code": value.get("error_code"),
-                    "runtime_evidence_complete": runtime_complete,
-                    "activation_evidence": _activation_evidence(value),
-                    "outcome": outcome,
-                    "detail": {
-                        "correct": assessment["finding_type"],
-                        "partially_useful": assessment["finding_type"],
-                        "incorrect": assessment["finding_type"],
-                        "missing": assessment["finding_type"],
-                    }[assessment["verdict"]],
-                    "observed_count": len(value["insight_references"]),
-                    "assessment": {
-                        "verdict": assessment["verdict"],
-                        "confidence": assessment["confidence"],
-                        "fields": assessment["fields"],
-                        "ownership": assessment["ownership"],
-                        "finding_type": assessment["finding_type"],
-                        "ownership_reason": assessment["ownership_reason"],
-                        "reasoning": assessment["reasoning"],
-                        "card_evaluations": assessment["card_evaluations"],
-                    },
-                    "evidence_reference": value.get("evidence_reference"),
-                }
-            )
-    if incomplete:
-        raise ContractError(
-            "Qualification evidence is incomplete; no quality report was produced"
-        )
-    summary = _summary_metrics(baseline, results)
-    report = {
-        "schema_version": "3.0.0",
-        "report_date": manifest["report_date"],
-        "run_id": manifest["run_id"],
-        "profile": manifest["profile"],
-        "manifest_reference": manifest["manifest_hash"],
-        "catalog_hashes": manifest["catalog_hashes"],
-        "source_integrity": manifest["source_integrity"],
-        "test_region": resolve_test_region(
-            manifest.get("test_region"),
-            manifest.get("test_region_registry"),
-        ),
-        "baseline": baseline,
-        "issues": results,
-        "summary": summary,
-        "delivery": {"content_digest": "sha256:" + "0" * 64},
-    }
-    return report
-
-
-def _validate_embedded_assessment_cards(report: Mapping[str, Any]) -> None:
-    issue_schema = read_json(ROOT / "schemas" / "assessment.schema.json")[
-        "properties"
-    ]["card_evaluations"]["items"]
-    baseline_schema = read_json(
-        ROOT / "schemas" / "baseline-assessment.schema.json"
-    )["properties"]["card_evaluations"]["items"]
-    for item, schema in [
-        *((item, baseline_schema) for item in report["baseline"]),
-        *((item, issue_schema) for item in report["issues"]),
-    ]:
-        for card in item["assessment"].get("card_evaluations", []):
-            errors = list(Draft202012Validator(schema).iter_errors(card))
-            if errors:
-                raise ContractError(
-                    "Report assessment card is invalid: " + errors[0].message
-                )
-    for item in report["issues"]:
-        cards = item["assessment"].get("card_evaluations", [])
-        if item["observed_count"] != len(cards):
-            raise ContractError(
-                "Report issue card evaluations must cover every observed card"
-            )
-        references = [card["reference"] for card in cards]
-        if len(references) != len(set(references)):
-            raise ContractError(
-                "Report issue card references must be unique within an assessment"
-            )
-        reference_types = {
-            card["reference"]: card["finding_type"] for card in cards
-        }
-        for card in cards:
-            if card["finding_type"] in ATTRIBUTABLE_FINDING_TYPES:
-                failed_fields = {
-                    field
-                    for field, passed in card["fields"].items()
-                    if passed is False
-                }
-                if failed_fields and set(card.get("field_reasons", {})) != failed_fields:
-                    raise ContractError(
-                        "Report attributable card requires a reason for "
-                        "exactly each failed field"
-                    )
-            if card["finding_type"] == "DUPLICATE":
-                primary = card.get("duplicate_of")
-                if (
-                    not isinstance(primary, str)
-                    or primary == card["reference"]
-                    or reference_types.get(primary)
-                    not in {"MATCHED", "PARTIAL", "MISMATCHED"}
-                ):
-                    raise ContractError(
-                        "Report DUPLICATE card must reference another "
-                        "attributable card in the same assessment"
-                    )
-    for item in report["baseline"]:
-        if item["insight_count"] != len(
-            item["assessment"].get("card_evaluations", [])
-        ):
-            raise ContractError(
-                "Report baseline card evaluations must cover every observed card"
-            )
-
-
-_FORBIDDEN_PUBLIC_REPORT_KEYS = {
-    "azure_id",
-    "azure_resource_id",
-    "private_context",
-    "prompt",
-    "prompt_payload",
-    "provider_id",
-    "provider_ids",
-    "raw_trace",
-    "raw_traces",
-    "response_body",
-    "response_payload",
-}
-
-
-def _validate_public_report_content(value: Any, path: str = "report") -> None:
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            normalized = str(key).casefold()
-            if normalized in _FORBIDDEN_PUBLIC_REPORT_KEYS:
-                raise ContractError(
-                    f"Public report contains forbidden nested field at {path}.{key}"
-                )
-            _validate_public_report_content(child, f"{path}.{key}")
-        return
-    if isinstance(value, list):
-        for index, child in enumerate(value):
-            _validate_public_report_content(child, f"{path}[{index}]")
-        return
-    if isinstance(value, str) and "/subscriptions/" in value.casefold():
-        raise ContractError(
-            f"Public report contains a private Azure resource identifier at {path}"
-        )
-
-
-def validate_report(report: dict[str, Any]) -> None:
-    schema = read_json(ROOT / "schemas" / "report.schema.json")
-    errors = list(
-        Draft202012Validator(
-            schema,
-            format_checker=FormatChecker(),
-        ).iter_errors(report)
-    )
-    if errors:
-        raise ContractError(
-            f"Report is invalid or incomplete: {errors[0].message}"
-        )
-    _validate_embedded_assessment_cards(report)
-    _validate_public_report_content(report)
-    source_integrity = report["source_integrity"]
-    if (
-        source_integrity.get("verified") is not True
-        or not isinstance(source_integrity.get("contract_digest"), str)
-    ):
-        raise ContractError("Report source integrity is incomplete")
-    if len(report["issues"]) not in {DAILY_ISSUE_COUNT, STAGING_ISSUE_COUNT}:
-        raise ContractError(
-            "A report must contain the daily 20 or staging 36 issues"
-        )
-    if any(
-        not isinstance(item, dict)
-        or (
-            item.get("runtime_evidence_complete") is not True
-            and item.get("status") not in SKIPPED_VERSION_STATUSES
-        )
-        for item in [*report["baseline"], *report["issues"]]
-    ):
-        raise ContractError("Report runtime evidence is incomplete")
-
-
-def _validate_complete_summary(
-    report: dict[str, Any],
-    *,
-    expected_count: int,
-    label: str,
-) -> None:
-    assessment_incomplete = any(
-        item.get("status") not in SKIPPED_VERSION_STATUSES
-        and (
-            item.get("runtime_evidence_complete") is not True
-            or item["assessment"]["verdict"] == "inconclusive"
-        )
-        or any(
-            card.get("evaluation") == "incomplete"
-            for card in item["assessment"].get("card_evaluations", [])
-        )
-        for item in report["baseline"]
-    ) or any(
-        item.get("status") not in SKIPPED_VERSION_STATUSES
-        and (
-            item.get("runtime_evidence_complete") is not True
-            or item["assessment"]["finding_type"] == "INCOMPLETE"
-        )
-        for item in report["issues"]
-    )
-    if assessment_incomplete:
-        raise ContractError(f"{label} report is incomplete")
-    if any(
-        item["outcome"] != "skipped"
-        and item["outcome"]
-        != issue_outcome(item["assessment"].get("card_evaluations", []))
-        for item in report["issues"]
-    ):
-        raise ContractError(f"{label} report issue outcomes are inconsistent")
-    expected = _summary_metrics(report["baseline"], report["issues"])
-    summary = report["summary"]
-    if (
-        expected["issues_expected"]
-        != expected_count - expected["issues_skipped"]
-        or any(summary.get(key) != value for key, value in expected.items())
-        or set(summary) != set(expected)
-    ):
-        raise ContractError(f"{label} report summary is inconsistent")
-
-
-def _baseline_report_semantics_valid(item: dict[str, Any]) -> bool:
-    assessment = item.get("assessment")
-    if not isinstance(assessment, dict):
-        return False
-    cards = assessment.get("card_evaluations")
-    if (
-        not isinstance(cards, list)
-        or len(cards) != item.get("insight_count")
-        or any(
-            not isinstance(card, dict)
-            or card.get("evaluation")
-            not in {"noise", "valid_agent_finding", "incomplete"}
-            or card.get("ownership")
-            not in {
-                "agent",
-                "insight_engine",
-                "test_framework",
-                "infrastructure",
-                "unresolved",
-            }
-            or (
-                card.get("evaluation") == "noise"
-                and card.get("ownership") != "insight_engine"
-            )
-            or (
-                card.get("evaluation") == "valid_agent_finding"
-                and card.get("ownership") != "agent"
-            )
-            or (
-                card.get("evaluation") == "incomplete"
-                and card.get("ownership") == "none"
-            )
-            for card in cards
-        )
-    ):
-        return False
-    verdict = assessment.get("verdict")
-    ownership = assessment.get("ownership")
-    if verdict == "skipped":
-        return (
-            item.get("status") in SKIPPED_VERSION_STATUSES
-            and ownership
-            == (
-                "agent"
-                if item.get("status") == "skipped_agent_activation"
-                else "infrastructure"
-            )
-            and not cards
-        )
-    if verdict == "clean":
-        return ownership == "none" and not cards
-    if verdict == "noise":
-        return (
-            ownership == "insight_engine"
-            and bool(cards)
-            and all(card["evaluation"] == "noise" for card in cards)
-        )
-    if verdict == "agent_finding":
-        return (
-            ownership == "agent"
-            and any(card["evaluation"] == "valid_agent_finding" for card in cards)
-            and all(card["evaluation"] != "incomplete" for card in cards)
-        )
-    return verdict == "inconclusive" and ownership not in {None, "none"}
-
-
-def validate_published_report(
-    report: dict[str, Any],
-    issue_catalog: dict[str, Any] | None = None,
-    expected_selection: dict[str, list[str]] | None = None,
-) -> None:
-    validate_report(report)
-    if (
-        report["source_integrity"].get("verified") is not True
-        or not isinstance(report["source_integrity"].get("contract_digest"), str)
-    ):
-        raise ContractError("Published report source integrity is incomplete")
-    if report["profile"] != "daily":
-        raise ContractError("Published report has an ineligible profile")
-    baseline = report["baseline"]
-    expected_agents = {
-        "weather-agent",
-        "healthcare-agent",
-        "finance-agent",
-        "travel-agent",
-        "support-ticket-agent",
-    }
-    if (
-        len(baseline) != 5
-        or {item.get("agent") for item in baseline} != expected_agents
-        or any(
-            item.get("status")
-            not in {"passed", "not_at_bar", *SKIPPED_VERSION_STATUSES}
-            or not isinstance(item.get("insight_count"), int)
-            or item["insight_count"] < 0
-            or not isinstance(item.get("assessment"), dict)
-            or item["assessment"].get("verdict")
-            not in {"clean", "noise", "agent_finding", "inconclusive", "skipped"}
-            or item["assessment"].get("ownership")
-            not in {
-                "none",
-                "agent",
-                "insight_engine",
-                "test_framework",
-                "infrastructure",
-                "unresolved",
-            }
-            or not _baseline_report_semantics_valid(item)
-            for item in baseline
-        )
-    ):
-        raise ContractError("Published report baseline is incomplete")
-    issues = report["issues"]
-    issue_by_id = (
-        {item["id"]: item for item in issue_catalog["issues"]}
-        if issue_catalog is not None
-        else None
-    )
-    if (
-        len(issues) != DAILY_ISSUE_COUNT
-        or len({item.get("issue_id") for item in issues}) != DAILY_ISSUE_COUNT
-        or any(
-            item.get("status") in {"inconclusive", None}
-            or not isinstance(item.get("observed_count"), int)
-            or item.get("outcome")
-            not in {"correct", "incorrect", "missing", "skipped"}
-            or item.get("detail")
-            not in {
-                "MATCHED",
-                "PARTIAL",
-                "MISMATCHED",
-                "MISSING",
-                "NOISE",
-                "DUPLICATE",
-                "SKIPPED",
-            }
-            or not isinstance(item.get("assessment"), dict)
-            or item["assessment"].get("verdict")
-            not in {
-                "correct",
-                "partially_useful",
-                "incorrect",
-                "missing",
-                "skipped",
-            }
-            or item["assessment"].get("finding_type") != item.get("detail")
-            or not isinstance(item["assessment"].get("fields"), dict)
-            or set(item["assessment"]["fields"]) != REQUIRED_FIELDS
-            or not isinstance(item["assessment"].get("confidence"), (int, float))
-            or not 0 <= item["assessment"]["confidence"] <= 1
-            or (
-                item.get("status") == "observed"
-                and (
-                    item.get("observed_count", 0) < 1
-                    or re.fullmatch(
-                        r"sha256:[0-9a-f]{64}",
-                        str(item.get("evidence_reference") or ""),
-                    )
-                    is None
-                )
-            )
-            for item in issues
-        )
-    ):
-        raise ContractError("Published report issue results are incomplete")
-    if issue_by_id is not None:
-        if any(
-            item["issue_id"] not in issue_by_id
-            or item["agent"] != issue_by_id[item["issue_id"]]["agent"]
-            or item["title"] != issue_by_id[item["issue_id"]]["title"]
-            for item in issues
-        ):
-            raise ContractError("Published report issue assignments do not match the catalog")
-        if {
-            agent: sum(item["agent"] == agent for item in issues)
-            for agent in expected_agents
-        } != {agent: DAILY_ISSUES_PER_AGENT for agent in expected_agents}:
-            raise ContractError("Published report must contain four issues per Agent")
-    if expected_selection is not None:
-        actual = {
-            agent: {
-                item["issue_id"] for item in issues if item["agent"] == agent
-            }
-            for agent in expected_agents
-        }
-        expected = {
-            agent: set(issue_ids)
-            for agent, issue_ids in expected_selection.items()
-        }
-        if actual != expected:
-            raise ContractError("Published report does not match deterministic daily selection")
-    _validate_complete_summary(
-        report,
-        expected_count=DAILY_ISSUE_COUNT,
-        label="Published",
-    )
-    if report["delivery"]["content_digest"] == "sha256:" + "0" * 64:
-        raise ContractError("Published report has no bound email content digest")
-
-
-def validate_staging_report(
-    report: dict[str, Any],
-    issue_catalog: dict[str, Any],
-) -> None:
-    validate_report(report)
-    if (
-        report["source_integrity"].get("verified") is not True
-        or not isinstance(report["source_integrity"].get("contract_digest"), str)
-    ):
-        raise ContractError("Staging report source integrity is incomplete")
-    if report["profile"] != "staging":
-        raise ContractError("Promotion requires a complete staging report")
-    baseline = report["baseline"]
-    if (
-        len(baseline) != 5
-        or len({item.get("agent") for item in baseline}) != 5
-        or any(
-            item.get("status") not in {"passed", "not_at_bar"}
-            or not isinstance(item.get("insight_count"), int)
-            or item["insight_count"] < 0
-            or item.get("assessment", {}).get("verdict")
-            not in {"clean", "noise", "agent_finding", "inconclusive"}
-            or not _baseline_report_semantics_valid(item)
-            for item in baseline
-        )
-    ):
-        raise ContractError("Staging report baselines are incomplete")
-    issue_by_id = {item["id"]: item for item in issue_catalog["issues"]}
-    values = report["issues"]
-    if (
-        len(values) != 36
-        or {item.get("issue_id") for item in values} != set(issue_by_id)
-        or any(
-            item.get("agent") != issue_by_id[item["issue_id"]]["agent"]
-            or item.get("title") != issue_by_id[item["issue_id"]]["title"]
-            or item.get("status") in {"inconclusive", None}
-            or not isinstance(item.get("observed_count"), int)
-            or item.get("outcome") not in {"correct", "incorrect", "missing"}
-            or item.get("detail")
-            not in {
-                "MATCHED",
-                "PARTIAL",
-                "MISMATCHED",
-                "MISSING",
-                "NOISE",
-                "DUPLICATE",
-            }
-            or item.get("assessment", {}).get("verdict")
-            not in {"correct", "partially_useful", "incorrect", "missing"}
-            or item.get("assessment", {}).get("finding_type") != item.get("detail")
-            or set(item.get("assessment", {}).get("fields", {})) != REQUIRED_FIELDS
-            or (
-                item.get("status") == "observed"
-                and (
-                    item.get("observed_count", 0) < 1
-                    or re.fullmatch(
-                        r"sha256:[0-9a-f]{64}",
-                        str(item.get("evidence_reference") or ""),
-                    )
-                    is None
-                )
-            )
-            for item in values
-        )
-    ):
-        raise ContractError("Staging report issue results are incomplete")
-    _validate_complete_summary(report, expected_count=36, label="Staging")
+def _markdown_text(text: str) -> str:
+    # Escape markup, not content. Approval is established before rendering.
+    text = escape(" ".join(text.splitlines()), quote=False)
+    for character in ("\\", "`", "*", "[", "]", "|"):
+        text = text.replace(character, "\\" + character)
+    return re.sub(r"(?<!\w)_|_(?!\w)", r"\\_", text)
 
 
 def render_markdown(
-    report: dict[str, Any],
-    *,
-    include_improvement_link: bool = True,
+    result: QualityResult, *, allowed_units: Iterable[PlannedUnit],
+    warnings: tuple[str, ...] = (),
+    report_context: ReviewedReportContext | None = None,
+    metadata: ReportMetadata | None = None,
+    delivery_id: str | None = None,
 ) -> str:
-    summary = report["summary"]
-    score = f"{summary['quality_score']:g} / 100"
-    comparison = _score_comparison_text(report)
-    missing_baselines = summary["baseline_coverage"]["missing_agents"]
-    lines = [
-        f"# Agent Insights Quality - {report['report_date']}",
-        "",
-        "## Summary",
-        "",
-        "| Summary | Result |",
-        "| --- | --- |",
-        f"| Quality score | **{score}{comparison}** |",
-        f"| Eligible issues | {summary['issues_correct']} correct / "
-        f"{summary['issues_expected']} "
-        f"({summary['issues_incorrect']} incorrect, "
-        f"{summary['issues_missing']} missing, "
-        f"{summary['issues_skipped']} skipped) |",
-        f"| Extra cards | {summary['noise_cards']} noise, "
-        f"{summary['duplicate_cards']} duplicate |",
-        "| Baseline coverage | "
-        + (
-            "Complete for all 5 Test Agents"
-            if not missing_baselines
-            else "Missing: " + ", ".join(f"`{item}`" for item in missing_baselines)
-        )
-        + " |",
-        f"| Scoring | [How Scoring Works]({_QUALITY_SCORE_DOC_URL}) |",
-        "",
-        "## What is working",
-        "",
-        "| Capability | Evidence |",
-        "| --- | --- |",
-        f"| Baseline health | {summary['baseline_passed']} of 5 Agents produced zero baseline Insights |",
-        f"| Issue quality | {summary['issues_correct']} of {summary['issues_expected']} selected issues passed every scoring field |",
-        f"| Extra cards | {summary['noise_cards']} noise and {summary['duplicate_cards']} duplicate cards |",
-        "",
-        "## Baseline ownership",
-        "",
-        "| Agent | Cards | Verdict | Ownership |",
-        "| --- | ---: | --- | --- |",
-        *[
-            f"| `{item['agent']}` | {item['insight_count']} | "
-            f"`{item['assessment']['verdict']}` | "
-            f"`{item['assessment']['ownership']}` |"
-            for item in report["baseline"]
-        ],
-        "",
-        "## What needs improvement",
-        "",
-        "| Issue | Agent | Finding | Ownership |",
-        "| --- | --- | --- | --- |",
-    ]
-    failures = [
-        item
-        for item in report["issues"]
-        if item["outcome"] != "correct"
-    ]
-    if failures:
-        for item in failures:
-            lines.append(
-                f"| `{item['issue_id']}` - {item['title']} | `{item['agent']}` | "
-                f"{item['outcome'].title()} |"
-                f" `{item['assessment']['ownership']}` |"
-            )
-    else:
-        lines.append("| None | - | All selected issues met the strict contract | `none` |")
-    lines.extend(
-        [
-            "",
-            "## Human validation",
-            "",
-            "| Issue | Agent | Cards | Sol verdict | Ownership | Confidence |",
-            "| --- | --- | ---: | --- | --- | ---: |",
-        ]
-    )
-    for item in report["issues"]:
-        lines.append(
-            f"| `{item['issue_id']}` - {item['title']} | `{item['agent']}` | "
-            f"{item['observed_count']} | {item['outcome'].title()} | "
-            f"`{item['assessment']['ownership']}` | "
-            f"{item['assessment']['confidence']:.2f} |"
-        )
-    if summary["skipped_issues"]:
-        lines.extend(
-            [
-                "",
-                "## Skipped coverage",
-                "",
-                "| Issue | Status | Reason |",
-                "| --- | --- | --- |",
-                *[
-                    f"| `{item['issue_id']}` | `{item['status']}` | "
-                    f"`{item['reason_code']}` |"
-                    for item in summary["skipped_issues"]
-                ],
-            ]
-        )
-    lines.extend(["", "## Per-Agent reports", ""])
-    baseline_by_agent = {item["agent"]: item for item in report["baseline"]}
-    for agent_name in sorted(baseline_by_agent, key=str.casefold):
-        lines.append(f"- [{agent_name}](agents/{agent_name}.md)")
-    lines.append("")
-    if report["profile"] == "daily" and include_improvement_link:
-        lines.extend(
-            [
-                "[View Insight Engine Improvement Report]"
-                "(../../../../insight-engine-improvement.md)",
-                "",
-            ]
-        )
-    return "\n".join(lines)
-
-
-def _markdown_cell(value: str) -> str:
-    return value.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
-
-
-def _evaluation_label(value: str) -> str:
-    return {
-        "MATCHED": "Correct",
-        "PARTIAL": "Incorrect",
-        "MISMATCHED": "Incorrect",
-        "MISSING": "Missing",
-        "NOISE": "Noise",
-        "DUPLICATE": "Duplicate",
-        "INCOMPLETE": "Incomplete",
-        "noise": "Noise",
-        "incomplete": "Incomplete",
-        "valid_agent_finding": "Valid Agent Finding",
-        "clean": "Clean",
-        "inconclusive": "Incomplete",
-        "agent_finding": "Agent Finding",
-    }[value]
-
-
-def _field_result_cells(fields: dict[str, Any] | None) -> tuple[str, str]:
-    if not fields:
-        return "-", "-"
-    passing = [
-        field.replace("_", " ")
-        for field in ASSESSMENT_FIELDS
-        if fields.get(field) is True
-    ]
-    failing = [
-        field.replace("_", " ")
-        for field in ASSESSMENT_FIELDS
-        if fields.get(field) is not True
-    ]
-    return ", ".join(passing) or "None", ", ".join(failing) or "None"
-
-
-COVERAGE_PRIMARY_TYPES = ATTRIBUTABLE_FINDING_TYPES
-
-
-def _issue_link(issue_id: str) -> str:
-    return (
-        "https://github.com/ninghu/agent-insights-quality/blob/main/"
-        f"ISSUE_CATALOG.md#{issue_id}"
+    """Public-safe report. No private evidence/context parameter exists here."""
+    return _render_markdown(
+        result, allowed_units=allowed_units, warnings=warnings,
+        report_context=report_context, metadata=metadata, delivery_id=delivery_id,
     )
 
 
-def issue_primary_card(item: Mapping[str, Any]) -> dict[str, Any] | None:
-    if item.get("runtime_evidence_complete") is False:
-        return None
-    cards = [
-        card
-        for card in item["assessment"].get("card_evaluations", [])
-        if card.get("finding_type") in ATTRIBUTABLE_FINDING_TYPES
-    ]
-    if not cards:
-        return None
-    return min(
-        cards,
-        key=lambda card: (
-            not scoring_fields_pass(card.get("fields", {})),
-            -sum(value is True for value in card.get("fields", {}).values()),
-            str(card.get("reference") or ""),
-        ),
-    )
-
-
-def expected_issue_coverage_label(item: Mapping[str, Any]) -> str:
-    return str(item["outcome"]).title()
-
-
-def _agent_runtime_evidence_complete(
-    baseline: dict[str, Any],
-    issues: list[dict[str, Any]],
-) -> bool:
-    baseline_cards = baseline["assessment"].get("card_evaluations", [])
-    return (
-        bool(baseline["runtime_evidence_complete"])
-        and baseline["assessment"]["verdict"] != "inconclusive"
-        and not any(card.get("evaluation") == "incomplete" for card in baseline_cards)
-        and all(item.get("runtime_evidence_complete") is True for item in issues)
-    )
-
-
-def _extra_insight_rows(
-    baseline: dict[str, Any],
-    issues: list[dict[str, Any]],
-) -> list[tuple[str, str, str, str]]:
-    rows: list[tuple[str, str, str, str]] = []
-    for card in baseline["assessment"].get("card_evaluations", []):
-        if card.get("evaluation") == "valid_agent_finding":
-            continue
-        rows.append(
-            (
-                f"Baseline `v0` / `{baseline['foundry_version']}`",
-                card.get("title", "Untitled Insight"),
-                _evaluation_label(card.get("evaluation", "incomplete")),
-                card.get("reasoning") or card.get("ownership_reason", ""),
-            )
-        )
-    for item in issues:
-        primary = issue_primary_card(item)
-        cards = item["assessment"].get("card_evaluations", [])
-        cards_by_reference = {
-            card["reference"]: card for card in cards if "reference" in card
-        }
-        observed_in = f"`{item['issue_id']}` version / `{item['foundry_version']}`"
-        for card in cards:
-            if primary is not None and card is primary:
-                continue
-            if card.get("finding_type") == "DUPLICATE":
-                primary_card = cards_by_reference.get(card.get("duplicate_of"))
-                primary_title = (
-                    primary_card["title"] if primary_card else "the primary card"
-                )
-                relationship = f"Duplicate of **{primary_title}**."
-                reason = card.get("reasoning") or card.get(
-                    "ownership_reason", ""
-                )
-                if reason:
-                    relationship += f" {reason}"
-            elif card.get("finding_type") in COVERAGE_PRIMARY_TYPES:
-                relationship = (
-                    f"Additional attributable card for `{item['issue_id']}`; "
-                    "not selected as the primary. "
-                    + (
-                        card.get("reasoning")
-                        or card.get("ownership_reason", "")
-                    )
-                )
-            else:
-                relationship = card.get("reasoning") or card.get(
-                    "ownership_reason", ""
-                )
-            rows.append(
-                (
-                    observed_in,
-                    card.get("title", "Untitled Insight"),
-                    _evaluation_label(card["finding_type"]),
-                    relationship,
-                )
-            )
-    return rows
-
-
-def _decision_detail_blocks(
-    baseline: dict[str, Any],
-    issues: list[dict[str, Any]],
-) -> list[str]:
-    blocks: list[str] = []
-    baseline_assessment = baseline["assessment"]
-    if baseline_assessment["verdict"] != "clean":
-        lines = [
-            f"### Baseline `v0` - {_evaluation_label(baseline_assessment['verdict'])}",
-            "",
-            f"**Ownership:** `{baseline_assessment['ownership']}`  ",
-            f"**Why this judgment:** {baseline_assessment['ownership_reason']}",
-            "",
-        ]
-        for card in baseline_assessment.get("card_evaluations", []):
-            lines.append(
-                f"- **{card.get('title', 'Untitled Insight')}** "
-                f"({_evaluation_label(card.get('evaluation', 'incomplete'))}): "
-                f"{card.get('reasoning') or card.get('ownership_reason', '')}"
-            )
-        lines.append("")
-        blocks.append("\n".join(lines))
-
-    for item in issues:
-        label = expected_issue_coverage_label(item)
-        cards = item["assessment"].get("card_evaluations", [])
-        issue_link = _issue_link(item["issue_id"])
-        reasoning = item["assessment"].get("reasoning") or "No reasoning provided."
-        primary = issue_primary_card(item)
-        if label in {"Missing", "Incomplete"}:
-            blocks.append(
-                "\n".join(
-                    [
-                        f"### [{item['issue_id']}]({issue_link}) - {label}",
-                        "",
-                        f"**Expected issue:** {item['title']}",
-                        "",
-                        f"**Why this judgment:** {reasoning}",
-                        "",
-                    ]
-                )
-            )
-        for card in cards:
-            finding_type = card.get("finding_type")
-            failed_fields = {
-                field
-                for field, passed in card.get("fields", {}).items()
-                if passed is False
-            }
-            if (
-                finding_type in ATTRIBUTABLE_FINDING_TYPES
-                and failed_fields
-            ):
-                card_label = (
-                    "Correct"
-                    if scoring_fields_pass(card.get("fields", {}))
-                    else "Incorrect"
-                )
-                qualifier = "" if card is primary else "Additional card - "
-                passing, _unused = _field_result_cells(card.get("fields"))
-                reasons = card.get("field_reasons") or {}
-                lines = [
-                    f"### {qualifier}[{item['issue_id']}]({issue_link}) - {card_label}",
-                    "",
-                    f"**Expected issue:** {item['title']}  ",
-                    f"**Generated Insight:** {card.get('title', 'Untitled Insight')}",
-                    "",
-                    "**Why this judgment:** "
-                    f"{card.get('reasoning') or reasoning}",
-                    "",
-                    f"**What was correct:** {passing}",
-                    "",
-                    "| Failing field | Specific reason |",
-                    "| --- | --- |",
-                ]
-                for field in ASSESSMENT_FIELDS:
-                    if card.get("fields", {}).get(field) is True:
-                        continue
-                    reason = reasons.get(field, "No reason provided.")
-                    lines.append(
-                        f"| {field.replace('_', ' ').title()} | "
-                        f"{_markdown_cell(reason)} |"
-                    )
-                lines.extend(
-                    [
-                        "",
-                        "| Review metadata | Value |",
-                        "| --- | --- |",
-                        f"| Ownership | `{card.get('ownership', item['assessment']['ownership'])}` |",
-                        f"| Confidence | `{card.get('confidence', item['assessment']['confidence']):.2f}` |",
-                        "",
-                    ]
-                )
-                blocks.append("\n".join(lines))
-            elif finding_type == "INCOMPLETE":
-                blocks.append(
-                    "\n".join(
-                        [
-                            f"### Incomplete card - observed in `{item['issue_id']}` version",
-                            "",
-                            f"**Generated Insight:** {card.get('title', 'Untitled Insight')}",
-                            "",
-                            "**Why this judgment:** "
-                            f"{card.get('reasoning') or card.get('ownership_reason', '')}",
-                            "",
-                            f"**Ownership:** `{card.get('ownership', '')}`",
-                            "",
-                        ]
-                    )
-                )
-        for card in cards:
-            if card.get("finding_type") != "NOISE":
-                continue
-            lines = [
-                f"### Noise card - observed in `{item['issue_id']}` version",
-                "",
-                f"**Generated Insight:** {card.get('title', 'Untitled Insight')}",
-                "**Corresponding issue:** None",
-                "",
-                f"**Diagnosis:** {card.get('title', 'Untitled Insight')}",
-                "",
-                f"**Evidence:** {card.get('reasoning', '')}",
-                "",
-                f"**Rejected mapping:** `{item['issue_id']}` - {item['title']}",
-                "",
-                "**Why no reviewed issue corresponds:** "
-                f"{card.get('ownership_reason') or card.get('reasoning', '')}",
-                "",
-                "| Review metadata | Value |",
-                "| --- | --- |",
-                f"| Ownership | `{card.get('ownership', '')}` |",
-                f"| Confidence | `{card.get('confidence', 0):.2f}` |",
-                "",
-            ]
-            blocks.append("\n".join(lines))
-        cards_by_reference = {
-            card["reference"]: card for card in cards if "reference" in card
-        }
-        duplicates_by_primary: dict[str, list[dict[str, Any]]] = {}
-        for card in cards:
-            if card.get("finding_type") == "DUPLICATE":
-                duplicates_by_primary.setdefault(
-                    card.get("duplicate_of") or "", []
-                ).append(card)
-        for primary_reference, duplicate_cards in duplicates_by_primary.items():
-            primary_card = cards_by_reference.get(primary_reference)
-            primary_title = (
-                primary_card["title"]
-                if primary_card
-                else "an unresolved primary card"
-            )
-            lines = [
-                f"### Duplicate group - `{item['issue_id']}`",
-                "",
-                f"**Primary card:** {primary_title}",
-                "",
-                "**Duplicate cards:**",
-                "",
-                *[
-                    f"{index}. {card.get('title', 'Untitled Insight')} - "
-                    f"{card.get('reasoning') or card.get('ownership_reason', '')}"
-                    for index, card in enumerate(duplicate_cards, start=1)
-                ],
-                "",
-            ]
-            blocks.append("\n".join(lines))
-    return blocks
-
-
-def _context_paths(agent_name: str, ownership: str, issue_id: str | None) -> str:
-    """Deterministic repo-relative catalog/source/traffic paths for ``ownership``.
-
-    Excludes any issue-catalog reference or evaluation anchor phrase; callers
-    that have an ``issue_id`` and an anchor phrase compose them with this via
-    :func:`_context_cell`.
-    """
-    if ownership in {"insight_engine", "agent"}:
-        if issue_id is None:
-            return (
-                f"`agents/{agent_name}/v0/source/`; "
-                f"`agents/{agent_name}/v0/traffic.json`"
-            )
-        return (
-            f"`agents/{agent_name}/issues/{issue_id}/source/`; "
-            f"`agents/{agent_name}/issues/{issue_id}/traffic.json`"
-        )
-    if ownership == "test_framework":
-        return (
-            "`src/agent_insights_quality/`; `schemas/`; "
-            "`src/agent_insights_quality/prompts/`; `tests/`"
-        )
-    if ownership == "infrastructure":
-        return "`infra/`"
-    return "Investigate first; ownership is unresolved."
-
-
-_CONTEXT_PATH_OWNERSHIPS = {"insight_engine", "agent", "test_framework", "infrastructure"}
-
-
-def _context_cell(
-    agent_name: str,
-    ownership: str,
-    issue_id: str | None,
-    anchor_phrase: str,
+def render_private_markdown(
+    result: QualityResult, *, allowed_units: Iterable[PlannedUnit],
+    review_context: RetainedReviewContext, warnings: tuple[str, ...] = (),
+    report_context: ReviewedReportContext | None = None,
+    metadata: ReportMetadata | None = None, delivery_id: str | None = None,
+    agent: str | None = None,
 ) -> str:
-    """Build the full ``Context to load`` cell for one coding-agent-context row.
-
-    An ``insight_engine``-owned finding still lists the Test Agent's catalog,
-    source, and traffic paths, but only as read-only context to load, never as
-    an edit target - the row's Owner column and the section's lead-in
-    sentence carry that distinction, not the paths themselves. An unresolved
-    (or otherwise unrecognized) ownership renders only the investigate-first
-    instruction, since no deterministic path is yet known.
-    """
-    paths = _context_paths(agent_name, ownership, issue_id)
-    if ownership not in _CONTEXT_PATH_OWNERSHIPS:
-        return paths
-    parts = []
-    if issue_id is not None:
-        parts.append(f"`ISSUE_CATALOG.md#{issue_id}`")
-    parts.append(anchor_phrase)
-    parts.append(paths)
-    return "; ".join(parts)
-
-
-def _baseline_context_entry(
-    baseline: dict[str, Any],
-) -> tuple[str, str, str] | None:
-    """Return ``(finding, ownership, anchor_phrase)`` for the Baseline row, or
-    ``None`` when the baseline has no actionable finding at all."""
-    assessment = baseline["assessment"]
-    verdict_non_clean = assessment["verdict"] != "clean"
-    extra_cards = [
-        card
-        for card in assessment.get("card_evaluations", [])
-        if card.get("evaluation") != "valid_agent_finding"
-    ]
-    if not verdict_non_clean and not extra_cards:
-        return None
-    parts = []
-    if verdict_non_clean:
-        parts.append(_evaluation_label(assessment["verdict"]))
-    if extra_cards:
-        parts.append("Noise")
-    finding = "Baseline " + " + ".join(parts)
-    block_count = (1 if verdict_non_clean else 0) + (1 if extra_cards else 0)
-    anchor_phrase = f"Baseline detail{'s' if block_count > 1 else ''} above"
-    ownership = (
-        assessment["ownership"]
-        if verdict_non_clean
-        else extra_cards[0].get("ownership", assessment["ownership"])
+    """Explicit private boundary; never used by public_artifacts or ADX."""
+    if type(review_context) is not RetainedReviewContext:
+        raise ReportContextError("report_review_context_invalid")
+    return _render_markdown(
+        result, allowed_units=allowed_units, warnings=warnings,
+        report_context=report_context, metadata=metadata, delivery_id=delivery_id,
+        private=review_context.for_result(result), agent=agent,
     )
-    return finding, ownership, anchor_phrase
 
 
-def _issue_context_entries(
-    item: dict[str, Any],
-) -> list[tuple[str, str, str]]:
-    """Return one entry for every distinct actionable owner on an issue."""
-    label = expected_issue_coverage_label(item)
-    primary = issue_primary_card(item)
-    cards = item["assessment"].get("card_evaluations", [])
-    by_owner: dict[str, list[tuple[str, str]]] = {}
-    if label != "Correct":
-        ownership = (
-            primary.get("ownership", item["assessment"]["ownership"])
-            if primary is not None
-            else item["assessment"]["ownership"]
-        )
-        by_owner.setdefault(ownership, []).append(
-            (label, "decision" if label == "Incorrect" else label)
-        )
-    for card in cards:
-        if card is primary or card.get("finding_type") not in {
-            "NOISE",
-            "DUPLICATE",
-        }:
-            continue
-        ownership = card.get("ownership", item["assessment"]["ownership"])
-        card_label = (
-            "unmatched Noise"
-            if card["finding_type"] == "NOISE"
-            else "Duplicate group"
-        )
-        entry = (
-            card_label,
-            "Noise" if card["finding_type"] == "NOISE" else "Duplicate",
-        )
-        owner_entries = by_owner.setdefault(ownership, [])
-        if entry not in owner_entries:
-            owner_entries.append(entry)
-    entries = []
-    for ownership, values in sorted(by_owner.items()):
-        parts = [value[0] for value in values]
-        anchors = [value[1] for value in values]
-        entries.append(
-            (
-                f"`{item['issue_id']}` " + " + ".join(parts),
-                ownership,
-                (
-                    f"{' / '.join(anchors)} "
-                    f"detail{'s' if len(anchors) > 1 else ''} above"
-                ),
-            )
-        )
-    return entries
+_ASSESSMENT_LABEL = (
+    r"(?:Saved result|Saved assessment|(?:Initial assessment|Focused review|Resolved assessment)"
+    r" \((?:correct|incorrect|unknown)\))"
+)
+_DETAIL_ENTRY = (
+    r"<br><strong>Finding [1-9][0-9]*: " + _ASSESSMENT_LABEL
+    + r"</strong><br>(?:[^<>]|<br>)*?"
+)
+_DETAILS = re.compile(
+    r"<details><summary>Assessment details</summary>((?:" + _DETAIL_ENTRY + r")+)</details>"
+)
+_DETAIL_LABEL = re.compile(
+    r"(<br><strong>Finding [1-9][0-9]*: " + _ASSESSMENT_LABEL + r"</strong><br>)"
+)
 
 
-def _coding_agent_context_rows(
-    baseline: dict[str, Any],
-    issues: list[dict[str, Any]],
-    agent_name: str,
-) -> list[tuple[str, str, str]]:
-    """One compact row per actionable non-Correct result, merging an issue's
-    own evaluation with any unmatched Noise or Duplicate group generated in
-    the same version so a coding agent never has to cross-reference several
-    rows for one issue."""
-    rows: list[tuple[str, str, str]] = []
-    baseline_entry = _baseline_context_entry(baseline)
-    if baseline_entry is not None:
-        finding, ownership, anchor_phrase = baseline_entry
-        rows.append(
-            (
-                finding,
-                f"`{ownership}`",
-                _context_cell(agent_name, ownership, None, anchor_phrase),
-            )
+def _assessment_details(entries: list[tuple[int, dict]]) -> str:
+    body = []
+    for index, card in entries:
+        body.append(
+            f"<br><strong>Finding {index}: Saved result</strong><br>"
+            f"Core: {card['core']}; classification: {card['classification']}."
         )
-    for item in issues:
-        for finding, ownership, anchor_phrase in _issue_context_entries(item):
-            rows.append(
-                (
-                    finding,
-                    f"`{ownership}`",
-                    _context_cell(
-                        agent_name,
-                        ownership,
-                        item["issue_id"],
-                        anchor_phrase,
-                    ),
-                )
-            )
-    return rows
-
-
-def render_agent_markdown(report: dict[str, Any], agent_name: str) -> str:
-    baseline = next(
-        item for item in report["baseline"] if item["agent"] == agent_name
-    )
-    issues = [item for item in report["issues"] if item["agent"] == agent_name]
-    baseline_cards = baseline["assessment"].get("card_evaluations", [])
-    issue_cards = [
-        card
-        for item in issues
-        for card in item["assessment"].get("card_evaluations", [])
-    ]
-    outcome_counts = Counter(item["outcome"] for item in issues)
-    noise_count = sum(
-        card.get("finding_type") == "NOISE" for card in issue_cards
-    ) + sum(card.get("evaluation") == "noise" for card in baseline_cards)
-    duplicate_count = sum(
-        card.get("finding_type") == "DUPLICATE" for card in issue_cards
-    )
-    runtime_complete = _agent_runtime_evidence_complete(baseline, issues)
-    lines = [
-        f"# {agent_name} - Insight Evaluation",
-        "",
-        f"- Report date: `{report['report_date']}`",
-        f"- Run: `{report['run_id']}`",
-        f"- Runtime evidence: `{'Complete' if runtime_complete else 'Incomplete'}`",
-        "- Expected baseline Insights: `0`",
-        "",
-        "## Review summary",
-        "",
-        "| Metric | Value |",
-        "| --- | ---: |",
-        f"| Expected issue Insights | {len(issues)} |",
-        f"| Generated issue cards | {len(issue_cards)} |",
-        f"| Generated baseline cards | {len(baseline_cards)} |",
-        f"| Correct | {outcome_counts['correct']} |",
-        f"| Incorrect | {outcome_counts['incorrect']} |",
-        f"| Missing | {outcome_counts['missing']} |",
-        f"| Noise | {noise_count} |",
-        f"| Duplicate | {duplicate_count} |",
-        "",
-        "## Expected issue coverage",
-        "",
-        "| Expected issue | Version | Primary Insight | Evaluation | Why |",
-        "| --- | --- | --- | --- | --- |",
-    ]
-    for item in issues:
-        label = expected_issue_coverage_label(item)
-        primary = issue_primary_card(item)
-        if primary is not None:
-            primary_title = _markdown_cell(primary.get("title", "Untitled Insight"))
-        elif label == "Incomplete":
-            primary_title = "Insufficient evidence"
+        disagreement = card.get("disagreement")
+        if disagreement:
+            reasons = [
+                (f"{label} ({disagreement[stage]['core']})", disagreement[stage]["reason"])
+                for stage, label in (("initial", "Initial assessment"), ("review", "Focused review"))
+            ]
+            if card["reason"] not in {reason for _, reason in reasons}:
+                reasons.append(("Resolved assessment (unknown)", card["reason"]))
         else:
-            primary_title = "No matching Insight"
-        why = _markdown_cell(
-            (
-                primary.get("reasoning")
-                if primary is not None
-                else item["assessment"].get("reasoning")
-            )
-            or "No reasoning provided."
-        )
-        lines.append(
-            f"| [{item['issue_id']}]({_issue_link(item['issue_id'])}) | "
-            f"`{item['foundry_version']}` | {primary_title} | {label} | {why} |"
-        )
-    lines.extend(
-        [
-            "",
-            "## Extra generated Insights",
-            "",
-            "`Observed in` identifies the Agent version that produced the card. It "
-            "does not assign the card to that version's expected issue.",
-            "",
-            "| Observed in | Generated Insight | Classification | Relationship |",
-            "| --- | --- | --- | --- |",
-        ]
+            label = "Resolved assessment (unknown)" if card.get("core") == "unknown" else "Saved assessment"
+            reasons = [(label, card["reason"])]
+        for label, reason in reasons:
+            # Raw HTML table cells need entities, not Markdown escapes. Keep all
+            # reason text while preventing pipes/newlines from creating rows.
+            text = escape(reason, quote=False).replace("|", "&#124;")
+            text = text.replace("\r\n", "<br>").replace("\r", "<br>").replace("\n", "<br>")
+            for character in ("\\", "`", "*", "[", "]", "\u2028", "\u2029"):
+                text = text.replace(character, f"&#{ord(character)};")
+            body.append(f"<br><strong>Finding {index}: {label}</strong><br>{text}")
+    return "<details><summary>Assessment details</summary>" + "".join(body) + "</details>"
+
+
+_EXCLUSION_LABELS = {
+    "missing_result": "Result unavailable",
+    "incomplete_execution": "Execution incomplete",
+    "incomplete_evidence": "Evidence incomplete",
+    "incomplete_assessment": "Assessment incomplete",
+    "unknown_core": "Finding unconfirmed",
+}
+_FINDING_LABELS = {
+    "expected_detection": "Matched",
+    "noise": "Noise",
+    "duplicate": "Duplicate",
+    "unexpected_real": "Unexpected",
+    "unknown": "Unconfirmed",
+}
+
+
+def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private: bool) -> str:
+    identity = _identity(unit)
+    deployment = detail.get("deployment")
+    version = (
+        f"{deployment['provider_version']} ({identity.logical_version})"
+        if deployment else f"{identity.logical_version} (deployment not recorded)"
     )
-    extra_rows = _extra_insight_rows(baseline, issues)
-    if extra_rows:
-        for observed_in, title, classification, relationship in extra_rows:
-            lines.append(
-                f"| {observed_in} | {_markdown_cell(title)} | {classification} | "
-                f"{_markdown_cell(relationship)} |"
-            )
-    else:
-        lines.append("| None | - | - | No extra generated Insights were observed. |")
-    decision_blocks = _decision_detail_blocks(baseline, issues)
-    lines.extend(["", "## Decision details", ""])
-    if decision_blocks:
-        for block in decision_blocks:
-            lines.append(block)
-    else:
-        lines.append(
-            "No Incorrect, Noise, Duplicate, Missing, or non-clean baseline "
-            "outcomes were observed."
-        )
-        lines.append("")
-    lines.extend(
-        [
-            "## Evaluation guide",
-            "",
-            "- **Correct:** the card matches the expected issue and passes title, description, category, and linked traces.",
-            "- **Incorrect:** the card is related to the expected issue but fails at least one scoring field.",
-            "- **Noise:** the card has no corresponding reviewed issue, or independent evidence disproves its diagnosis.",
-            "- **Duplicate:** the card repeats a root already covered by a named primary card and adds no independent root.",
-            "- **Missing:** no generated card represents the expected issue.",
-            "- **Incomplete:** available evidence cannot support a reliable judgment.",
-            "",
-            "## Human validation checklist",
-            "",
-            "- [ ] Every Incorrect card has a specific reason for each failing field.",
-            "- [ ] Every Noise card has no issue assignment and explains why no reviewed issue corresponds to it.",
-            "- [ ] Every Duplicate group names the primary card and lists every card classified as its duplicate.",
-            "- [ ] An issue with only Noise or Duplicate cards is still reported Missing unless a primary card covers it.",
-            "- [ ] Baseline findings are checked against independent source, endpoint, and trace proof.",
-            "- [ ] Explanations contain only public-safe summaries, never raw traces or complete payloads.",
-            "",
-            "## Coding-agent context",
-            "",
-            "When ownership is `insight_engine`, the linked Test Agent source and traffic are "
-            "read-only authorities, not edit targets.",
-            "",
-        ]
+    expected = (
+        "None (healthy baseline)" if unit["kind"] == "baseline" else
+        context[identity].title if context else identity.logical_version
     )
-    context_rows = _coding_agent_context_rows(baseline, issues, agent_name)
-    if context_rows:
-        lines.extend(
-            [
-                "| Finding | Owner | Context to load |",
-                "| --- | --- | --- |",
-            ]
-        )
-        for finding, owner, context in context_rows:
-            lines.append(f"| {finding} | {owner} | {context} |")
-        lines.append("")
-    else:
-        lines.extend(["No coding-agent action required.", ""])
-    return "\n".join(lines)
-
-
-def write_report(
-    report: dict[str, Any],
-    output: Path,
-    *,
-    include_improvement_link: bool = True,
-) -> None:
-    validate_report(report)
-    atomic_json(output / "report.json", report)
-    atomic_text(
-        output / "report.md",
-        render_markdown(
-            report,
-            include_improvement_link=include_improvement_link,
-        ),
-    )
-    agents_root = output / "agents"
-    agents_root.mkdir(parents=True, exist_ok=True)
-    for agent_name in sorted(
-        (item["agent"] for item in report["baseline"]),
-        key=str.casefold,
-    ):
-        atomic_text(
-            agents_root / f"{agent_name}.md",
-            render_agent_markdown(report, agent_name),
-        )
-
-
-def apply_score_comparison(report: dict[str, Any], trend_path: Path) -> None:
-    trend = (
-        read_json(trend_path)
-        if trend_path.exists()
-        else {
-            "schema_version": "2.0.0",
-            "quality_score_formula": QUALITY_SCORE_FORMULA,
-            "days": [],
-        }
-    )
-    report["score_comparison"] = score_comparison(report, trend)
-
-
-def apply_staging_score_comparison(
-    report: dict[str, Any],
-    receipts_root: Path,
-) -> None:
-    report["score_comparison"] = None
-    score = report["summary"]["quality_score"]
-    if report["profile"] != "staging" or score is None:
-        return
-    current = _staging_run_key(report["run_id"])
-    candidates = []
-    for path in receipts_root.glob("aiq-*.json"):
-        match = re.fullmatch(r"aiq-([0-9]{8})(?:-r([0-9]{2,}))?\.json", path.name)
-        if match is None:
-            continue
-        value = read_json(path)
-        previous_score = value.get("quality_score")
-        if value.get("quality_score_formula") != QUALITY_SCORE_FORMULA:
-            continue
-        if (
-            value.get("profile") != "staging"
-            or value.get("qualified") is not True
-            or value.get("human_reviewed") is not True
-            or isinstance(previous_score, bool)
-            or not isinstance(previous_score, (int, float))
-            or not 0 <= previous_score <= 100
+    current = [finding for finding in unit["findings"] if finding["contribution"] == "current"]
+    titles, verdicts, notes, details = [], [], [], []
+    missed = unit["scorable"] and unit["kind"] == "issue" and not unit["counts"]["correct_issues"]
+    if not unit["scorable"]:
+        if not current or any(finding["classification"] != "unknown" for finding in current):
+            verdicts.append("Unconfirmed")
+    elif missed:
+        verdicts.append("Missed")
+    if not unit["scorable"]:
+        if any(
+            detail.get("cards", {}).get(finding["card_alias"], {}).get("disagreement")
+            for finding in current
         ):
-            raise ContractError("Staging score history contains an invalid receipt")
-        run_id = path.stem
-        key = _staging_run_key(run_id)
-        if key < current:
-            candidates.append((key, run_id, previous_score))
-    if not candidates:
-        return
-    key, run_id, previous_score = max(candidates)
-    delta = round(float(score) - float(previous_score), 1)
-    report["score_comparison"] = {
-        "report_date": key[0],
-        "run_id": run_id,
-        "quality_score": previous_score,
-        "delta": 0 if delta == 0 else delta,
-    }
+            notes.append("Review disagreement.")
+        else:
+            notes.append("; ".join(_EXCLUSION_LABELS[reason] for reason in unit["exclusion_reasons"]) + ".")
+    elif missed and private:
+        observations = len(detail.get("observations", ()))
+        if observations:
+            notes.append(f"Observed {observations}/10.")
+    roots = {}
+    for index, finding in enumerate(current, 1):
+        if finding["classification"] in {"expected_detection", "unexpected_real"}:
+            roots.setdefault(finding["root_cause_alias"], index)
+    for index, finding in enumerate(current, 1):
+        alias = finding["card_alias"]
+        card = detail.get("cards", {}).get(alias, {})
+        title = card.get("title") or alias
+        titles.append(f"{index}. {title}")
+        verdicts.append(f"{index}. {_FINDING_LABELS[finding['classification']]}")
+        root = finding["root_cause_alias"]
+        if finding["classification"] == "duplicate":
+            notes.append(f"{index}: Same root as finding {roots[root]}.")
+        if card.get("reason") and finding["classification"] in {"noise", "unknown", "unexpected_real"}:
+            details.append((index, {**card, "classification": finding["classification"]}))
+    if not current:
+        titles.append(
+            "Not generated (trace readiness insufficient)"
+            if detail.get("failure_code") == "trace_readiness_insufficient" else
+            "Unavailable" if not unit["scorable"] else "None"
+        )
+        if not verdicts:
+            verdicts.append("No findings")
+    if private and detail.get("unavailable"):
+        notes.append("Details unavailable.")
+    rendered_notes = [_markdown_text(note) for note in notes]
+    if details:
+        rendered_notes.append(_assessment_details(details))
+    cells = [
+        str(number), _markdown_text(version), _markdown_text(expected),
+        "<br>".join(_markdown_text(title) for title in titles),
+        "<br>".join(_markdown_text(verdict) for verdict in verdicts),
+        "<br>".join(rendered_notes) or "-",
+    ]
+    return "| " + " | ".join(cells) + " |"
 
 
-def _staging_run_key(run_id: str) -> tuple[str, int]:
-    match = re.fullmatch(r"aiq-([0-9]{8})(?:-r([0-9]{2,}))?", run_id)
-    if match is None:
-        raise ContractError("Staging run identity is invalid")
-    raw_date = match.group(1)
+def _render_markdown(
+    result, *, allowed_units, warnings, report_context, metadata, delivery_id, private=None, agent=None,
+) -> str:
+    value, context = _inputs(result, allowed_units, report_context, metadata)
+    if delivery_id is not None and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", delivery_id) is None:
+        raise ReportContextError("report_delivery_identity_invalid")
+    counts, coverage = value["counts"], value["coverage"]
+    score = f"{value['score']:.1f}/100" if value["score"] is not None else "Unmeasured (no quality score)"
+    lines = [
+        "# Agent Insights quality", "",
+        f"- Quality score: {score}. Matched: {counts['correct_issues']}/{counts['expected_issues']} scored issues; "
+        f"Noise: {counts['noise_cards']}; Duplicate: {counts['duplicate_cards']}.",
+        "", f"- Coverage: {coverage['scored_issues']}/{coverage['planned_issues']} expected issues; "
+        f"{coverage['scored_baselines']}/{coverage['planned_baselines']} expected baselines; "
+        f"{coverage['excluded_units']} excluded units.",
+        "", "- Each row is one version run (10 attempts). Only new or updated findings are shown.",
+        "", "- Matched / Missed refers to the expected defect. Unexpected is a saved valid non-target finding, "
+        "not a match. Unconfirmed rows are excluded from the score, not counted as misses.",
+    ]
+    if not value["team_report_eligible"]:
+        lines += ["", "- Personal notice: no valid overall measurement. Counts describe the scored subset only."]
+    agents = dict.fromkeys(unit["unit_id"]["agent"] for unit in value["units"])
+    if agent is not None:
+        if agent not in agents or private is None:
+            raise ReportContextError("report_agent_invalid")
+        units = [unit for unit in value["units"] if unit["unit_id"]["agent"] == agent]
+        scored = [unit for unit in units if unit["scorable"]]
+        lines[0] += " - " + _agent_name(agent)
+        lines[2] = "- Overall Daily " + lines[2][2].lower() + lines[2][3:]
+        lines[4] = "- Overall Daily " + lines[4][2].lower() + lines[4][3:]
+        lines += [
+            "", "- This Agent (no separate score): "
+            f"{sum(unit['counts']['correct_issues'] for unit in scored)}/"
+            f"{sum(unit['counts']['expected_issues'] for unit in scored)} scored issues detected; "
+            f"{sum(unit['counts']['noise_cards'] for unit in scored)} Noise; "
+            f"{sum(unit['counts']['duplicate_cards'] for unit in scored)} Duplicate; "
+            f"{len(units) - len(scored)} excluded units.",
+        ]
+        agents = (agent,)
+    for agent in agents:
+        units = [unit for unit in value["units"] if unit["unit_id"]["agent"] == agent]
+        links = {
+            private.get(_identity(unit), {}).get("agent_href")
+            for unit in units
+        } - {None} if private is not None else set()
+        if len(links) > 1:
+            raise ReportContextError("report_foundry_link_invalid")
+        title = _agent_name(agent)
+        if links:
+            title = f"[{title}]({validate_foundry_link(links.pop())})"
+        lines += ["", f'<a id="{agent}"></a>', f"## {title}"]
+        if report_context:
+            lines += ["", "**Assigned To:** " + _markdown_text(report_context.assignments[agent])]
+        lines += [
+            "", "| Run num | Agent version | Expected insight | Generated insight(s) | Assessment | Notes |",
+            "| --- | --- | --- | --- | --- | --- |",
+            *[_table_row(
+                number, unit, context, private.get(_identity(unit), {}) if private is not None else {},
+                private=private is not None,
+            ) for number, unit in enumerate(units, 1)],
+        ]
+    if private is not None:
+        lines += ["", "Expand Assessment details for full saved rationales, not new judgments or automatic "
+                  "Agent-fix recommendations. Original evidence remains in the retained private artifacts."]
+    if delivery_id:
+        lines += ["", f"Run: {delivery_id}."]
+    if metadata:
+        lines += ["", " | ".join(_metadata_lines(metadata))]
+    if warnings:
+        lines += ["", *warning_text(warnings)]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_html(
+    result: QualityResult, *, allowed_units: Iterable[PlannedUnit],
+    warnings: tuple[str, ...] = (),
+    report_context: ReviewedReportContext | None = None,
+    metadata: ReportMetadata | None = None,
+) -> str:
+    return markdown_view(render_markdown(
+        result, allowed_units=allowed_units, warnings=warnings,
+        report_context=report_context, metadata=metadata,
+    ))
+
+
+def markdown_view(markdown: str) -> str:
+    """Browser view of our emitted Markdown subset; never a second report model."""
+    def text(line):
+        line = re.sub(r"\\([\\`*\[\]|_])", r"\1", line)
+        return escape(unescape(line))
+
+    def inline(line):
+        # Recognize exact generated markup before decoding untrusted entities.
+        if line.startswith("**Assigned To:** "):
+            return "<strong>Assigned To:</strong> " + text(line[len("**Assigned To:** "):])
+        parts, end = [], 0
+        for match in _DETAILS.finditer(line):
+            parts.append("<br>".join(text(part) for part in line[end:match.start()].split("<br>")))
+            body = []
+            for part in _DETAIL_LABEL.split(match[1]):
+                if _DETAIL_LABEL.fullmatch(part):
+                    body.append(part)
+                else:
+                    body.append("<br>".join(escape(unescape(value)) for value in part.split("<br>")))
+            parts.append("<details><summary>Assessment details</summary>" + "".join(body) + "</details>")
+            end = match.end()
+        parts.append("<br>".join(text(part) for part in line[end:].split("<br>")))
+        return "".join(parts)
+
+    def cells(line):
+        result, start, slashes = [], 0, 0
+        for index, character in enumerate(line):
+            if character == "|" and slashes % 2 == 0:
+                result.append(line[start:index].strip())
+                start = index + 1
+            slashes = slashes + 1 if character == "\\" else 0
+        return [*result, line[start:].strip()]
+
+    parts, table_rows = [], []
+    in_list = False
+    def flush_table():
+        if table_rows:
+            widths = (6, 12, 18, 25, 12, 27) if len(table_rows[0]) == 6 else None
+            parts.append(html_table(
+                tuple(table_rows[0]), table_rows[1:],
+                raw_cells={(row, column) for row in range(len(table_rows) - 1)
+                           for column in range(len(table_rows[0]))},
+                widths=widths,
+            ))
+            table_rows.clear()
+
+    for line in markdown.splitlines():
+        anchor = re.fullmatch(r'<a id="([a-z][a-z0-9-]*)"></a>', line)
+        heading = re.fullmatch(r"(#{1,4}) (.*)", line)
+        if line.startswith("| ") and line.endswith(" |"):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            row = cells(line[1:-1])
+            if not all(re.fullmatch(r":?-{3,}:?", cell) for cell in row):
+                table_rows.append([inline(cell) for cell in row])
+            continue
+        flush_table()
+        if line.startswith("- "):
+            if not in_list:
+                parts.append("<ul>")
+                in_list = True
+            parts.append(f"<li>{inline(line[2:])}</li>")
+            continue
+        if in_list and line.strip():
+            parts.append("</ul>")
+            in_list = False
+        if anchor:
+            parts.append(f'<a id="{anchor[1]}"></a>')
+        elif heading:
+            level = len(heading[1])
+            linked = re.fullmatch(r"\[([A-Za-z ]+)\]\((https://ai\.azure\.com/[^)\s]+)\)", heading[2])
+            title = inline(heading[2])
+            if linked:
+                href = validate_foundry_link(linked[2])
+                title = f'<a href="{escape(href, quote=True)}">{escape(linked[1])}</a>'
+            parts.append(f"<h{level}>{title}</h{level}>")
+        elif line.strip():
+            parts.append(f"<p>{inline(line)}</p>")
+    flush_table()
+    if in_list:
+        parts.append("</ul>")
+    body = (
+        f'<tr><td style="padding:24px 28px;{_FONT}">'
+        '<p style="color:#64748b;">Browser view derived from the authoritative report.md.</p>'
+        + "".join(parts) + "</td></tr>"
+    )
+    return _html_page(body, metadata=None)
+
+
+_FONT = "font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:21px;"
+
+
+def _paragraph(text: str) -> str:
+    return f'<p style="margin:8px 0;color:#475569;{_FONT}">{escape(text)}</p>'
+
+
+def html_table(
+    headers: tuple[str, ...], rows: list[tuple[str, ...]], *,
+    raw_cells: set[tuple[int, int]] | None = None,
+    widths: tuple[int, ...] | None = None,
+) -> str:
+    """Only explicitly constructed markup cells bypass escaping."""
+    raw_cells = raw_cells or set()
+    if widths is not None and (
+        len(widths) != len(headers) or sum(widths) != 100
+        or any(type(width) is not int or width <= 0 for width in widths)
+    ):
+        raise ReportContextError("report_table_invalid")
+    columns = (
+        "<colgroup>" + "".join(f'<col style="width:{width}%">' for width in widths) + "</colgroup>"
+        if widths else ""
+    )
+    header = "".join(
+        f'<th scope="col" align="left" style="padding:11px 12px;border-bottom:2px solid #cbd8e7;'
+        f'color:#12304a;{_FONT}">{escape(label)}</th>' for label in headers
+    )
+    body = []
+    for index, row in enumerate(rows):
+        if len(row) != len(headers):
+            raise ReportContextError("report_table_invalid")
+        cells = "".join(
+            f'<td style="padding:12px;border-bottom:1px solid #d6deea;vertical-align:top;'
+            f'color:#334155;overflow-wrap:anywhere;word-wrap:break-word;{_FONT}">'
+            f'{cell if (index, column) in raw_cells else escape(cell)}</td>'
+            for column, cell in enumerate(row)
+        )
+        background = "#ffffff" if index % 2 == 0 else "#f8fafc"
+        body.append(f'<tr bgcolor="{background}">{cells}</tr>')
     return (
-        f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}",
-        int(match.group(2) or 0),
+        '<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="width:100%;table-layout:fixed;border-collapse:collapse;border:1px solid #d6deea;">'
+        f'{columns}<thead><tr bgcolor="#e8eef7">{header}</tr></thead><tbody>{"".join(body)}</tbody></table>'
     )
 
 
-def score_comparison(
-    report: dict[str, Any],
-    trend: dict[str, Any],
-) -> dict[str, Any] | None:
-    if report["profile"] != "daily":
-        return None
-    if (
-        trend.get("schema_version") != "2.0.0"
-        or trend.get("quality_score_formula") != QUALITY_SCORE_FORMULA
-    ):
-        raise ContractError("Trend history uses a different quality-score formula")
-    days = trend.get("days")
-    if not isinstance(days, list):
-        raise ContractError("Trend history has an invalid days collection")
-    candidates = []
-    for value in days:
-        if not isinstance(value, dict):
-            raise ContractError("Trend history contains an invalid day")
-        report_date = value.get("report_date")
-        quality_score = value.get("quality_score")
-        if quality_score is None:
-            continue
-        if (
-            not isinstance(report_date, str)
-            or isinstance(quality_score, bool)
-            or not isinstance(quality_score, (int, float))
-            or not 0 <= quality_score <= 100
-        ):
-            raise ContractError("Trend history contains an invalid scored day")
-        if report_date >= report["report_date"]:
-            continue
-        candidates.append(value)
-    if not candidates:
-        return None
-    previous = max(candidates, key=lambda value: value["report_date"])
-    delta = round(
-        float(report["summary"]["quality_score"])
-        - float(previous["quality_score"]),
-        1,
+def html_section(title: str, body: str, *, anchor: str | None = None) -> str:
+    identity = f' id="{escape(anchor, quote=True)}"' if anchor else ""
+    return (
+        f'<tr><td style="padding:22px 28px 4px;{_FONT}">'
+        f'<h2{identity} style="margin:0 0 12px;color:#12304a;font-size:20px;line-height:27px;">'
+        f'{escape(title)}</h2>{body}</td></tr>'
     )
-    return {
-        "report_date": previous["report_date"],
-        "quality_score": previous["quality_score"],
-        "delta": 0 if delta == 0 else delta,
-    }
 
 
-def _score_comparison_text(report: dict[str, Any]) -> str:
-    comparison = report.get("score_comparison")
-    if not isinstance(comparison, dict):
-        return " (change N/A)"
-    delta = comparison["delta"]
-    sign = "+" if delta > 0 else ""
-    reference = comparison.get("run_id") or comparison["report_date"]
-    return f" ({sign}{delta:g} vs {reference})"
+def _html_page(body: str, *, metadata: ReportMetadata | None, test_run: bool = False) -> str:
+    date_line = (
+        f"Daily report &middot; {escape(metadata.report_date)} &middot; {escape(metadata.region_display)}"
+        if metadata else "Daily report"
+    )
+    test_banner = (
+        '<tr><td bgcolor="#e8f2ff" style="padding:13px 28px;color:#164e80;'
+        f'{_FONT}"><strong>TEST RUN</strong> &mdash; Private review only. '
+        'No public report, trend publication or team email.</td></tr>'
+        if test_run else ""
+    )
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<title>Agent Insights Quality</title></head>'
+        f'<body bgcolor="#f3f6fa" style="margin:0;padding:0;background:#f3f6fa;{_FONT}">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+        '<tr><td align="center" style="padding:24px 10px;">'
+        '<!--[if mso]><table role="presentation" width="960" cellpadding="0" cellspacing="0" '
+        'border="0"><tr><td><![endif]-->'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'bgcolor="#ffffff" style="max-width:960px;width:100%;background:#ffffff;'
+        'border:1px solid #d6deea;border-collapse:collapse;">'
+        '<tr><td bgcolor="#12304a" style="padding:28px;color:#ffffff;border-top:5px solid #42b8c6;">'
+        f'<p style="margin:0 0 8px;color:#b9d4eb;{_FONT}">DAILY QUALITY BRIEF</p>'
+        '<h1 style="margin:0 0 10px;font-family:Segoe UI,Arial,sans-serif;font-size:28px;'
+        f'line-height:35px;color:#ffffff;">Agent Insights Quality</h1>'
+        f'<p style="margin:0;color:#dbeafe;{_FONT}">{date_line}</p></td></tr>'
+        f'{test_banner}{body}<tr><td style="height:28px;"></td></tr></table>'
+        '<!--[if mso]></td></tr></table><![endif]-->'
+        '</td></tr></table></body></html>'
+    )
 
 
-def update_trend(report: dict[str, Any], path: Path) -> None:
-    if path.exists():
-        trend = read_json(path)
-    else:
-        trend = {
-            "schema_version": "2.0.0",
-            "quality_score_formula": QUALITY_SCORE_FORMULA,
-            "days": [],
-        }
-    atomic_json(path, updated_trend(report, trend))
+def _agent_name(name: str) -> str:
+    return name.removesuffix("-agent").replace("-", " ").title()
 
 
-def updated_trend(
-    report: dict[str, Any],
-    trend: dict[str, Any],
-) -> dict[str, Any]:
-    days_value = trend.get("days")
-    if (
-        trend.get("schema_version") != "2.0.0"
-        or trend.get("quality_score_formula") != QUALITY_SCORE_FORMULA
-        or not isinstance(days_value, list)
-        or any(
-        not isinstance(value, dict)
-        or not isinstance(value.get("report_date"), str)
-        for value in days_value
+def _html_summary(value: dict, context: dict, details_href, scoring_link, warnings: tuple[str, ...], access_links=None) -> str:
+    counts, coverage = value["counts"], value["coverage"]
+    score = (
+        '<strong style="font-size:28px;line-height:36px;color:#12304a;">'
+        f'{value["score"]:.1f}</strong><span style="color:#64748b;"> / 100</span>'
+        if value["score"] is not None else "Unmeasured (no quality score)"
+    )
+    rows = [
+        ("Quality score", score),
+        ("Expected issues", f'{coverage["planned_issues"]} expected; '
+         f'{counts["correct_issues"]} detected, '
+         f'{counts["expected_issues"] - counts["correct_issues"]} missed'
+         + (f'; {coverage["planned_issues"] - coverage["scored_issues"]} unscored'
+            if coverage["planned_issues"] != coverage["scored_issues"] else "")),
+        ("Noise / Duplicate", f'{counts["noise_cards"]} Noise; {counts["duplicate_cards"]} Duplicate'),
+        ("How Scoring Works",
+         f'<a href="{escape(scoring_link.href, quote=True)}" style="color:#0067b8;">Scoring rules on GitHub</a>'
+         if scoring_link else "Link pending publication of the current scoring rules."),
+    ]
+    banner = ""
+    if not value["team_report_eligible"]:
+        banner = (
+            '<p style="margin:0 0 16px;padding:14px;border-left:4px solid #c47f15;'
+            'background:#fff5e4;color:#704c16;"><strong>PERSONAL NOTICE</strong><br>'
+            'A reliable overall measurement is unavailable. No team quality report is produced. '
+            'The counts below describe only the scorable subset, not an overall quality score.</p>'
         )
-    ):
-        raise ContractError("Trend history contains an invalid day")
-    current = {
-        "report_date": report["report_date"],
-        "baseline_passed": report["summary"]["baseline_passed"],
-        "issues_correct": report["summary"]["issues_correct"],
-        "issues_incorrect": report["summary"]["issues_incorrect"],
-        "issues_missing": report["summary"]["issues_missing"],
-        "issues_expected": report["summary"]["issues_expected"],
-        "noise_cards": report["summary"]["noise_cards"],
-        "duplicate_cards": report["summary"]["duplicate_cards"],
-        "quality_score": report["summary"]["quality_score"],
-    }
-    existing = [
-        value
-        for value in days_value
-        if value["report_date"] == report["report_date"]
+    body = banner + html_table(("Summary", "Result"), rows, raw_cells={(0, 1), (3, 1)})
+    exclusions = [unit for unit in value["units"] if not unit["scorable"]]
+    if exclusions:
+        references = ", ".join(_detail_link(unit, context, details_href, access_links=access_links) for unit in exclusions)
+        body += (
+            f'<p style="margin:12px 0;color:#704c16;{_FONT}">'
+            f'{len(exclusions)} unit(s) excluded from every score count; evidence is not complete. '
+            f'Human validation: {references}.</p>'
+        )
+    if value["failure_reasons"]:
+        body += _paragraph("Private failure notice: " + ", ".join(value["failure_reasons"]))
+    if "logging_failed" in warnings:
+        body += _paragraph(warning_text(("logging_failed",))[0])
+    return html_section("Summary", body)
+
+
+def _detail_link(unit: dict, context: dict, details_href: str | None, *, short: bool = False, access_links=None) -> str:
+    label = unit["unit_id"]["logical_version"] if short else _unit_name(unit, context)
+    agent = unit["unit_id"]["agent"]
+    href = access_links[agent]["html"] if access_links else (
+        f"{details_href}#{agent}" if details_href else None
+    )
+    if href is None:
+        return escape(label)
+    return (
+        f'<a href="{escape(href, quote=True)}" '
+        f'style="color:#0067b8;text-decoration:underline;">{escape(label)}</a>'
+    )
+
+
+def _html_improvements(value: dict, context: dict, details_href: str | None, access_links=None) -> str:
+    specifications = (
+        ("Missed expected defects",
+         lambda unit: unit["kind"] == "issue" and not unit["counts"]["correct_issues"],
+         "independently evidenced issue(s) had no correct current detection",
+         "Detect the evidenced root cause with a reasonable category and attributable current evidence."),
+        ("Incorrect findings (Noise)",
+         lambda unit: unit["counts"]["noise_cards"] > 0,
+         "unit(s) contained confirmed core-incorrect findings",
+         "Ground the diagnosis in actual endpoint behavior and current trace evidence. "
+         "Wording, severity or proposed-fix disagreement alone is not Noise."),
+        ("Repeated root causes (Duplicate)",
+         lambda unit: unit["counts"]["duplicate_cards"] > 0,
+         "unit(s) contained extra distinct correct cards for the same root",
+         "Deduplicate the same proven root without suppressing different real defects. "
+         "Page copies and same-ID updates are not duplicates."),
+    )
+    rows = []
+    for title, matches, observation, needed in specifications:
+        affected = [unit for unit in value["units"] if unit["scorable"] and matches(unit)]
+        if affected:
+            links = "<br>".join(_detail_link(unit, context, details_href, access_links=access_links) for unit in affected)
+            rows.append((title, f"{len(affected)} {escape(observation)}.<br><br>{links}", needed))
+    body = (
+        html_table(("Product gap", "What happened", "Needed behavior"), rows,
+                   raw_cells={(index, 1) for index in range(len(rows))})
+        if rows else _paragraph("No confirmed Engine gap in the measured scope.")
+    )
+    return html_section("What needs improvement", body)
+
+
+def _html_working(value: dict) -> str:
+    counts = value["counts"]
+    rows = []
+    if counts["correct_issues"]:
+        rows.append(("Expected-defect detection",
+                     f'{counts["correct_issues"]} of {counts["expected_issues"]} scorable issues '
+                     "were correctly detected using independent current evidence."))
+    baselines = [unit for unit in value["units"] if unit["kind"] == "baseline" and unit["scorable"]]
+    if baselines:
+        without_noise = sum(not unit["counts"]["noise_cards"] for unit in baselines)
+        rows.append(("Baseline finding quality",
+                     f"{without_noise} of {len(baselines)} scorable baselines had no confirmed Noise. "
+                     "This is not a claim of perfect Agent health."))
+    body = html_table(("Capability", "Evidence"), rows) if rows else _paragraph(
+        "No positive capability conclusion is supported by the available scorable scope."
+    )
+    return html_section("What is working", body)
+
+
+def _html_agents(
+    value: dict, context: dict, details_href: str | None, assignments: dict, agent_links: dict,
+    *, attached_report: bool, access_links=None, access_expiry=None,
+) -> str:
+    rows = []
+    for agent in dict.fromkeys(unit["unit_id"]["agent"] for unit in value["units"]):
+        units = [unit for unit in value["units"] if unit["unit_id"]["agent"] == agent]
+        issues = [unit for unit in units if unit["kind"] == "issue"]
+        scored = [unit for unit in units if unit["scorable"]]
+        kind = ""
+        if context:
+            source = context[_identity(units[0])].source_path
+            kind = "Prompt" if source.endswith("definition.json") else "Hosted"
+        name = escape(_agent_name(agent))
+        if agent in agent_links:
+            href = validate_foundry_link(agent_links[agent])
+            name = f'<a href="{escape(href, quote=True)}" style="color:#0067b8;">{name}</a>'
+        else:
+            name += "<br><small>Foundry link unavailable</small>"
+        if kind:
+            name += f"<br><small>{kind}</small>"
+        missed = sum(unit["scorable"] and not unit["counts"]["correct_issues"] for unit in issues)
+        card_text = (
+            f'{missed} missed; {sum(unit["counts"]["noise_cards"] for unit in scored)} Noise; '
+            f'{sum(unit["counts"]["duplicate_cards"] for unit in scored)} Duplicate'
+        )
+        references = (
+            f'<a href="{escape(details_href, quote=True)}#{agent}" style="color:#0067b8;">'
+            "Review findings &amp; evidence</a>" if details_href else
+            f"Attached report.md: {_agent_name(agent)}" if attached_report else
+            "Detailed report link unavailable"
+        )
+        if access_links:
+            references = (
+                f'<a href="{escape(access_links[agent]["html"], quote=True)}" '
+                'style="color:#0067b8;">View report</a><br>'
+                f'<a href="{escape(access_links[agent]["markdown"], quote=True)}" '
+                'style="color:#0067b8;">Download MD</a>'
+            )
+        rows.append((name, card_text, references, assignments.get(agent, "Assignment unavailable")))
+    body = html_table(
+        ("Agent", "Findings", "Human Validation", "Assigned To"), rows,
+        raw_cells={(index, column) for index in range(len(rows)) for column in (0, 2)},
+    )
+    if access_links:
+        body += _paragraph(
+            f"Links expire {access_expiry} (up to 7 days). "
+            "Anyone holding a link can read that file; forward carefully."
+        )
+    return html_section("Test Agents", body)
+
+
+def render_email_html(
+    result: QualityResult, *, allowed_units: Iterable[PlannedUnit],
+    warnings: tuple[str, ...] = (), report_context: ReviewedReportContext | None = None,
+    metadata: ReportMetadata | None = None, test_run: bool = False,
+    details_href: str | None = None, delivery_id: str | None = None,
+    scoring_link: VerifiedScoringLink | None = None,
+    agent_links: dict[str, str] | None = None, attached_report: bool = False,
+    report_access=None,
+) -> str:
+    """Compact email projection; private context is inserted by the email boundary."""
+    if details_href not in {None, "report.html"}:
+        raise ReportContextError("report_detail_link_invalid")
+    if delivery_id is not None and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,79}", delivery_id) is None:
+        raise ReportContextError("report_delivery_identity_invalid")
+    if scoring_link is not None and type(scoring_link) is not VerifiedScoringLink:
+        raise ReportContextError("report_scoring_link_unverified")
+    warning_text(warnings)
+    value, context = _inputs(result, allowed_units, report_context, metadata)
+    agent_links = {} if agent_links is None else agent_links
+    if not isinstance(agent_links, dict) or not set(agent_links) <= {
+        unit["unit_id"]["agent"] for unit in value["units"]
+    }:
+        raise ReportContextError("report_foundry_link_invalid")
+    for link in agent_links.values():
+        validate_foundry_link(link)
+    access_links = None
+    if report_access is not None:
+        from .report_access import VerifiedReportAccess
+        if type(report_access) is not VerifiedReportAccess:
+            raise ReportContextError("report_access_unverified")
+        access_links = report_access.for_agents(
+            {unit["unit_id"]["agent"] for unit in value["units"]}, delivery_id,
+        )
+    parts = [
+        _html_summary(value, context, details_href, scoring_link, warnings, access_links),
+        _html_improvements(value, context, details_href, access_links),
+        _html_working(value),
+        _html_agents(value, context, details_href, report_context.assignments if report_context else {},
+                     agent_links, attached_report=attached_report, access_links=access_links,
+                     access_expiry=report_access.expires_at if report_access else None),
+        "<!--private-context-->",
     ]
-    if len(existing) > 1:
-        raise ContractError("Trend history contains duplicate report dates")
-    if existing and existing[0] != current and existing[0].get(
-        "quality_score"
-    ) is not None:
-        raise ContractError("A scored trend day is immutable")
-    days = [
-        value
-        for value in days_value
-        if value["report_date"] != report["report_date"]
-    ]
-    days.append(current)
-    days.sort(key=lambda value: value["report_date"])
-    return {
-        "schema_version": "2.0.0",
-        "quality_score_formula": QUALITY_SCORE_FORMULA,
-        "days": days[-90:],
-    }
+    return _html_page("".join(parts), metadata=metadata, test_run=test_run)
+
+
+def render_json(
+    result: QualityResult, *, allowed_units: Iterable[PlannedUnit],
+) -> str:
+    return json.dumps(
+        public_projection(result, allowed_units=allowed_units),
+        sort_keys=True, indent=2, ensure_ascii=True, allow_nan=False,
+    ) + "\n"

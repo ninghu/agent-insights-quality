@@ -12,21 +12,7 @@ category: output_quality
 severity: high
 expected_behavior:
   desired: Complete both requested itinerary comparison branches.
-  injected: Returns only one branch of a two-part comparison.
+  injected: Returns only the first requested itinerary after completing both inventory searches.
 injected_defect:
   single_root: Comparison assembly truncates the combined inventory to one item.
   activation: all_matching_endpoint_requests
-packaging:
-  command: python ../../v0/package.py --issue implementation.yaml --output issue-026.zip
-  runtime_config: issue.yaml
-  include_exactly_one_issue: true
-  exclude:
-  - ../../issues
-determinism:
-  traffic_file: traffic.json
-  minimum_requests: 5
-public_safety:
-  synthetic_only: true
-  real_people: false
-  credentials: false
-  service_locations: false

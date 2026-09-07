@@ -1,12 +1,8 @@
-# Controlled HTML email test
+# Private TEST entry point
 
-Send exactly one HTML test email to the recipient configured by the repository. Do not run Agent
-traffic and do not modify the repository.
-
-Use the available Copilot email capability directly. Set HTML mode explicitly. Do not create a draft.
-Do not retry an ambiguous send.
-
-The HTML must contain a navy title bar and one styled two-column table using inline Outlook-safe
-styles. If delivery is confirmed, return `SENT - <subject>`. On explicit no-send failure, return the
-exact error. On an ambiguous result, return `SEND STATUS UNKNOWN - manual verification required`.
-
+Copy the single complete [Daily bootstrap](daily-bootstrap-prompt.md), leave REPORT_MODE as
+`test`, and fill TO_ADDRESS with one literal private mailbox. No test number is required.
+Keep an explicitly authorized manual candidate; integrated automation uses fresh latest main.
+Recovery retains the active launch's exact source, date and recipient. Never enable a schedule
+or replace prepared mail during a trial. The unified template owns the complete claim/send/outcome
+instructions; this page is only a pointer.

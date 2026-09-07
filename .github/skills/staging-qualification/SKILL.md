@@ -1,59 +1,45 @@
 ---
 name: staging-qualification
-description: Run the durable Sweden Central staging qualification for a reviewed candidate.
-license: MIT
+description: Launch incremental Sweden Central staging with raw-span Sol qualification.
 ---
 
-# Sweden Central Staging Qualification
+# Staging qualification
 
-Use `.github/skills/test-agent-validation/SKILL.md` as the executable contract.
+Read [contributor boundaries](../../../AGENTS.md),
+[quality rules](../../../docs/QUALITY_BAR.md), and
+[operations](../../../docs/OPERATIONS.md). Use the explicitly authorized committed
+candidate, set `PYTHONPATH` to its `src`, and confirm module resolution.
+Python owns deployment, invocation, raw telemetry collection, assessment and recovery:
 
-Prepare the one durable Sweden Central `g30` `aiq-staging-swedencentral` Project and all 41 unique catalog authorities before traffic.
-Never create or delete the Project during validation.
-The visible Copilot coordinator publishes immutable disjoint deployment assignments and independent
-immutable invocation and verification assignments, releases its global lock, and remains responsive
-while coordinator-created visible Copilot sub-sessions do parallel work. Never use subprocesses,
-`ThreadPoolExecutor`, or another hidden in-process pool. Every non-empty phase independently publishes
-one to eight deterministic, cost-balanced logical shards, at most eight, based on selected
-authorities. Each active
-shard maps 1:1 to one visible sub-session.
+```powershell
+python -m agent_insights_quality run-staging
+```
 
-Only the coordinator may reconcile all exact versions and atomically publish shared topology and
-registry state. It runs preparation, deployment reconciliation, and composition. It gives each
-deployment or invocation sub-session exactly one assigned shard command. Shard commands accept only
-the immutable shard ID and resolve the hidden active generation and authority assignment.
+First use covers the reviewed inventory. Use `--full` only for an explicitly requested
+complete inventory exercise. Normal runs select changed, missing or incomplete
+targets; unchanged completed results retain their actual source, status and date.
+Expectation/verifier-only changes reassess usable saved evidence, without fresh Agent traffic.
 
-Per-authority invocation receipts publish atomically and generation-fenced immediately after
-definitive completion. The exact reusable contract includes Agent source/content/execution,
-provider-version, runtime, environment, Project, telemetry resource-set, response/session,
-invoke/evidence windows, complete issue/paired-`v0` provenance, source-artifact
-schema/version/origin/digest, and an unambiguous completed POST outcome. Cross-generation extraction
-is one-time and fenced against stale sub-sessions.
+Python applies the recorded staging policy, including
+[scoped single-root hygiene](../../../docs/QUALITY_BAR.md#scoped-single-root-hygiene).
+Under v3, expected activation and additional independent Agent defects are separate;
+same-root symptoms and handled operational behavior are not automatically extra defects.
+Keep PASS, FAIL, INCOMPLETE and historical NOT_EVALUATED hygiene distinct. Do not perform
+manual model assessments, invent a validation mode or resample a miss to obtain a pass.
 
-Completed current invocations support verify-only recovery with no new endpoint traffic. Verification
-uses at most eight visible sub-sessions; each claims one authority at a time, uses no internal
-concurrency, deploy, invocation, or shared private prompt/CLI state, and immediately persists one
-immutable result before claiming another. Each session repeats the no-ID
-`prepare-test-agent-validation-assessment` and `import-test-agent-validation-assessment` cycle.
-Claims are hidden, worktree-bound, distinct, and bounded by a lease; status reports only aggregate
-slots. Query one batched stable telemetry snapshot for a baseline or two target batches for an issue
-and its paired `v0`; never stabilize attempts independently.
+Before recovery, inspect the existing process and checkpoints; repeat the same command
+only to resume matching work. Preserve private checkpoints/logs/evidence and unknown
+provider outcomes; never delete resources or invent run/generation IDs. Staging creates
+no monitors, Agent Insights runs, Daily score, team report or promotion approval.
+Report unresolved access/provider blockers while leaving unrelated completed work intact.
 
-Each new verification package binds the reused receipt digest and current verifier commit/digest.
-Keep `PASS`, `FAIL`, and `INCOMPLETE` separate. Baseline, issue, and paired-`v0` targets require six
-complete healthy, defect-observed, or zero-defect control passes respectively; the other four attempts
-remain transparent misses and never veto six strict passes. Later failures never discard completed
-authority results. A new generation selects only missing, `INCOMPLETE`, or exact-binding-changed
-authorities and invokes only those without current exact-bound completed receipts. Composition covers
-exactly all 41 authorities. `run-test-agent-validation` is status/next-action guidance only and never
-creates sub-sessions or executes phase work.
+Same-source recovery retains the original run and date even across midnight. A completed full
+run is not repeated automatically. Use `--full --new-run` only for an explicitly requested fresh
+full exercise after the previous full run completed, never to discard interrupted work.
 
-Reuse matching stable Agents and their exact server-assigned versions. Content changes create a new
-version under the same stable name; no command floats `latest`. Retain sessions, responses, Agents,
-versions, Hosted topology, images, telemetry, registries, and evidence. Supersede incomplete local
-state without deletion; validation has no cleanup.
-
-Validation remains report-free and presents advisory evidence for human review. It is not a Daily
-admission input. Never mutate the
-preserved West US 2 resources or lifecycle, send Daily smoke traffic, or write private runtime
-content to Git.
+For retained trace-context diagnostics, follow
+[the read-only audit](../../../docs/OPERATIONS.md#caller-invocation-context).
+Session precreation is a separate explicitly authorized
+[staging trial](../../../docs/STAGING_PREPARATION_TRIAL.md), not a default warmup.
+Use saved evidence for its audit; neither audit enables Daily, changes a judgment or
+authorizes extra traffic. Staging and Daily retain separate execution boundaries.

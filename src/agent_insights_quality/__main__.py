@@ -1,4 +1,3 @@
-from agent_insights_quality.cli import main
+from .cli import entrypoint
 
-if __name__ == "__main__":
-    main()
+raise SystemExit(entrypoint())
