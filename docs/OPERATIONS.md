@@ -140,6 +140,96 @@ uncertain window coverage is excluded from Engine scoring, not counted as a miss
 A new automatic TEST reserves its own nonzero rerun identity; an
 ambiguous previous send is reconciled, never sent again blindly.
 
+## Bounded maintenance repair loop
+
+`maintain-test-agents` can coordinate an explicitly authorized development loop:
+saved report, evidence-backed repair, reviewed candidate, scoped staging, private TEST Daily,
+and analysis. It delegates measurement and delivery to the existing staging/Daily entry
+points; it is not another runner, assessor, scheduler or policy authority.
+
+### Authorization and budget
+
+Before native work, confirm the repair scope, a finite maximum number of rounds, one literal
+private TEST mailbox and the permitted staging/PR actions. For example, an approved
+three-round batch permits at most three repair-and-measure rounds, not repeated runs until
+the score improves. Existing explicit authorization can be reused within those bounds.
+Source editing permission alone does not authorize native traffic, mail or merging.
+If no applicable saved report exists, explicitly authorize one initial TEST baseline and
+reserve one of those rounds for it. This does not authorize repeated unchanged baselines.
+
+For new Agent or issue onboarding, the TEST report belongs to the contributor initiating
+that onboarding. Obtain one explicit private `TO_ADDRESS` from that person; an existing
+explicit authorization from the same person may be reused. Do not infer an address from
+Git authorship, look up contacts, use a fixed maintainer default, or reuse another person's
+recipient. Pass the address as run input rather than rewriting shared/default configuration.
+The existing Daily routing binding freezes the destination before traffic. A conflicting
+unfinished run must be reconciled with its original recipient, never redirected to the new
+contributor. The official team route and other completed/prepared requests remain unchanged.
+
+Keep a private maintenance log under the environment-separated runtime root. Record the
+authorization, round limit, reserved round, candidate commit, planned staging scope, actual
+runner IDs, exact resume commands, PR references, outcomes and remaining blockers. This is
+maintenance bookkeeping, not a replacement for runner checkpoints. Copy IDs returned by
+Python; never fabricate IDs or edit run/control/assessment/delivery records to advance.
+
+Reserve a round before its first new native measurement. A revised candidate measured after
+an unsuccessful round consumes another round even if the previous round stopped in staging.
+Matching-source recovery, including the runner's own bounded retries, resumes the reserved
+round rather than allocating new work. Preserve the log across interruptions; do not reset
+the budget when opening another session or worktree.
+
+### One repair-and-measure round
+
+1. Prefer an applicable existing report. Check its source, actual model identities, cohort,
+   exclusions and evidence visible at analysis time. Investigate a suspected problem against
+   source and independent saved evidence; a card, suggested patch or score is not proof.
+2. Make a concrete repair within scope, preserving the reviewed inventory, intended defect,
+   requests, expectations and scoring rules. Use isolated worktrees for independent changes,
+   then targeted checks and normal review. Commit the candidate before native actions and
+   keep its worktree unchanged while it runs.
+3. Use the existing staging commands for the explicitly authorized changed targets. Respect
+   the single-target predecessor/resume contract above. Stop if the needed scope exceeds
+   approval; do not silently select the full inventory. Retain other targets' actual source
+   and date. Staging FAIL/INCOMPLETE is not permission to resample, and this loop adds no
+   all-staging-PASS admission gate. A proven broken changed-target contract needs repair or
+   an explicit blocker, not a misleading Daily measurement.
+4. Run `python -m agent_insights_quality run-daily --report-mode test --to-address "<TO_ADDRESS>"`
+   from the approved committed candidate, using the Daily bootstrap's source and routing
+   checks. Never borrow an active official recipient for TEST. Python chooses the actual
+   date/cohort and positive TEST
+   identity, freezes evidence and assessments, and prepares the report. Do not retry phases
+   or reassess old evidence manually. The app claims and sends only the exact prepared mail
+   request, then records the real outcome; an ambiguous send stops for reconciliation.
+5. Analyze the new immutable result with its coverage and limitations. Separate a confirmed
+   framework/test-Agent defect from service behavior, an intended injected defect, model
+   uncertainty or unavailable external evidence. A next round requires another justified,
+   reviewed repair, available budget and safely resolved prior work. After any authorized
+   initial baseline, an unchanged candidate, a documentation-only edit or a desire for fewer
+   misses does not justify fresh traffic.
+
+Normal source PRs are part of maintenance, not generated report publication. Creation and
+merging require their existing authorization and protected review/CI rules; never change
+main directly or merge an unreviewed repair because a TEST score is high. TEST measurements
+remain private: no public report/trend, ADX writes, generated report PR or team email.
+Keep official weekday automation measurement-only and leave its schedule unchanged.
+An onboarding target may not appear in the actual date-rotated Daily plan. Keep its scoped
+staging evidence and disclose the Daily coverage; do not change the date or claim that a
+TEST email validates a target omitted from that measurement.
+
+### Stop and report
+
+Stop when no actionable unintended defect is established, the round limit is reached, or
+safe recovery, delivery, credentials, an external/service owner or broader scope is needed.
+Missing rows and unproven causal claims are different gaps; neither permits fabricated proof.
+Changes to inventory, canonical traffic/expectations, models, scoring/coverage/thresholds,
+service deployments or resource configuration/permissions require separate approval, not
+automatic repair.
+
+Report the candidate/PRs, completed rounds, counts and exclusions, delivery state and unresolved
+items. Provider acceptance is not inbox proof. Preserve failed and incomplete measurements
+without relabeling them. The stopping condition is no further justified repair in the approved
+scope, not zero findings, all matches, full coverage or a score of 100.
+
 ## Email presentation and local review
 
 Email shows the quality score, expected/detected/missed issue counts, Noise and Duplicate.
