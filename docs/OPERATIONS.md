@@ -485,6 +485,30 @@ is truncated to fit. A package that still exceeds the configured budget remains 
 This byte budget does not establish the deployed model's token/context limit: native rejections
 and missing evidence remain explicit assessment failures, not successful measurements.
 
+### Bounded Daily judgment correction
+
+New Daily runs freeze `daily-assessment-two-slots-v1`: one initial judgment plus either
+one focused review or one root-consistency correction, never both. Existing provider
+HTTP retry/cooldown budgets are separate and unchanged. Only a schema-valid, fully covered
+initial response whose attempts, cards and citations validate before a local
+`assessment_root_conflict` can use correction. Other failures do not become generic retries.
+
+Correction uses the same frozen evidence, assessor and schema, with the invalid response
+and validation feedback treated as data. The invalid initial remains saved, is not a vote
+and earns no credit. Root correction cannot clear unrelated initial review requirements.
+The corrected response must fully validate. Any remaining review
+candidate, including Unknown, keeps the unit unscorable when the second slot is exhausted;
+an oversized correction also cannot earn partial credit or authorize a third call.
+
+Requests bind source, work, input, schema and prompt/assessor identity. Outputs are durable
+before phase completion, so completed calls resume without repetition. Missing output after
+submission, cancellation, recorded provider failures or a changed binding fail closed.
+A terminal correction cannot refresh its input to buy another call in the same run.
+Legacy completed results restore unchanged; unfinished legacy assessments without durable
+call state stop with `assessment_legacy_call_state_unavailable`, not inferred cache migration
+or an in-place rewrite of an old report. Staging behavior is unchanged; shared-file changes
+may still select retained staging evidence for reassessment under existing dependency rules.
+
 ## Interactive long-running work
 
 During an interactive rollout, a nested app session can own the entire staging or private Daily

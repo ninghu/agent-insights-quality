@@ -346,7 +346,7 @@ def test_pipeline_fatal_or_cancellation_drains_traffic_and_assessment_before_unl
         h.cloud.invoke, h.sol.complete_json = held_invoke, held_assessment
         save = RecordStore.save_artifact
         def fail(records, key, value):
-            if not cancel and "/assessments/" in key:
+            if not cancel and "/assessments/" in key and "/calls/" not in key:
                 raise CheckpointError()
             save(records, key, value)
         monkeypatch.setattr(RecordStore, "save_artifact", fail)

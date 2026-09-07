@@ -511,6 +511,12 @@ class Runner:
                 raise QualityError("runner_reuse_invalid")
             self.lanes = self.runtime.run(previous.get("lane_run_id", self.reuse_run_id))
         self._save(self.run, "completed", "assessment-settings", self.assessment_settings.to_dict())
+        if kind == "daily":
+            from .assessment_calls import DAILY_CALL_CONTRACT
+            if existing is None:
+                self._save(self.run, "completed", "assessment-call-contract", {
+                    "contract": DAILY_CALL_CONTRACT,
+                })
         self._save(self.run, "completed", "environment", asdict(self.cloud.environment))
         if existing is None:
             self._save(self.run, "completed", "run", {
@@ -547,6 +553,8 @@ class Runner:
     def _binding(self, target: Target, selection: Selection | None = None) -> _Work:
         from .staging_target import read_intent, reference, REASONS
 
+        if self.runtime.environment == "daily":
+            self._checked_daily_assessment(target)
         key = f"targets/{target.key}/source"
         intent = read_intent(self.run)
         if intent is not None and (
@@ -599,7 +607,8 @@ class Runner:
                     last_tests={target.key: LastTest(old["source_revision"], "PASS", old["tested_at"])},
                     changed_paths=changes,
                     evaluation_paths=(
-                        (*_EVALUATION, "src/agent_insights_quality/prompts/daily.md")
+                        (*_EVALUATION, "src/agent_insights_quality/prompts/daily.md",
+                         "src/agent_insights_quality/assessment_calls.py")
                         if self.runtime.environment == "daily" else _EVALUATION
                     ),
                 ) if item.target.key == target.key), None)
@@ -1532,6 +1541,30 @@ class Runner:
             self._save(self.run, "artifact", f"targets/{target.key}/errors/{uuid.uuid4().hex}", detail)
         self._save(self.run, "progress", f"targets/{target.key}/failure", value)
 
+    @staticmethod
+    def _daily_input_final(result: dict) -> bool:
+        if not isinstance(result.get("private_detail"), dict):
+            raise StateError("assessment_call_contract_invalid")
+        return (
+            "initial_validation_error" in result["private_detail"]
+            or ExclusionReason.INCOMPLETE_EVIDENCE.value
+            not in result["unit_result"]["exclusion_reasons"]
+        )
+
+    def _checked_daily_input_final(self, result: dict) -> bool:
+        from .assessment_calls import DAILY_CALL_CONTRACT
+
+        if "call_contract" not in result:
+            return True  # Historical completed judgments are not new review budgets.
+        frozen = self._daily_input_final(result)
+        if (
+            result["call_contract"] != DAILY_CALL_CONTRACT
+            or type(result.get("assessment_input_final")) is not bool
+            or result["assessment_input_final"] != frozen
+        ):
+            raise StateError("assessment_call_contract_invalid")
+        return frozen
+
     def _apply_assessment(self, target: Target, work: _Work, reference: dict, result: dict) -> None:
         configured = self._configured_assessor(
             {"run_id": self.run_id}, result.get("configured_assessor"),
@@ -1552,6 +1585,10 @@ class Runner:
         else:
             restore_unit(result["unit_result"])
             fields = {"result": {key: result[key] for key in ("unit_result", "reasons")}}
+            if "call_contract" in result:
+                self._checked_daily_input_final(result)
+                fields["result"]["call_contract"] = result["call_contract"]
+                fields["result"]["assessment_input_final"] = result["assessment_input_final"]
         work.binding.pop("reason", None)
         work.binding.pop("failure_run_id", None)
         self._update(
@@ -1562,7 +1599,92 @@ class Runner:
             **reference, "status": "applied",
         })
 
+    def _checked_daily_assessment(self, target: Target, work: _Work | None = None) -> dict | None:
+        """Return checked unfinished or applied-final work, never a new budget.
+
+        Only an applied ordinary incomplete-evidence assessment releases its
+        input for recovery. Terminality comes from the immutable result, not
+        source-index flags that selection could clear.
+        """
+        from .assessment_calls import DAILY_CALL_CONTRACT
+
+        reference = self.run.read(f"targets/{target.key}/assessment", missing_ok=True)
+        if reference is None:
+            return None
+        if (
+            reference.get("status") not in {"pending", "saved", "applied"}
+            or not isinstance(reference.get("artifact"), str)
+            or not reference["artifact"].startswith(f"targets/{target.key}/assessments/")
+        ):
+            raise StateError("assessment_pending_binding_mismatch")
+        if reference["status"] == "applied":
+            result = self.run.read_artifact(reference["artifact"], missing_ok=True)
+            if (
+                result is None or "unit_result" not in result
+                or restore_unit(result["unit_result"]).unit_id != target.unit_id
+            ):
+                raise StateError("assessment_pending_binding_mismatch")
+            if not self._checked_daily_input_final(result):
+                return None
+        source = work.binding if work is not None else self.run.read(
+            f"targets/{target.key}/source", missing_ok=True,
+        )
+        if (
+            source is None or reference.get("source_revision") != self.revision
+            or not isinstance(source.get("work_key"), str)
+            or not source["work_key"].startswith(f"targets/{target.key}/work-")
+            or not isinstance(source.get("traffic_run_id"), str)
+            or not isinstance(source.get("evidence_key"), str)
+            or reference.get("work_key", source.get("work_key")) != source.get("work_key")
+            or reference.get("configured_assessor", self.assessment_settings.to_dict())
+            != self.assessment_settings.to_dict()
+            or "evidence_key" in reference and (
+                reference["evidence_key"] != source.get("evidence_key")
+                or reference.get("evidence_run_id") != source.get("traffic_run_id")
+            )
+        ):
+            raise StateError("assessment_pending_binding_mismatch")
+        journal = self.run.read_artifact(reference["artifact"] + "/calls/binding", missing_ok=True)
+        if journal is not None and journal != {
+            **{key: value for key, value in reference.items() if key != "status"},
+            "contract": DAILY_CALL_CONTRACT,
+        }:
+            raise StateError("assessment_pending_binding_mismatch")
+        if reference["status"] == "applied" and (
+            source.get("assessment") != {"run_id": self.run_id, "artifact": reference["artifact"]}
+            or source.get("result") != {
+                key: result[key] for key in (
+                    "unit_result", "reasons", "call_contract", "assessment_input_final",
+                ) if key in result
+            }
+        ):
+            raise StateError("assessment_pending_binding_mismatch")
+        return reference
+
+    def _frozen_assessment_snapshot(self, target: Target, work: _Work, reference: dict) -> Snapshot:
+        snapshot = self._snapshot(work, reference.get("evidence_key", work.binding["evidence_key"]))
+        request = self.run.read_artifact(reference["artifact"] + "/calls/initial/request", missing_ok=True)
+        if request is not None:
+            from .assessment import _json_copy
+            from .assessment_partition import expand_payload
+            payload = expand_payload(request["payload"])
+            frozen = Snapshot.from_private_dict(payload["snapshot"])
+            if (
+                frozen != snapshot or request["mode"] != "initial"
+                or payload["target"] != _json_copy({
+                    "unit_id": target.unit_id.to_dict(), "agent_type": target.agent_type,
+                    "validation_mode": target.validation_mode, "expectation": dict(target.expectation),
+                })
+            ):
+                raise StateError("assessment_pending_input_mismatch")
+            # Old journals also retain the full packet; validate it without
+            # inventing or adding binding fields to their immutable records.
+            return frozen
+        return snapshot
+
     def _recover_assessment(self, target: Target, work: _Work) -> bool:
+        if self.runtime.environment == "daily":
+            self._checked_daily_assessment(target, work)
         reference = self.run.read(f"targets/{target.key}/assessment", missing_ok=True)
         if not reference or (
             reference["source_revision"] != self.revision
@@ -1577,9 +1699,16 @@ class Runner:
         return True
 
     @measure("stage", "assessment")
-    async def _assess(self, target: Target, work: _Work, operation: Callable[[], Awaitable]) -> dict:
+    async def _assess(self, target: Target, work: _Work, operation: Callable[[SolPort], Awaitable]) -> dict:
         pending_key = f"targets/{target.key}/assessment"
-        pending = self.run.read(pending_key, missing_ok=True)
+        pending = (
+            self._checked_daily_assessment(target, work) if self.runtime.environment == "daily"
+            else self.run.read(pending_key, missing_ok=True)
+        )
+        if self.runtime.environment == "daily" and pending and pending["status"] == "applied":
+            if self.metrics:
+                self.metrics.reuse("stage", "assessment")
+            return self.run.read_artifact(pending["artifact"])
         if pending and (
             pending["source_revision"] == self.revision
             and pending.get("work_key", work.key) == work.key
@@ -1590,18 +1719,40 @@ class Runner:
         else:
             artifact = f"targets/{target.key}/assessments/{uuid.uuid4().hex}"
             saved = None
-        reference = {
+        reference = {key: value for key, value in pending.items() if key != "status"} if (
+            self.runtime.environment == "daily" and pending is not None
+        ) else {
             "source_revision": self.revision, "work_key": work.key, "artifact": artifact,
             "configured_assessor": self.assessment_settings.to_dict(),
+            **({
+                "evidence_key": work.binding["evidence_key"],
+                "evidence_run_id": work.binding["traffic_run_id"],
+            } if self.runtime.environment == "daily" else {}),
         }
         self._save(self.run, "progress", pending_key, {**reference, "status": "pending"})
         if saved is None:
             self._event("started", target, stage="assessment")
             async with limited(self.metrics, self.assessment_limit, "assessment"):
                 self._check()
-                result = await operation()
+                sol = self.sol
+                if self.runtime.environment == "daily":
+                    from .assessment_calls import DAILY_CALL_CONTRACT, DailyAssessmentCalls
+                    contract = self.run.read_completed("assessment-call-contract", missing_ok=True)
+                    if contract is None:
+                        # Legacy final artifacts restore above. Missing old call state
+                        # cannot prove it is safe to submit unfinished assessments again.
+                        raise QualityError("assessment_legacy_call_state_unavailable")
+                    if contract != {"contract": DAILY_CALL_CONTRACT}:
+                        raise StateError("assessment_call_contract_invalid")
+                    sol = DailyAssessmentCalls(sol, self.run, artifact + "/calls", reference, self._save)
+                result = await operation(sol)
                 saved = result.to_private_dict()
                 saved["configured_assessor"] = self.assessment_settings.to_dict()
+                if self.runtime.environment == "daily":
+                    saved["call_contract"] = DAILY_CALL_CONTRACT
+                    # A root correction cannot buy another review via evidence
+                    # refresh. Ordinary incomplete-evidence recovery stays separate.
+                    saved["assessment_input_final"] = self._daily_input_final(saved)
             self._save(self.run, "artifact", artifact, saved)
         elif self.metrics:
             self.metrics.reuse("stage", "assessment")
@@ -1672,7 +1823,7 @@ class Runner:
                         snapshot, artifact = await self._evidence(target, work, deployment, attempts, invocations)
                         self._update(target, work, evidence_key=artifact)
                     stage = "assessment"
-                    async def assess():
+                    async def assess(sol):
                         if policy_reassessment:
                             previous = self.runtime.run(policy_reassessment["run_id"]).read_artifact(
                                 policy_reassessment["artifact"],
@@ -1680,7 +1831,7 @@ class Runner:
                             result = reassess_staging_policy(target, attempts, invocations, snapshot, previous)
                             result.private_detail["policy_reassessment"].update(policy_reassessment)
                             return result
-                        return await assess_staging(target, attempts, invocations, snapshot, self.sol)
+                        return await assess_staging(target, attempts, invocations, snapshot, sol)
                     await self._assess(target, work, assess)
                 except QualityError as error:
                     self._failure(target, error, stage)
@@ -1715,6 +1866,15 @@ class Runner:
 
         if not self._initialized or self.runtime.environment != "daily" or targets != self.targets:
             raise QualityError("runner_not_initialized")
+        # Check pending AND applied-final work before any lane/provider or
+        # source selection can discard a frozen assessment's identity.
+        for target in targets:
+            reference = self._checked_daily_assessment(target)
+            if reference is not None:
+                source = self.run.read(f"targets/{target.key}/source")
+                self._frozen_assessment_snapshot(
+                    target, _Work(self.runtime.run(source["traffic_run_id"]), source), reference,
+                )
         agents = tuple(dict.fromkeys(target.unit_id.agent for target in targets))
         if any(not next(target for target in targets if target.unit_id.agent == agent).is_baseline for agent in agents):
             raise QualityError("daily_baseline_must_be_first")
@@ -1734,8 +1894,13 @@ class Runner:
                             work = self._binding(target)
                             attempts = self._plan(target, work)
                             recovered = self._recover_assessment(target, work)
+                            reference = self._checked_daily_assessment(target, work)
+                            pending = reference if reference and reference["status"] != "applied" else None
                             prior = self._prior_result(work)
-                            if recovered or prior and not prior["unit_result"]["exclusion_reasons"]:
+                            terminal_assessment = reference and reference["status"] == "applied"
+                            if recovered or prior and (
+                                not prior["unit_result"]["exclusion_reasons"] or terminal_assessment
+                            ):
                                 invocations = self._load_traffic(target, work, attempts)
                                 self._reused_traffic(target, attempts, invocations)
                                 if self.metrics:
@@ -1750,7 +1915,11 @@ class Runner:
                                 self._reused_traffic(target, attempts, invocations)
                                 if self.metrics:
                                     self.metrics.reuse("stage", "insights")
-                                if work.binding.get("refresh_evidence") or prior and (
+                                if pending is not None:
+                                    snapshot = self._frozen_assessment_snapshot(target, work, pending)
+                                    if self.metrics:
+                                        self.metrics.reuse("stage", "evidence")
+                                elif work.binding.get("refresh_evidence") or prior and (
                                     ExclusionReason.INCOMPLETE_EVIDENCE.value
                                     in prior["unit_result"]["exclusion_reasons"]
                                 ):
@@ -1842,8 +2011,8 @@ class Runner:
         async def assess(values) -> None:
             target, work, attempts, invocations, snapshot, visible, insight, window = values
             try:
-                result = await self._assess(target, work, lambda: assess_daily(
-                    target, attempts, invocations, snapshot, self.sol,
+                result = await self._assess(target, work, lambda sol: assess_daily(
+                    target, attempts, invocations, snapshot, sol,
                     before_cards=tuple(insight["before"]), after_cards=tuple(insight["after"]),
                     engine_started_at=insight["started_at"], visible_snapshot=visible, engine_window=window,
                     max_payload_bytes=self.settings.daily_assessment_max_payload_bytes,
