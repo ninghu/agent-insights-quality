@@ -10,6 +10,14 @@ issue maintenance. Distinguish repairs to existing targets from changes to the r
 inventory. Adding, removing, renaming or reassigning an identity requires explicit scope
 agreement, including rotation and scoring coverage; it is not an incidental cleanup.
 
+The same skill supports an explicitly authorized
+[bounded maintenance repair loop](docs/OPERATIONS.md#bounded-maintenance-repair-loop)
+for unintended Agent or related framework defects. It reuses the Python staging/Daily
+runner and private report handoff; it does not authorize service changes, alter official
+automation or repair intentionally injected defects. Scope and native/PR actions stay bounded.
+New Agent/issue onboarding TEST reports use the initiating contributor's explicitly supplied
+private mailbox, frozen per run, rather than a fixed maintainer destination.
+
 1. Review the issue's intended root cause, healthy behavior and evidence before changing code.
 2. Keep each Agent version independently deployable and isolated to its declared defect.
 3. Write small behavior/contract tests with the change; do not restore legacy digest, prose or
