@@ -103,6 +103,18 @@ def _decode(data: bytes) -> dict[str, Deployment]:
             raise ValueError("Wrong registry entries")
         result = {}
         for key, value in document["targets"].items():
+            if not isinstance(value, dict):
+                raise ValueError("Invalid registry entry")
+            value = dict(value)
+            details = value.get("details")
+            if isinstance(details, Mapping) and "content_hash" in details:
+                content_hash = details["content_hash"]
+                if "content_hash" in value and value["content_hash"] != content_hash:
+                    raise ValueError("Conflicting registry content identity")
+                value["content_hash"] = content_hash
+                value["details"] = {
+                    name: item for name, item in details.items() if name != "content_hash"
+                }
             record = Deployment(**value)
             if (
                 key != record.target_key
@@ -117,6 +129,14 @@ def _decode(data: bytes) -> dict[str, Deployment]:
                 )
             ):
                 raise ValueError("Invalid registry entry")
+            if record.content_hash is not None:
+                metadata = record.details.get("metadata")
+                if not isinstance(metadata, Mapping) or (
+                    metadata.get("aiq_content_hash") != record.content_hash
+                    or metadata.get("aiq_source_revision") != record.source_revision
+                    or metadata.get("aiq_agent_type") != record.agent_type
+                ):
+                    raise ValueError("Invalid registry content identity")
             result[key] = record
         return result
     except (TypeError, ValueError, KeyError, UnicodeError):
@@ -124,10 +144,21 @@ def _decode(data: bytes) -> dict[str, Deployment]:
 
 
 def _document(records: Mapping[str, Deployment]) -> dict[str, Any]:
-    return {
-        "schema_version": "1.0",
-        "targets": {key: asdict(item) for key, item in records.items()},
-    }
+    targets = {}
+    for key, item in records.items():
+        if not isinstance(item.details, Mapping):
+            raise ValueError("Invalid registry details")
+        value = asdict(item)
+        content_hash = value.pop("content_hash")
+        details = dict(value["details"])
+        if "content_hash" in details and details["content_hash"] != content_hash:
+            raise ValueError("Conflicting registry content identity")
+        if content_hash is not None:
+            # Old source readers construct Deployment(**record); only details is extensible.
+            details["content_hash"] = content_hash
+        value["details"] = details
+        targets[key] = value
+    return {"schema_version": "1.0", "targets": targets}
 
 
 class DeploymentRegistry:

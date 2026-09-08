@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any, Protocol
 
 from agent_insights_quality.results import UnitId
@@ -76,6 +77,14 @@ class Deployment:
     agent_type: str
     source_revision: str
     details: Mapping[str, Any] = field(default_factory=dict)
+    content_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.content_hash is not None and (
+            not isinstance(self.content_hash, str)
+            or re.fullmatch(r"v1:sha256:[0-9a-f]{64}", self.content_hash) is None
+        ):
+            raise ValueError("Invalid deployment content hash")
 
 
 @dataclass(frozen=True)
@@ -107,6 +116,8 @@ class CloudPort(Protocol):
         source_revision: str,
         existing: Deployment | None,
         persist: Callable[[Deployment], None],
+        *,
+        resume: bool = False,
     ) -> Deployment: ...
 
     async def activate(self, deployment: Deployment) -> None: ...

@@ -457,6 +457,98 @@ unrecorded Type/cutoff fields honestly; they do not refetch or invent a newer re
 
 ## Provider and checkpoint recovery
 
+### Deployment content identity and Git provenance
+
+New deployments carry a separate `content_hash` (`v1:sha256:…`) in memory and
+source-bound work checkpoints, `details.content_hash` in the canonical private
+registry, and `aiq_content_hash` in native metadata. `source_revision`
+and `aiq_source_revision` remain actual Git provenance: the last commit touching
+the selected deployment input paths, **not** a fingerprint. A reused version keeps
+its original deployment provenance; the run separately retains its own source
+revision. Squashing identical input trees therefore does not create another Agent
+version merely because the last-touch commit changed.
+
+The hash covers the exact resolved Prompt definition or Hosted definition, the
+deterministic Hosted code ZIP (selected version-owned source, baseline requirements
+and `host.yaml`), or the selected container build context (source, requirements and
+Dockerfile) **and resolved digest-pinned image reference**. Effective Hosted model,
+environment overrides, runtime/entrypoint, protocol, CPU/memory and deployment API
+settings participate. Container platform-reserved environment overrides are omitted
+exactly as on the wire; Prompt ignores Hosted configuration. JSON object ordering is
+normalized, while deployed file names and bytes are retained. Target, logical version,
+Agent type, runtime name, profile and project endpoint bind the identity: an identical
+asset is never permission to reuse another Agent/profile's version.
+
+Traffic, expectations, assessment/scoring/reporting changes, Git history and generator
+source text do not themselves enter the hash; a generator's changed **deployment
+output** does. Staging source selection remains separate and may select new traffic
+without requiring another native version. Container preparation still resolves the
+existing exact content-addressed ACR tag, without rebuilding an available image merely
+for another commit. The image reference captures registry/repository/digest changes.
+These hashes describe declared inputs, not reproducible execution: mutable model
+aliases, platform-injected values, remote dependency resolution and base-image tags
+can drift independently. They are not discovered or changed by this identity check.
+
+Migration is conservative. An active legacy registry entry or native version without
+a verifiable content hash is not backfilled, relabelled or adopted by commit equality.
+New work creates a content-keyed version once if no exact content-keyed native match
+exists. The registry's current pointer advances normally; existing native versions,
+other registry entries, frozen run records and historical results are retained.
+This can cost one migration deployment; it avoids claiming evidence of inputs that
+old metadata never recorded. Do not bulk rewrite historical registries/results.
+
+A saved work deployment is different from a registry candidate. Resume uses its
+original source/provider/content identity without repackaging or reading current
+source/configuration. Completed traffic/Insights are not repeated. Unknown creates
+reconcile only the exact submission metadata, including original provenance; multiple
+matches remain ambiguous, and no match never authorizes a blind retry. A missing
+frozen active version is an error, not permission to replace it. Known rejected new
+submissions may retry only after verifying identical content; a rejected legacy
+submission requires explicitly selected new work rather than inventing a hash.
+Frozen discovery checks all same-content/binding candidates before provenance:
+another source's ownership blocks even a definitively rejected retry, without adopting
+that version or submitting another. Fresh non-resume reuse still retains its owner's provenance.
+The saved input hash is checked before a rejected container submission can build
+again; its final digest-pinned artifact must still match before an Agent POST.
+Unresolved registry records block new work until their owning run is reconciled.
+
+Fresh reuse requires complete matching native content/binding/provenance metadata.
+A create's own response can omit metadata because its saved request already binds
+the returned identity; subsequent discovery/readback must verify it. Local fake-wire
+tests do not establish native metadata retention/readback, ACR availability or
+end-to-end version reuse. Those need separately authorized native acceptance; this
+change authorizes no deployment, traffic, reassessment, rescoring or scheduling.
+
+### Registry compatibility and source-bound cutover
+
+The canonical v1 registry keeps its original six deployment fields: `target_key`,
+`agent_name`, `provider_version`, `agent_type`, `source_revision` and `details`.
+Older source readers construct `Deployment(**record)` and reject a new top-level
+`content_hash`; they can read and preserve the extensible `details` projection.
+The new reader validates the nested hash against recorded native metadata and normalizes it
+to the in-memory field. It also accepts the earlier draft top-level representation,
+but rejects conflicting dual declarations. Loading never rewrites the canonical blob;
+only ordinary validated, conditional saves emit the compatible representation.
+Do not bulk backfill legacy hashes or rewrite frozen work checkpoints.
+
+This is **registry read compatibility**, not permission to interchange runner versions.
+New work checkpoints still require their owning source, and old code still uses Git-based
+deployment selection without the content/provenance conflict guard. Older writers may
+advance a target's current pointer to a hashless version; retained native versions and
+frozen work records remain the recovery authority. Do not resume a new run under old code,
+restore a stale whole-registry backup, or claim that an old/new writer mixture is safe.
+
+Review cutover separately for each profile, under its normal ownership lock. Staging and
+Daily use different canonical registry blobs and runtime roots. Inspect the actual active
+controls, frozen source and unresolved remote outcomes before authorizing new work; finish
+or reconcile an old run with its owning source rather than changing its lineage or clearing
+its lock. Preserve private canonical snapshots/ETags and every existing native version.
+If a draft top-level record is found remotely, stop for an explicitly reviewed format
+migration; local acceptance of that format is not proof that older readers can recover it.
+The [Daily two-slot call journal](#bounded-daily-judgment-correction) and
+[targeted-staging source/predecessor checks](#explicit-single-target-staging) remain unchanged.
+None of these rules authorizes native acceptance, a deployment or a schedule.
+
 New Insights polling has a separate `insights_poll_timeout_seconds` budget (default 1200).
 Deployment polling retains `poll_timeout_seconds` (default 600); trace hydration is separate.
 A local wait timeout is not a native failed run. Resume queries the original accepted operation

@@ -637,8 +637,8 @@ def test_changed_version_affinity_and_missing_completed_session_fail_before_post
     activations = len([e for e in h.cloud.events if e[0] == "activate"])
     if damage == "version":
         original = h.cloud.ensure_deployment
-        async def changed(target, revision, existing, persist):
-            value = await original(target, revision, existing, persist)
+        async def changed(target, revision, existing, persist, *, resume=False):
+            value = await original(target, revision, existing, persist, resume=resume)
             return replace(value, provider_version="different-version")
         h.cloud.ensure_deployment = changed
     elif damage == "missing_session":

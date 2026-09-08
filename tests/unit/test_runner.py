@@ -134,7 +134,7 @@ class Cloud:
         self.poll_status = "succeeded"
         self.starts = []
 
-    async def ensure_deployment(self, target, revision, existing, persist):
+    async def ensure_deployment(self, target, revision, existing, persist, *, resume=False):
         self.events.append(("deployment", target.key))
         self.deployment_calls[target.key] += 1
         self.active_deploys += 1
@@ -339,6 +339,69 @@ class Harness:
             finally:
                 runner.logger.close()
 
+
+def test_runner_reuses_content_then_polls_with_original_deployment_provenance(tmp_path):
+    from test_provider_runtime import FakeTransport, content_deployed, response, runtime
+    h = Harness(tmp_path, issues=0)
+    target = h.catalog.targets[0]
+    target.version_root.mkdir(parents=True)
+    (target.version_root / "definition.json").write_text(json.dumps({
+        "definition": {"kind": "prompt", "model": "synthetic", "instructions": "Synthetic"},
+    }))
+    original = content_deployed(h.cloud.environment, target)
+    h.registry.records[target.key] = original
+    transport = FakeTransport(*[
+        response({"version": "42", "metadata": original.details["metadata"], "status": status})
+        for status in ("creating", "active")
+    ])
+    h.cloud = runtime(h.cloud.environment, transport)
+    with h.store.ownership():
+        runner = h.runner()
+        runner.initialize(h.catalog.targets, DAY, kind="daily")
+        work = runner._binding(target)
+        result = asyncio.run(runner._deployment(target, work))
+        assert result.source_revision == original.source_revision == "revision-one"
+        assert result.content_hash == original.content_hash
+        assert result.provider_version == original.provider_version
+        assert work.records.read(work.key + "/deployment")["source_revision"] == "revision-one"
+        assert work.binding["source_revision"] == "source-one"
+        runner.logger.close()
+    assert len(transport.requests) == 2
+    assert all(request.method == "GET" and "/versions/42?" in request.url for request in transport.requests)
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_runner_frozen_legacy_work_never_uses_new_provenance_or_registry_version(tmp_path, completed):
+    from dataclasses import asdict
+    from test_provider_runtime import FakeTransport, response, runtime
+    h = Harness(tmp_path, issues=0)
+    target = h.catalog.targets[0]
+    original = Deployment(
+        target.key, target.runtime_name("daily"), "42", target.agent_type, "legacy-source",
+        {"provisioning_state": "active"},
+    )
+    legacy = asdict(original)
+    legacy.pop("content_hash")
+    h.registry.records[target.key] = replace(original, provider_version="99", source_revision="new-source")
+    transport = FakeTransport(*([] if completed else [response({"version": "42"})]))
+    h.cloud = runtime(h.cloud.environment, transport)
+    with h.store.ownership():
+        runner = h.runner()
+        runner.initialize(h.catalog.targets, DAY, kind="daily")
+        work = runner._binding(target)
+        work.records.save_progress(work.key + "/deployment", legacy)
+        if completed:
+            work.records.save_completed(work.key + "/traffic-done", {"completed": True})
+        def unavailable(_):
+            raise AssertionError("Frozen deployment must not look up new Git provenance")
+        runner.deployment_source = unavailable
+        result = asyncio.run(runner._deployment(target, work))
+        assert result.source_revision == "legacy-source" and result.provider_version == "42"
+        assert result.content_hash is None
+        if completed:
+            assert work.records.read(work.key + "/deployment") == legacy
+        runner.logger.close()
+    assert len(transport.requests) == (0 if completed else 1)
 
 def test_end_to_end_five_lanes_baseline_first_and_pipelined_assessment(tmp_path):
     h = Harness(tmp_path, agents=5, issues=4, deployment_workers=2)
@@ -1277,14 +1340,14 @@ def test_incomplete_assessment_clears_prior_transport_failure_before_next_select
 def test_staging_latest_reference_is_durable_before_any_provider_side_effect(tmp_path):
     h = Harness(tmp_path, profile="staging", issues=0)
     original = h.cloud.ensure_deployment
-    async def ensure(target, *args):
+    async def ensure(target, *args, **kwargs):
         pointer = h.store.outbox("staging").read(f"targets/{target.key}")
         assert pointer["run_id"] == "stage"
         binding = h.store.run(pointer["run_id"]).read(f"targets/{target.key}/source")
         assert pointer["work_key"] == binding["work_key"]
         assert binding["binding_run_id"] == "stage"
         assert h.store.staging_index.read(target.key, missing_ok=True) is None
-        return await original(target, *args)
+        return await original(target, *args, **kwargs)
     h.cloud.ensure_deployment = ensure
     assert h.staging()["results"][0]["status"] == "PASS"
 
