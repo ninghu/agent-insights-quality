@@ -148,6 +148,34 @@ def test_catalog_bound_actionable_context_in_both_renderers(catalog_root):
     assert result.counts.expected_issues == result.counts.noise_cards == 1
 
 
+def test_version_column_links_reviewed_issue_to_the_frozen_catalog(catalog_root):
+    result, plan = reviewed_sample()
+    context = load_report_context(catalog_root, allowed_units=plan)
+    metadata = ReportMetadata("2026-09-04", "Sweden Central", "a" * 40)
+    href = f"https://github.com/ninghu/agent-insights-quality/blob/{metadata.source_revision}/ISSUE_CATALOG.md#issue-001"
+    markdown = render_markdown(
+        result, allowed_units=plan, report_context=context, metadata=metadata,
+    )
+    row = next(line for line in markdown.splitlines() if line.startswith("| 2 |"))
+    assert row.split(" | ")[1] == f"[issue-001]({href}) (deployment not recorded)"
+    html = markdown_view(markdown)
+    assert f'<a href="{href}">issue-001</a>' in html
+    assert "#v0" not in markdown and "/blob/main/" not in markdown
+    for kwargs in ({"report_context": context}, {"metadata": metadata}):
+        assert "ISSUE_CATALOG.md" not in render_markdown(result, allowed_units=plan, **kwargs)
+
+
+@pytest.mark.parametrize("link", [
+    "[issue-001](javascript:alert(1))",
+    "[issue-001](https://example.invalid/ISSUE_CATALOG.md#issue-001)",
+    "[issue-001](https://github.com/ninghu/agent-insights-quality/blob/main/ISSUE_CATALOG.md#issue-001)",
+    "[issue-002](https://github.com/ninghu/agent-insights-quality/blob/" + "a" * 40 + "/ISSUE_CATALOG.md#issue-001)",
+    r"\[issue-001\](https://github.com/ninghu/agent-insights-quality/blob/" + "a" * 40 + "/ISSUE_CATALOG.md#issue-001)",
+])
+def test_browser_does_not_turn_untrusted_or_mismatched_issue_links_into_anchors(link):
+    assert "<a href=" not in markdown_view(link)
+
+
 def test_all_catalog_units_bind_titles_and_version_owned_reproduction_without_reading_source(catalog_root):
     targets = load_catalog(catalog_root).targets
     plan = tuple(PlannedUnit(

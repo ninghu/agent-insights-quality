@@ -18,6 +18,15 @@ _REVISION = r"[0-9a-f]{40}"
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._()~-]{0,127}"
 
 
+def issue_catalog_link(issue: str, revision: str) -> str:
+    if (
+        not isinstance(issue, str) or re.fullmatch(r"issue-[0-9]{3}", issue) is None
+        or not isinstance(revision, str) or re.fullmatch(_REVISION, revision) is None
+    ):
+        raise ReportContextError("report_issue_link_invalid")
+    return f"https://github.com/{REPOSITORY}/blob/{revision}/ISSUE_CATALOG.md#{issue}"
+
+
 def authenticated_storage_references(account: str, container: str, prefix: str) -> dict:
     """Storage references are NOT browser login URLs or Human Validation links."""
     from .private_publication import CONTAINER, _account, _key

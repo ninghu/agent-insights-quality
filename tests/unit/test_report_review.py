@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from agent_insights_quality.report_context import ReportContextError, load_report_context
+from agent_insights_quality.report_context import ReportContextError, ReportMetadata, load_report_context
 from agent_insights_quality.report_review import RetainedReviewContext
 from agent_insights_quality.reporting import (
     markdown_view, render_email_html, render_markdown, render_private_markdown,
@@ -133,6 +133,25 @@ def test_private_context_cannot_be_injected_at_public_boundary(tmp_path):
         render_markdown(result, allowed_units=plan, private_context={"secret": "synthetic"})
     with pytest.raises(ReportContextError, match="review_context_invalid"):
         render_private_markdown(result, allowed_units=plan, review_context={})
+
+
+def test_private_overall_and_agent_views_link_the_issue_not_the_provider_version(tmp_path):
+    runtime = RuntimeStore("daily", root=tmp_path)
+    result, plan = seed_review(runtime)
+    before = deepcopy(result.to_dict())
+    review = RetainedReviewContext(runtime, "synthetic-review", result)
+    context = load_report_context(ROOT, allowed_units=plan)
+    metadata = ReportMetadata("2026-09-05", "Sweden Central", "b" * 40)
+    href = f"https://github.com/ninghu/agent-insights-quality/blob/{metadata.source_revision}/ISSUE_CATALOG.md#issue-001"
+    for agent in (None, "weather-agent"):
+        markdown = render_private_markdown(
+            result, allowed_units=plan, review_context=review, report_context=context,
+            metadata=metadata, agent=agent,
+        )
+        assert f"13 ([issue-001]({href}))" in markdown
+        assert f'13 (<a href="{href}">issue-001</a>)' in markdown_view(markdown)
+        assert "#v0" not in markdown
+    assert result.to_dict() == before
 
 
 def test_retained_judgment_cannot_substitute_a_different_frozen_result(tmp_path):

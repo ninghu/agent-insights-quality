@@ -5,7 +5,9 @@ from uuid import UUID
 import pytest
 
 from agent_insights_quality.report_context import ReportContextError
-from agent_insights_quality.report_links import VerifiedScoringLink, foundry_links, validate_foundry_link
+from agent_insights_quality.report_links import (
+    VerifiedScoringLink, foundry_links, issue_catalog_link, validate_foundry_link,
+)
 from agent_insights_quality.results import PlannedUnit, UnitId
 from agent_insights_quality.state import RuntimeStore
 
@@ -13,6 +15,21 @@ from agent_insights_quality.state import RuntimeStore
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "a" * 40
 SUBSCRIPTION = "11111111-2222-3333-4444-555555555555"
+
+
+def test_issue_catalog_link_uses_the_recorded_source_revision_and_exact_anchor():
+    assert issue_catalog_link("issue-005", REVISION) == (
+        f"https://github.com/ninghu/agent-insights-quality/blob/{REVISION}/ISSUE_CATALOG.md#issue-005"
+    )
+
+
+@pytest.mark.parametrize("issue,revision", [
+    ("v0", REVISION), ("issue-005/other", REVISION), ("issue-005", "main"),
+    ("issue-005", "../main"), ("issue-005", "A" * 40), (None, REVISION),
+])
+def test_issue_catalog_link_rejects_unbound_identifiers(issue, revision):
+    with pytest.raises(ReportContextError, match="report_issue_link_invalid"):
+        issue_catalog_link(issue, revision)
 
 
 def test_scoring_link_requires_exact_reviewed_document_at_immutable_published_revision():
