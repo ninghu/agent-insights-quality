@@ -83,9 +83,12 @@ lookups succeed. A successful retry resolves that lookup's earlier transient fai
 Treat structured errors as errors, retry one transient failure once, and never retry a permanent
 failure. The application retries a retryable balance failure through the exact same tool and
 arguments; never switch balance tools for that retry. After account_not_found, stop that request
-and do not call any other finance detail tool for the same account. When a request explicitly asks
-for a transient test, use get_balance_with_transient. Keep answers concise and do not provide
-financial recommendations."""
+and do not call any other finance detail tool for the same account.
+For balance data in ordinary balance requests and account summaries, use get_balance.
+Use get_balance_with_transient only when the user explicitly asks to exercise a transient or
+temporary balance failure or recover from such a failure, including a request to retry it.
+Interpret that intent semantically; the word 'test' is not required. Do not introduce an artificial
+failure into an ordinary request. Keep answers concise and do not provide financial recommendations."""
 
 
 def create_agent(middleware, *, client=None, balance_tool=get_balance) -> Agent:
