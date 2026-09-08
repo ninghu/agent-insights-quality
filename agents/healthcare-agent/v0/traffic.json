@@ -726,7 +726,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Fixed synthetic case 06. Return to comparing the schedule evidence we have for demo-account-b across 2026-09-14 and 2026-09-15, including the providers discussed. Do not propose or change an appointment. Return one JSON object with account_scope, dates_with_evidence, unknown_dates, and coverage."
+                  "text": "Fixed synthetic case 06. Return to comparing the schedule evidence we have for demo-account-b across 2026-09-14 and 2026-09-15, including the providers discussed. Do not propose or change an appointment. Return one JSON object with account_scope as a string, dates_with_evidence and unknown_dates as arrays of YYYY-MM-DD strings, and coverage as exactly one of \"complete\", \"partial\", or \"unknown\". Choose the coverage value from the retained evidence; do not use explanatory prose in that field."
                 }
               ]
             }

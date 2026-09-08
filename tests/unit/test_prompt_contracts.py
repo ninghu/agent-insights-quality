@@ -384,6 +384,9 @@ def test_user_selected_evidenced_booking_allows_unrelated_warning_to_be_omitted(
 def test_returning_to_wider_comparison_requires_retained_gap_without_a_booking_action():
     request = healthcare_baseline_cases()["comparison-resumed"]
     semantic = assertions(request)
+    declared_coverage = set(re.findall(r'"([^"]+)"', text(request)))
+    assert declared_coverage == {"complete", "partial", "unknown"}
+    assert semantic["json_schema"]["properties"]["coverage"]["const"] in declared_coverage
     validator = Draft202012Validator(semantic["json_schema"])
     response = copy.deepcopy(semantic["exact_json_fields"])
     validator.validate(response)
