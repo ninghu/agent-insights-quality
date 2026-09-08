@@ -7,7 +7,11 @@ deployment:
 category: baseline
 severity: none
 expected_behavior:
-  desired: "Grounded success with bounded, direct terminal responses using only request-provided evidence."
+  desired: >-
+    Grounded success with bounded, direct terminal responses using only request-provided evidence.
+    Cross-date comparisons disclose unresolved evidence gaps. A user's explicit choice of an
+    evidenced appointment narrows the booking action, not retained knowledge: unrelated-date
+    warnings are optional, while a later wider comparison must disclose those gaps again.
   injected: No defect is enabled.
 injected_defect:
   single_root: null
