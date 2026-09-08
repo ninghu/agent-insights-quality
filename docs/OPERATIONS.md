@@ -249,8 +249,11 @@ old-region fallback. No catch-all Run notes, Other findings, methodology body or
 section is inserted, including hidden private context.
 
 The authoritative detail is `report.md`: one table per Agent with stable Agent-name anchors and
-five rows for the baseline plus four issue versions. Run num, actual Agent version, Expected
-insight, Generated insight(s), Assessment and short Notes keep review compact. Each row represents
+five rows for the baseline plus four issue versions. Run num, actual Agent version, Issue definition,
+Expected insight, Generated insight(s) and Assessment keep review compact. Issue definition uses the
+reviewed catalog's root-cause description; baselines show a dash because no issue is injected.
+Without reviewed context, the definition is explicitly unavailable, not inferred from a card.
+Each row represents
 ten attempts, not one call. In Agent version, reviewed issue IDs link to their `ISSUE_CATALOG.md`
 anchor at the report's recorded source commit; native version numbers and `v0` remain plain text.
 Without reviewed catalog context or source metadata, IDs remain plain text rather than guessing.
@@ -261,8 +264,10 @@ Assessment numbers align with generated cards: "1. Matched", "2. Noise", "3. Dup
 A separate "Unexpected" is a saved valid non-target finding, not expected-detection credit
 or an automatic Agent-fix request. Private Agent headings link to verified Foundry objects,
 and the report overview uses a short bullet list.
-Routine Notes are empty. Exceptional findings expose full saved rationales under collapsed
-Assessment details; disagreements show both passes without changing the resolved judgment.
+There is no separate Notes column. Assessment retains applicable observation counts, exclusion
+reasons and duplicate-root references. Exceptional findings expose full saved rationales under
+collapsed Assessment details in that same cell; disagreements show both passes without changing
+the resolved judgment. Ordinary rows show only their assessment labels.
 Detailed evidence and complete judgments stay in the original private artifacts referenced by
 the preview manifest, not repeated payload/provenance sections in the MD.
 Private detail is rendered through a separate boundary; public Markdown receives only approved
@@ -321,7 +326,8 @@ runs only. TEST never touches ADX, public reports/trends, generated PRs or the t
 After measurement, Python freezes the private overview Markdown from the final `QualityResult`
 and `RetainedReviewContext`, five independent per-Agent Markdown documents, their derived HTML,
 and a minimal manifest. Each Agent document contains only that Agent's five compact version rows,
-owner, actual versions and saved classifications/Notes. It does not recompute a per-Agent score.
+owner, actual versions, reviewed issue definitions and saved assessment details. It does not
+recompute a per-Agent score.
 Any global score/counts/coverage are explicitly labelled **Overall Daily**; Agent counts are sums
 of that same result's units. It binds exact UTF-8 bytes,
 hashes, source revision, reviewed plan, report date, run ID, profile, assessment identity and

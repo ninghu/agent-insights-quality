@@ -148,6 +148,10 @@ _FINDING_LABELS = {
     "unexpected_real": "Unexpected",
     "unknown": "Unconfirmed",
 }
+_DETAIL_HEADERS = (
+    "Run num", "Agent version", "Issue definition", "Expected insight",
+    "Generated insight(s)", "Assessment",
+)
 
 
 def _table_row(
@@ -167,6 +171,10 @@ def _table_row(
     expected = (
         "None (healthy baseline)" if unit["kind"] == "baseline" else
         context[identity].title if context else identity.logical_version
+    )
+    definition = (
+        "-" if unit["kind"] == "baseline" else
+        context[identity].expected_symptom if context else "Definition unavailable"
     )
     current = [finding for finding in unit["findings"] if finding["contribution"] == "current"]
     titles, verdicts, notes, details = [], [], [], []
@@ -214,14 +222,13 @@ def _table_row(
             verdicts.append("No findings")
     if private and detail.get("unavailable"):
         notes.append("Details unavailable.")
-    rendered_notes = [_markdown_text(note) for note in notes]
+    rendered_assessment = [_markdown_text(value) for value in (*verdicts, *notes)]
     if details:
-        rendered_notes.append(_assessment_details(details))
+        rendered_assessment.append(_assessment_details(details))
     cells = [
-        str(number), version, _markdown_text(expected),
+        str(number), version, _markdown_text(definition), _markdown_text(expected),
         "<br>".join(_markdown_text(title) for title in titles),
-        "<br>".join(_markdown_text(verdict) for verdict in verdicts),
-        "<br>".join(rendered_notes) or "-",
+        "<br>".join(rendered_assessment),
     ]
     return "| " + " | ".join(cells) + " |"
 
@@ -280,7 +287,7 @@ def _render_markdown(
         if report_context:
             lines += ["", "**Assigned To:** " + _markdown_text(report_context.assignments[agent])]
         lines += [
-            "", "| Run num | Agent version | Expected insight | Generated insight(s) | Assessment | Notes |",
+            "", "| " + " | ".join(_DETAIL_HEADERS) + " |",
             "| --- | --- | --- | --- | --- | --- |",
             *[_table_row(
                 number, unit, context, private.get(_identity(unit), {}) if private is not None else {},
@@ -358,7 +365,12 @@ def markdown_view(markdown: str) -> str:
     in_list = False
     def flush_table():
         if table_rows:
-            widths = (6, 12, 18, 25, 12, 27) if len(table_rows[0]) == 6 else None
+            widths = None
+            if tuple(table_rows[0]) == _DETAIL_HEADERS:
+                widths = (5, 11, 24, 16, 24, 20)
+            elif len(table_rows[0]) == 6:
+                # Retained Markdown keeps its original column layout.
+                widths = (6, 12, 18, 25, 12, 27)
             parts.append(html_table(
                 tuple(table_rows[0]), table_rows[1:],
                 raw_cells={(row, column) for row in range(len(table_rows) - 1)

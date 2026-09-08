@@ -133,7 +133,7 @@ def test_catalog_bound_actionable_context_in_both_renderers(catalog_root):
     expected = load_catalog(catalog_root).target("weather-agent/issue-001").expectation
     for rendered in (markdown, html):
         assert expected["title"] in rendered
-        assert expected["root_cause"] not in rendered
+        assert expected["root_cause"] in rendered
         assert expected["expected_fix"] not in rendered
         assert "traffic.json" not in rendered
         assert "1. card-0001" in rendered and "1. Noise" in rendered
@@ -163,6 +163,41 @@ def test_version_column_links_reviewed_issue_to_the_frozen_catalog(catalog_root)
     assert "#v0" not in markdown and "/blob/main/" not in markdown
     for kwargs in ({"report_context": context}, {"metadata": metadata}):
         assert "ISSUE_CATALOG.md" not in render_markdown(result, allowed_units=plan, **kwargs)
+
+
+def test_issue_definition_precedes_expected_insight_without_a_notes_column(catalog_root):
+    result, plan = reviewed_sample()
+    context = load_report_context(catalog_root, allowed_units=plan)
+    markdown = render_markdown(result, allowed_units=plan, report_context=context)
+    expected = load_catalog(catalog_root).target("weather-agent/issue-001").expectation
+    header = "| Run num | Agent version | Issue definition | Expected insight | Generated insight(s) | Assessment |"
+    assert header in markdown and "| Notes |" not in markdown
+    baseline, issue = [
+        row.strip("| ").split(" | ") for row in markdown.splitlines()
+        if re.match(r"^\| [12] \|", row)
+    ]
+    assert len(baseline) == len(issue) == 6
+    assert baseline[2] == "-" and baseline[3] == "None (healthy baseline)"
+    assert issue[2:4] == [expected["root_cause"], expected["title"]]
+    html = markdown_view(markdown)
+    assert html.index(">Issue definition</th>") < html.index(">Expected insight</th>")
+    assert ">Notes</th>" not in html
+    assert '<col style="width:24%">' in html
+    missing_context = render_markdown(result, allowed_units=plan)
+    assert "Definition unavailable" in missing_context
+    assert expected["root_cause"] not in missing_context
+
+
+def test_retained_notes_column_markdown_is_still_displayed_without_rewriting_it():
+    markdown = (
+        "| Run num | Agent version | Expected insight | Generated insight(s) | Assessment | Notes |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
+        "| 1 | 2 (issue-001) | Original expectation | None | Missed | Observed 10/10. |\n"
+    )
+    html = markdown_view(markdown)
+    assert ">Notes</th>" in html and "Observed 10/10." in html
+    assert "Issue definition" not in html
+    assert '<col style="width:27%">' in html
 
 
 @pytest.mark.parametrize("link", [
@@ -247,6 +282,7 @@ def test_only_selected_catalog_fields_are_rendered_and_markup_is_escaped(catalog
     path = catalog_root / "catalogs" / "ISSUE_CATALOG.yaml"
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     document["issues"][0]["title"] = "Reviewed [bracket] | <sample> *emphasis*"
+    document["issues"][0]["root_cause"] = "Definition [scope] | <root> *example*"
     document["issues"][0]["private_diagnostic"] = "synthetic-unapproved-field"
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     context = load_report_context(catalog_root, allowed_units=plan)
@@ -255,6 +291,8 @@ def test_only_selected_catalog_fields_are_rendered_and_markup_is_escaped(catalog
     assert r"\[bracket\] \| &lt;sample&gt; \*emphasis\*" in markdown
     assert "<sample>" not in html
     assert "Reviewed [bracket] | &lt;sample&gt; *emphasis*" in html
+    assert r"Definition \[scope\] \| &lt;root&gt; \*example\*" in markdown
+    assert "<root>" not in html and "Definition [scope] | &lt;root&gt; *example*" in html
     assert "synthetic-unapproved-field" not in markdown + html
 
 
@@ -472,9 +510,13 @@ def test_healthy_units_do_not_create_detailed_follow_up_boilerplate(catalog_root
     )
     assert "No unexpected finding" not in markdown
     assert "Expected defect detected" not in markdown
-    assert all(row.endswith(" | - |") for row in markdown.splitlines() if re.match(r"^\| [12] \|", row))
+    assessments = [
+        row.strip("| ").split(" | ")[-1] for row in markdown.splitlines()
+        if re.match(r"^\| [12] \|", row)
+    ]
+    assert assessments == ["No findings", "1. Matched"]
     assert "<details>" not in markdown
-    assert "| 1. Matched | - |" in markdown
+    assert markdown.count("| 1. Matched |") == 1
     assert len(re.findall(r"^\| [12] \|", markdown, re.M)) == 2
     assert "### weather-agent / v0" not in markdown
     assert "### weather-agent / issue-001" not in markdown
@@ -483,7 +525,7 @@ def test_healthy_units_do_not_create_detailed_follow_up_boilerplate(catalog_root
 def test_compact_detail_has_five_tables_and_five_ordered_version_rows_each():
     result, plan = report(excluded=2)
     markdown = render_markdown(result, allowed_units=plan)
-    heading = "| Run num | Agent version | Expected insight | Generated insight(s) | Assessment | Notes |"
+    heading = "| Run num | Agent version | Issue definition | Expected insight | Generated insight(s) | Assessment |"
     assert markdown.count(heading) == 5
     assert len(re.findall(r"^\| [1-5] \|", markdown, re.M)) == 25
     for section in markdown.split(heading)[1:]:

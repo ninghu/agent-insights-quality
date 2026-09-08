@@ -143,6 +143,7 @@ def test_private_overall_and_agent_views_link_the_issue_not_the_provider_version
     context = load_report_context(ROOT, allowed_units=plan)
     metadata = ReportMetadata("2026-09-05", "Sweden Central", "b" * 40)
     href = f"https://github.com/ninghu/agent-insights-quality/blob/{metadata.source_revision}/ISSUE_CATALOG.md#issue-001"
+    definition = context.for_plan(plan)[plan[2].unit_id].expected_symptom
     for agent in (None, "weather-agent"):
         markdown = render_private_markdown(
             result, allowed_units=plan, review_context=review, report_context=context,
@@ -150,6 +151,9 @@ def test_private_overall_and_agent_views_link_the_issue_not_the_provider_version
         )
         assert f"13 ([issue-001]({href}))" in markdown
         assert f'13 (<a href="{href}">issue-001</a>)' in markdown_view(markdown)
+        issue_row = next(row for row in markdown.splitlines() if f"13 ([issue-001]({href}))" in row)
+        assert issue_row.strip("| ").split(" | ")[2] == definition
+        assert "| Issue definition | Expected insight |" in markdown and "| Notes |" not in markdown
         assert "#v0" not in markdown
     assert result.to_dict() == before
 
@@ -240,7 +244,7 @@ def test_readiness_exclusion_retains_actual_deployment_without_claiming_no_findi
     markdown = render_private_markdown(result, allowed_units=(planned,), review_context=context)
     assert "27 (issue-003)" in markdown
     assert "Not generated (trace readiness insufficient)" in markdown
-    assert "| Unconfirmed |" in markdown
+    assert "| Unconfirmed<br>Evidence incomplete." in markdown
     assert "Unconfirmed rows are excluded from the score, not counted as misses" in markdown
     assert "actual-weather-object" not in markdown
     assert "Expected defect: Missed" not in markdown
@@ -375,7 +379,9 @@ def test_disagreement_explains_both_full_passes_without_rejudgment_or_archive_ch
     assert review_reason not in re.sub(r"<details>.*?</details>", "", html)
     assert "1. Unconfirmed" in markdown
     row = next(line for line in markdown.splitlines() if line.startswith("| 1 |"))
-    assert "| 1. Unconfirmed |" in row
+    assessment_cell = row.strip("| ").split(" | ")[-1]
+    assert assessment_cell.startswith("1. Unconfirmed<br>")
+    assert "Review disagreement." in assessment_cell and "<details>" in assessment_cell
     assert "Core: unknown; classification: unknown." in html
     assert result.counts.expected_issues == result.counts.noise_cards == 0
     assert not result.units[0].scorable
@@ -508,7 +514,7 @@ def test_private_miss_identifies_insights_and_preserves_observation_count(tmp_pa
     context = RetainedReviewContext(runtime, "synthetic-review", result)
     markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
     missed_row = next(row for row in markdown.splitlines() if "| 13 (issue-001) |" in row)
-    assert "| Missed |" in missed_row
+    assert "| Missed<br>Observed 1/10. |" in missed_row
     assert "Observed 1/10." in missed_row
     assert "Expected defect missed" not in missed_row and "<details>" not in missed_row
 
@@ -573,7 +579,9 @@ def test_expected_miss_precedes_non_target_card_without_changing_its_saved_judgm
     context = RetainedReviewContext(runtime, "synthetic-passes", result)
     markdown = render_private_markdown(result, allowed_units=plan, review_context=context)
     row = next(line for line in markdown.splitlines() if line.startswith("| 1 |"))
-    assert "| Missed<br>1. Unexpected |" in row
+    assessment_cell = row.strip("| ").split(" | ")[-1]
+    assert assessment_cell.startswith("Missed<br>1. Unexpected<br>Observed 1/10.")
+    assert "<details>" in assessment_cell
     assert "Observed 1/10." in row
     assert "Generated finding concerns a different claim." not in row
     assert "Correct (other)" not in markdown and "1. Correct" not in row
@@ -596,7 +604,7 @@ def test_baseline_rows_have_no_expected_issue_outcome(tmp_path):
     baseline_rows = [row for row in markdown.splitlines() if "(v0)" in row and row.startswith("| ")]
     assert len(baseline_rows) == 2
     assert all("Expected issue:" not in row for row in baseline_rows)
-    assert all("| 1. Unexpected |" in row for row in baseline_rows)
+    assert all(row.strip("| ").split(" | ")[-1].startswith("1. Unexpected<br>") for row in baseline_rows)
 
 
 def test_private_agent_heading_uses_verified_native_foundry_link_only(tmp_path):
