@@ -72,6 +72,7 @@ def healthcare_baseline_cases():
         "guardrails": (5, "probe", 0),
         "booking-confirm": (6, "probe", 0),
         "booking-correction": (6, "probe", 1),
+        "comparison-resumed": (6, "probe", 2),
         "transition-review": (9, "setup", 0),
         "transition-denied": (9, "probe", 0),
         "transition-confirm": (9, "probe", 1),
@@ -299,6 +300,12 @@ def test_healthcare_envelope_schema_rejects_nested_slot_identity(case, nested_sl
     semantic = assertions(healthcare_baseline_cases()[case])
     validator = Draft202012Validator(semantic["json_schema"])
     envelope = copy.deepcopy(semantic["exact_json_fields"])
+    for name, value in (
+        ("message", "Please confirm"),
+        ("warning", "Schedule evidence for 2026-09-15 is unavailable."),
+    ):
+        if name in semantic["json_schema"]["required"]:
+            envelope[name] = value
     validator.validate(envelope)
     slot_id = envelope["slot"]
     assert isinstance(slot_id, str)
@@ -339,6 +346,75 @@ def test_healthcare_pending_proposal_can_disclose_gap_without_nesting_slot():
     assert unavailable_date in envelope["warning"]
     without_warning = {key: value for key, value in envelope.items() if key != "warning"}
     assert unavailable_date not in json.dumps(without_warning)
+
+
+@pytest.mark.parametrize("index,phase", [(5, "probe"), (6, "setup")])
+def test_cross_date_proposal_still_requires_both_confirmation_request_and_gap(index, phase):
+    semantic = assertions(case_step(traffic("healthcare-agent"), index, phase))
+    validator = Draft202012Validator(semantic["json_schema"])
+    envelope = {
+        **semantic["exact_json_fields"],
+        "message": "Please confirm",
+        "warning": "Schedule evidence for 2026-09-15 is unavailable.",
+    }
+    validator.validate(envelope)
+    for omitted in ("message", "warning"):
+        assert not validator.is_valid({key: value for key, value in envelope.items() if key != omitted})
+    assert semantic["required_claims"] and semantic["forbidden_claims"]
+
+
+@pytest.mark.parametrize("case", ["booking-confirm", "booking-correction"])
+def test_user_selected_evidenced_booking_allows_unrelated_warning_to_be_omitted(case):
+    semantic = assertions(healthcare_baseline_cases()[case])
+    envelope = copy.deepcopy(semantic["exact_json_fields"])
+    if envelope["approval"] == "pending":
+        envelope["message"] = "Please confirm"
+    validator = Draft202012Validator(semantic["json_schema"])
+    validator.validate(envelope)
+    validator.validate({
+        **envelope, "warning": "Schedule evidence for the other date, 2026-09-15, remains unavailable.",
+    })
+    assert "warning" not in semantic["json_schema"]["required"]
+    for mandatory in ("approval", "account_scope"):
+        assert not validator.is_valid({key: value for key, value in envelope.items() if key != mandatory})
+    if envelope["approval"] == "pending":
+        assert not validator.is_valid({key: value for key, value in envelope.items() if key != "message"})
+
+
+def test_returning_to_wider_comparison_requires_retained_gap_without_a_booking_action():
+    request = healthcare_baseline_cases()["comparison-resumed"]
+    semantic = assertions(request)
+    declared_coverage = set(re.findall(r'"([^"]+)"', text(request)))
+    assert declared_coverage == {"complete", "partial", "unknown"}
+    assert semantic["json_schema"]["properties"]["coverage"]["const"] in declared_coverage
+    validator = Draft202012Validator(semantic["json_schema"])
+    response = copy.deepcopy(semantic["exact_json_fields"])
+    validator.validate(response)
+    assert not validator.is_valid({**response, "coverage": "complete"})
+    assert not validator.is_valid({**response, "unknown_dates": []})
+    assert not validator.is_valid({
+        **response, "dates_with_evidence": response["dates_with_evidence"] + response["unknown_dates"],
+    })
+    assert not validator.is_valid({**response, "action": "create_appointment"})
+    assert "unavailable" not in text(request).lower()
+    attempts = load_attempts(load_catalog(ROOT).target("healthcare-agent/v0"))
+    assert len(attempts) == 10
+    assert len(attempts[5].steps) == 4
+    assert attempts[5].steps[-1].body == request["request"]["body"]
+
+
+def test_healthcare_scope_contract_changes_select_only_its_baseline():
+    catalog = load_catalog(ROOT)
+    records = {
+        target.key: LastTest("previous-source", "PASS", "2026-09-01")
+        for target in catalog.targets
+    }
+    selected = select_staging(catalog, last_tests=records, changed_paths=[
+        Path("agents", "healthcare-agent", "v0", name)
+        for name in ("definition.json", "traffic.json", "implementation.yaml")
+    ])
+    assert [item.target.key for item in selected] == ["healthcare-agent/v0"]
+    assert selected[0].action == "traffic"
 
 
 def test_healthcare_scope_fixture_contains_distinguishable_records():

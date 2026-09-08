@@ -582,6 +582,15 @@ and missing evidence remain explicit assessment failures, not successful measure
 
 ### Bounded Daily judgment correction
 
+The first request states the same root-group/match invariant as the local validator.
+Correct cards for one independently evidenced expected root all use `expected_match=true`;
+the aggregator, not a model's choice of a primary card, assigns one detection and extra
+Duplicates. First-call schema descriptions preserve this distinction before review is needed.
+The input also explains retained, exactly owned logs with missing parents. That diagnostic
+alone is not a unit-wide acquisition failure; an essential limitation still needs its affected
+claim and missing proof explained. Current-core uncertainty and real evidence gaps remain
+unscorable under the unchanged policy.
+
 New Daily runs freeze `daily-assessment-two-slots-v1`: one initial judgment plus either
 one focused review or one root-consistency correction, never both. Existing provider
 HTTP retry/cooldown budgets are separate and unchanged. Only a schema-valid, fully covered

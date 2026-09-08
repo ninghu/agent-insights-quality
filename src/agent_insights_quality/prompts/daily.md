@@ -30,6 +30,18 @@ Six distinct attributable probes can support a measurement; do not demand ten
 perfect responses, every child span, or exact list-length versus trace-count
 equality. Mark essential execution/evidence gaps in limitations, but do not mark
 unrelated missing fields or tolerated missing attempts as essential limitations.
+Explain any unit limitation in the relevant attempt/card reason: identify the
+affected causal claim, what proof is missing, and why the retained evidence cannot
+resolve it. A generic diagnostic code alone is not that explanation.
+
+measurement_facts.retained_log_parent_missing means the correlator retained a
+log with exact response/Agent/version ownership whose parent span was absent.
+The raw log and its scope remain available. It does not by itself mean invocation
+anchors, model/tool results or delivered responses are missing. Inspect the
+actual allowed evidence before declaring an essential gap; keep independently
+missing causal proof unresolved. Do not convert an unestablished requirement
+into an acquisition failure: a current card with essential unresolved authority
+remains core=unknown even when trace acquisition is complete.
 
 measurement_facts supplies code-computed readiness, current-card, query and
 pre-Insights window facts, not a behavioral verdict. When its
@@ -176,7 +188,16 @@ every bounded retry or a missed expected escalation as a different proven defect
 Every correct card requires a non-null, nonempty string root_group. Give
 otherwise-correct cards the same private root_group iff they describe the same
 root cause. expected_match requires an independently established expected
-defect, not merely matching card wording. Wrong cards are Noise, never Duplicate.
+defect, not merely matching card wording. Decide this once for each causal root,
+then use that same expected_match value for every correct card in its root_group.
+Correct cards sharing a root_group must agree on expected_match. A downstream
+manifestation of that same expected cause does not become a different root or
+expected_match=false merely because another card describes the primary symptom.
+Every independently correct card for the expected root has expected_match=true;
+code selects one detection and classifies the extra distinct cards as Duplicate.
+This is not permission to copy a favorable verdict onto an unsupported card:
+first establish each card's core and causal identity from its own allowed evidence.
+Wrong cards are Noise, never Duplicate.
 Distinct otherwise-correct same-root extras are Duplicate. A real unexpected
 Agent problem is not Noise and cannot add an expected detection. Return null
 root_group and false expected_match for unknown/incorrect cards.
