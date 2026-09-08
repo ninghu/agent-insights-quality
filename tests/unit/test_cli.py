@@ -1011,10 +1011,10 @@ def test_next_source_staging_selects_all_missing_after_global_failure_without_re
     original = app.cloud.ensure_deployment
     def interrupted():
         raise OSError(5, "synthetic global credential failure")
-    async def deploy(target, *args):
+    async def deploy(target, *args, resume=False):
         if not target.is_baseline:
             interrupted()
-        return await original(target, *args)
+        return await original(target, *args, resume=resume)
     app.cloud.ensure_deployment = deploy
     assert app.cli("run-staging", "--full") == 2
     capsys.readouterr()
