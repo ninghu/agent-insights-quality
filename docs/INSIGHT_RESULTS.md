@@ -35,8 +35,10 @@ Confirm that evidence was visible for the actual analysis window before calling 
 Engine gap. Late telemetry, untriggered Agent defects, malformed execution and incomplete evidence
 must not be blamed on the Insight Engine.
 
-Review the private per-Agent report's five version rows alongside its saved classifications and
-short Notes. Normal detections and healthy baselines need no Notes. Assessment labels match the
+Review the private per-Agent report's five version rows alongside the reviewed Issue definition,
+Expected insight and saved Assessment. There is no separate Notes column: observation counts,
+exclusions, duplicate references and collapsed rationales stay in Assessment. Normal detections
+and healthy baselines show only their assessment labels. Assessment labels match the
 generated-card numbers: **1. Matched**, **2. Noise**, **3. Duplicate**, and so on.
 **Unexpected** is a saved valid non-target finding, without expected-detection credit or an automatic
 Agent-fix recommendation. **Missed** means Insights did not diagnose the expected defect.
