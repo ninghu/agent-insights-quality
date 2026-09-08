@@ -646,9 +646,7 @@ def _html_agents(
         if access_links:
             references = (
                 f'<a href="{escape(access_links[agent]["html"], quote=True)}" '
-                'style="color:#0067b8;">View report</a><br>'
-                f'<a href="{escape(access_links[agent]["markdown"], quote=True)}" '
-                'style="color:#0067b8;">Download MD</a>'
+                'style="color:#0067b8;">View report</a>'
             )
         rows.append((name, card_text, references, assignments.get(agent, "Assignment unavailable")))
     body = html_table(
