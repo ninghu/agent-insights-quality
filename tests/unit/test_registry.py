@@ -1,14 +1,14 @@
 import asyncio
 import json
 import sys
-from dataclasses import asdict, replace
+from dataclasses import asdict, make_dataclass, replace
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from agent_insights_quality.contracts import Deployment, Environment
 from agent_insights_quality.errors import QualityError
-from agent_insights_quality.registry import AzureRegistryBlob, DeploymentRegistry
+from agent_insights_quality.registry import AzureRegistryBlob, DeploymentRegistry, _decode, _document
 from agent_insights_quality.state import RuntimeStore
 
 
@@ -114,8 +114,45 @@ def test_content_identity_round_trip_preserves_git_provenance_and_legacy_entries
     } == legacy
 
 
+def test_canonical_content_record_survives_legacy_constructor_and_writer_round_trip():
+    # Constructor contract verified against actual 0ff8dbfd and 222a19bb readers.
+    legacy_type = make_dataclass("LegacyDeployment", [
+        ("target_key", str), ("agent_name", str), ("provider_version", str),
+        ("agent_type", str), ("source_revision", str), ("details", dict),
+    ], frozen=True)
+    current = content_deployment()
+    document = _document({current.target_key: current})
+    value = document["targets"][current.target_key]
+    assert "content_hash" not in value
+    assert value["details"]["content_hash"] == current.content_hash
+    legacy = legacy_type(**value)
+    assert legacy.source_revision == current.source_revision
+    assert legacy.provider_version == current.provider_version
+    rewritten = {"schema_version": "1.0", "targets": {legacy.target_key: asdict(legacy)}}
+    assert rewritten == document
+    assert _decode(json.dumps(rewritten).encode())[current.target_key] == current
+    assert "content_hash" not in current.details
+
+
+def test_draft_top_level_hash_is_read_without_rewriting_canonical_blob(tmp_path):
+    current = content_deployment()
+    draft = {"schema_version": "1.0", "targets": {current.target_key: asdict(current)}}
+    original = json.dumps(draft).encode()
+    blob = Blob(original)
+    store = RuntimeStore("daily", root=tmp_path)
+    registry = DeploymentRegistry(blob, store.outbox("registry"))
+    with store.ownership():
+        asyncio.run(registry.load())
+    assert registry.get(current.target_key) == current
+    assert not blob.writes and blob.data == original
+    projected = store.outbox("registry").read("deployment-registry")
+    assert "content_hash" not in projected["targets"][current.target_key]
+    assert projected["targets"][current.target_key]["details"]["content_hash"] == current.content_hash
+
+
+@pytest.mark.parametrize("location", ["top_level", "details"])
 @pytest.mark.parametrize("mutation", ["invalid_hash", "missing_metadata", "mismatched_hash", "mismatched_source"])
-def test_invalid_content_identity_never_replaces_registry_cache(tmp_path, mutation):
+def test_invalid_content_identity_never_replaces_registry_cache(tmp_path, mutation, location):
     value = asdict(content_deployment())
     if mutation == "invalid_hash":
         value["content_hash"] = "not-a-commit-or-content-hash"
@@ -124,6 +161,8 @@ def test_invalid_content_identity_never_replaces_registry_cache(tmp_path, mutati
     else:
         key = "aiq_content_hash" if mutation == "mismatched_hash" else "aiq_source_revision"
         value["details"]["metadata"][key] = "different"
+    if location == "details":
+        value["details"]["content_hash"] = value.pop("content_hash")
     blob = Blob(json.dumps({"schema_version": "1.0", "targets": {value["target_key"]: value}}).encode())
     store = RuntimeStore("daily", root=tmp_path)
     cache = store.outbox("registry")
@@ -134,6 +173,50 @@ def test_invalid_content_identity_never_replaces_registry_cache(tmp_path, mutati
             asyncio.run(DeploymentRegistry(blob, cache).load())
     assert cache.read("deployment-registry") == previous
     assert not blob.writes
+
+
+def test_conflicting_hash_representations_fail_before_cache_or_blob_change(tmp_path):
+    current = content_deployment()
+    value = asdict(current)
+    value["details"]["content_hash"] = "v1:sha256:" + "b" * 64
+    blob = Blob(json.dumps({"schema_version": "1.0", "targets": {current.target_key: value}}).encode())
+    original = blob.data
+    store = RuntimeStore("daily", root=tmp_path)
+    cache = store.outbox("registry")
+    previous = {"schema_version": "1.0", "targets": {}}
+    with store.ownership():
+        cache.save_progress("deployment-registry", previous)
+        with pytest.raises(QualityError, match="registry_format_invalid"):
+            asyncio.run(DeploymentRegistry(blob, cache).load())
+    assert cache.read("deployment-registry") == previous
+    assert not blob.writes and blob.data == original
+
+
+def test_in_memory_conflicting_details_hash_is_not_silently_overwritten(tmp_path):
+    current = content_deployment()
+    conflicting = replace(current, details={
+        **current.details, "content_hash": "v1:sha256:" + "b" * 64,
+    })
+    store = RuntimeStore("daily", root=tmp_path)
+    blob = Blob()
+    registry = DeploymentRegistry(blob, store.outbox("registry"))
+    with store.ownership():
+        asyncio.run(registry.load())
+        with pytest.raises(QualityError, match="registry_format_invalid"):
+            asyncio.run(registry.save(conflicting))
+    assert not blob.writes and not registry.records
+
+
+@pytest.mark.parametrize("details", [None, [], [("provisioning_state", "active")], "not an object"])
+def test_registry_projection_does_not_coerce_invalid_details(tmp_path, details):
+    store = RuntimeStore("daily", root=tmp_path)
+    blob = Blob()
+    registry = DeploymentRegistry(blob, store.outbox("registry"))
+    with store.ownership():
+        asyncio.run(registry.load())
+        with pytest.raises(QualityError, match="registry_format_invalid"):
+            asyncio.run(registry.save(replace(deployment(), details=details)))
+    assert not blob.writes and not registry.records
 
 
 def document(*records):
@@ -173,6 +256,22 @@ class UncertainBlob(Blob):
             status=412 if self.conflict else None,
             request_accepted=False if self.conflict else None,
         )
+
+
+def test_content_hash_unknown_write_reconciles_the_compatible_representation(tmp_path):
+    store = RuntimeStore("daily", root=tmp_path)
+    blob = UncertainBlob()
+    registry = DeploymentRegistry(blob, store.outbox("registry"))
+    current = content_deployment()
+    with store.ownership():
+        asyncio.run(registry.load())
+        asyncio.run(registry.save(current))
+        asyncio.run(registry.save(current))
+    assert len(blob.writes) == 1 and blob.reads == 2
+    value = json.loads(blob.data)["targets"][current.target_key]
+    assert "content_hash" not in value
+    assert value["details"]["content_hash"] == current.content_hash
+    assert registry.get(current.target_key) == current
 
 
 @pytest.mark.parametrize("conflict", [False, True])

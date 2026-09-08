@@ -459,8 +459,9 @@ unrecorded Type/cutoff fields honestly; they do not refetch or invent a newer re
 
 ### Deployment content identity and Git provenance
 
-New deployments carry a separate `content_hash` (`v1:sha256:…`) in the private
-registry/checkpoint and `aiq_content_hash` in native metadata. `source_revision`
+New deployments carry a separate `content_hash` (`v1:sha256:…`) in memory and
+source-bound work checkpoints, `details.content_hash` in the canonical private
+registry, and `aiq_content_hash` in native metadata. `source_revision`
 and `aiq_source_revision` remain actual Git provenance: the last commit touching
 the selected deployment input paths, **not** a fingerprint. A reused version keeps
 its original deployment provenance; the run separately retains its own source
@@ -517,6 +518,36 @@ the returned identity; subsequent discovery/readback must verify it. Local fake-
 tests do not establish native metadata retention/readback, ACR availability or
 end-to-end version reuse. Those need separately authorized native acceptance; this
 change authorizes no deployment, traffic, reassessment, rescoring or scheduling.
+
+### Registry compatibility and source-bound cutover
+
+The canonical v1 registry keeps its original six deployment fields: `target_key`,
+`agent_name`, `provider_version`, `agent_type`, `source_revision` and `details`.
+Older source readers construct `Deployment(**record)` and reject a new top-level
+`content_hash`; they can read and preserve the extensible `details` projection.
+The new reader validates the nested hash against recorded native metadata and normalizes it
+to the in-memory field. It also accepts the earlier draft top-level representation,
+but rejects conflicting dual declarations. Loading never rewrites the canonical blob;
+only ordinary validated, conditional saves emit the compatible representation.
+Do not bulk backfill legacy hashes or rewrite frozen work checkpoints.
+
+This is **registry read compatibility**, not permission to interchange runner versions.
+New work checkpoints still require their owning source, and old code still uses Git-based
+deployment selection without the content/provenance conflict guard. Older writers may
+advance a target's current pointer to a hashless version; retained native versions and
+frozen work records remain the recovery authority. Do not resume a new run under old code,
+restore a stale whole-registry backup, or claim that an old/new writer mixture is safe.
+
+Review cutover separately for each profile, under its normal ownership lock. Staging and
+Daily use different canonical registry blobs and runtime roots. Inspect the actual active
+controls, frozen source and unresolved remote outcomes before authorizing new work; finish
+or reconcile an old run with its owning source rather than changing its lineage or clearing
+its lock. Preserve private canonical snapshots/ETags and every existing native version.
+If a draft top-level record is found remotely, stop for an explicitly reviewed format
+migration; local acceptance of that format is not proof that older readers can recover it.
+The [Daily two-slot call journal](#bounded-daily-judgment-correction) and
+[targeted-staging source/predecessor checks](#explicit-single-target-staging) remain unchanged.
+None of these rules authorizes native acceptance, a deployment or a schedule.
 
 New Insights polling has a separate `insights_poll_timeout_seconds` budget (default 1200).
 Deployment polling retains `poll_timeout_seconds` (default 600); trace hydration is separate.
