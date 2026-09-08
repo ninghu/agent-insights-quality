@@ -251,7 +251,10 @@ section is inserted, including hidden private context.
 The authoritative detail is `report.md`: one table per Agent with stable Agent-name anchors and
 five rows for the baseline plus four issue versions. Run num, actual Agent version, Expected
 insight, Generated insight(s), Assessment and short Notes keep review compact. Each row represents
-ten attempts, not one call. New/updated cards are listed with aligned Correct/Noise/Duplicate
+ten attempts, not one call. In Agent version, reviewed issue IDs link to their `ISSUE_CATALOG.md`
+anchor at the report's recorded source commit; native version numbers and `v0` remain plain text.
+Without reviewed catalog context or source metadata, IDs remain plain text rather than guessing.
+New/updated cards are listed with aligned Correct/Noise/Duplicate
 labels; unchanged historical cards are omitted. Missed and unscored cases remain distinct.
 Assessment numbers align with generated cards: "1. Matched", "2. Noise", "3. Duplicate".
 "Missed" marks an undetected expected defect; "Unconfirmed" rows are excluded, not misses.

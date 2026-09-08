@@ -9,7 +9,7 @@ import re
 
 from .privacy import public_projection, warning_text
 from .report_context import ReportContextError, ReportMetadata, ReviewedReportContext
-from .report_links import VerifiedScoringLink, validate_foundry_link
+from .report_links import REPOSITORY, VerifiedScoringLink, issue_catalog_link, validate_foundry_link
 from .report_review import RetainedReviewContext
 from .results import PlannedUnit, QualityResult, UnitId
 
@@ -98,6 +98,11 @@ _DETAILS = re.compile(
 _DETAIL_LABEL = re.compile(
     r"(<br><strong>Finding [1-9][0-9]*: " + _ASSESSMENT_LABEL + r"</strong><br>)"
 )
+_ISSUE_LINK = re.compile(
+    rf"(?<!\\)\[(?P<issue>issue-[0-9]{{3}})\]"
+    rf"\(https://github\.com/{re.escape(REPOSITORY)}/blob/"
+    rf"(?P<revision>[0-9a-f]{{40}})/ISSUE_CATALOG\.md#(?P=issue)\)"
+)
 
 
 def _assessment_details(entries: list[tuple[int, dict]]) -> str:
@@ -145,12 +150,19 @@ _FINDING_LABELS = {
 }
 
 
-def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private: bool) -> str:
+def _table_row(
+    number: int, unit: dict, context: dict, detail: dict, *,
+    private: bool, metadata: ReportMetadata | None,
+) -> str:
     identity = _identity(unit)
     deployment = detail.get("deployment")
+    logical_version = _markdown_text(identity.logical_version)
+    if context and metadata and unit["kind"] == "issue":
+        href = issue_catalog_link(identity.logical_version, metadata.source_revision)
+        logical_version = f"[{logical_version}]({href})"
     version = (
-        f"{deployment['provider_version']} ({identity.logical_version})"
-        if deployment else f"{identity.logical_version} (deployment not recorded)"
+        f"{_markdown_text(deployment['provider_version'])} ({logical_version})"
+        if deployment else f"{logical_version} (deployment not recorded)"
     )
     expected = (
         "None (healthy baseline)" if unit["kind"] == "baseline" else
@@ -206,7 +218,7 @@ def _table_row(number: int, unit: dict, context: dict, detail: dict, *, private:
     if details:
         rendered_notes.append(_assessment_details(details))
     cells = [
-        str(number), _markdown_text(version), _markdown_text(expected),
+        str(number), version, _markdown_text(expected),
         "<br>".join(_markdown_text(title) for title in titles),
         "<br>".join(_markdown_text(verdict) for verdict in verdicts),
         "<br>".join(rendered_notes) or "-",
@@ -272,7 +284,7 @@ def _render_markdown(
             "| --- | --- | --- | --- | --- | --- |",
             *[_table_row(
                 number, unit, context, private.get(_identity(unit), {}) if private is not None else {},
-                private=private is not None,
+                private=private is not None, metadata=metadata,
             ) for number, unit in enumerate(units, 1)],
         ]
     if private is not None:
@@ -305,13 +317,23 @@ def markdown_view(markdown: str) -> str:
         line = re.sub(r"\\([\\`*\[\]|_])", r"\1", line)
         return escape(unescape(line))
 
+    def linked_text(line):
+        parts, end = [], 0
+        for match in _ISSUE_LINK.finditer(line):
+            parts.append(text(line[end:match.start()]))
+            href = issue_catalog_link(match["issue"], match["revision"])
+            parts.append(f'<a href="{href}">{match["issue"]}</a>')
+            end = match.end()
+        parts.append(text(line[end:]))
+        return "".join(parts)
+
     def inline(line):
         # Recognize exact generated markup before decoding untrusted entities.
         if line.startswith("**Assigned To:** "):
             return "<strong>Assigned To:</strong> " + text(line[len("**Assigned To:** "):])
         parts, end = [], 0
         for match in _DETAILS.finditer(line):
-            parts.append("<br>".join(text(part) for part in line[end:match.start()].split("<br>")))
+            parts.append("<br>".join(linked_text(part) for part in line[end:match.start()].split("<br>")))
             body = []
             for part in _DETAIL_LABEL.split(match[1]):
                 if _DETAIL_LABEL.fullmatch(part):
@@ -320,7 +342,7 @@ def markdown_view(markdown: str) -> str:
                     body.append("<br>".join(escape(unescape(value)) for value in part.split("<br>")))
             parts.append("<details><summary>Assessment details</summary>" + "".join(body) + "</details>")
             end = match.end()
-        parts.append("<br>".join(text(part) for part in line[end:].split("<br>")))
+        parts.append("<br>".join(linked_text(part) for part in line[end:].split("<br>")))
         return "".join(parts)
 
     def cells(line):
