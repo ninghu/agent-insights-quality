@@ -380,9 +380,11 @@ issuance—not seven days plus skew. The actual UTC expiry and URLs are frozen i
 versioned access record, bound by hash to the prepared email. Keys/token credentials themselves
 are never persisted. The provider is closed before email preparation.
 
-Each email Human Validation cell has **View report** and **Download MD**, each pointing to that
-Agent's own blob with its own read grant, not a fragment in the overview. The email shows the
-exact expiry and a forwarding warning. No SAS URL appears in another report's body, the uploaded
+Each email Human Validation cell has **View report**, pointing to that Agent's own HTML blob
+with its read grant, not a fragment in the overview. Markdown archives and their private access
+records remain available, including through the separate access-refresh preview; email does not
+duplicate them with a **Download MD** link. The email shows the exact expiry and a forwarding
+warning. No SAS URL appears in another report's body, the uploaded
 manifest, Git, ADX, operational events or CLI output. Status exposes only the access record/preview
 paths, expiry and readiness under `private_report.access`. Bare storage references still require
 authenticated storage access; the separate, approved SAS grants provide browser access directly
