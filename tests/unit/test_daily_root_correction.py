@@ -41,6 +41,24 @@ def test_valid_initial_and_normal_review_are_unchanged():
         assert "initial_validation_error" not in assessed.private_detail
 
 
+def test_first_request_explains_shared_root_matching_before_duplicate_review():
+    sol = fake.Sol()
+    data = fake.evidence()
+    assessed = fake.daily(data, sol, after=CARDS)
+    assert len(sol.calls) == 2
+    assert "correction" not in sol.calls[1] and "review" in sol.calls[1]
+    assert sol.calls[1]["review"]["candidate_reasons"] == ["duplicate_root"]
+    assert "Correct cards sharing a root_group must agree on expected_match." in sol.instructions[0]
+    assert "code selects one detection" in sol.instructions[0]
+    fields = sol.schemas[0]["properties"]["cards"]["items"]["anyOf"][0]["properties"]
+    assert "causal root before deciding expected_match" in fields["root_group"]["description"]
+    assert "Never set false merely to mark a Duplicate" in fields["expected_match"]["description"]
+    assert [card["expected_match"] for card in assessed.private_detail["initial"]["cards"]] == [True, True]
+    result = fake.aggregate(data, assessed)
+    assert result.counts.correct_issues == result.counts.duplicate_cards == 1
+    assert not assessed.unit_result.exclusion_reasons
+
+
 def test_only_valid_correction_is_judged_from_identical_evidence_without_label_propagation():
     data, sol = fake.evidence(), fake.Sol(conflict, corrected)
     assessed = fake.daily(data, sol, after=CARDS)

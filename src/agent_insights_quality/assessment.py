@@ -131,8 +131,24 @@ DAILY_SCHEMA = _object({
         "items": _object({
             "card_alias": {"type": "string"},
             "core": {"enum": [value.value for value in CoreVerdict]},
-            "root_group": {"type": ["string", "null"], "minLength": 1},
-            "expected_match": {"type": "boolean"},
+            "root_group": {
+                "type": ["string", "null"], "minLength": 1,
+                "description": (
+                    "Group independently correct cards by causal root before deciding expected_match. "
+                    "Use the same group for the same cause, including downstream manifestations; "
+                    "use different groups only for independently fixable causes."
+                ),
+            },
+            "expected_match": {
+                "type": "boolean",
+                "description": (
+                    "Whether this correct card's causal root is the independently evidenced expected "
+                    "defect, not whether this card is the first or primary detection. Correct cards "
+                    "sharing a root_group must agree on expected_match. Every correct card for the "
+                    "expected root has true, including same-root extras; code assigns detection and "
+                    "Duplicate counts. Never set false merely to mark a Duplicate. Baselines are false."
+                ),
+            },
             "citations": _CITATIONS,
             "severity": {"enum": [value.value for value in DiagnosticVerdict]},
             "proposed_fix": {"enum": [value.value for value in DiagnosticVerdict]},
@@ -142,6 +158,13 @@ DAILY_SCHEMA = _object({
     "limitations": {
         "type": "array", "uniqueItems": True,
         "items": {"enum": ["incomplete_execution", "incomplete_evidence"]},
+        "description": (
+            "Only essential gaps preventing a causal judgment. Explain the affected claim and "
+            "missing proof in the relevant attempt/card reason. Retained log-parent gaps alone "
+            "do not establish missing invocation or model/tool evidence. An unresolved normative "
+            "obligation belongs in a current card's unknown core; it is not automatically an "
+            "acquisition limitation. Preserve any independently essential evidence gap."
+        ),
     },
 })
 
@@ -424,6 +447,10 @@ def _measurement_facts(
             engine_window is None
             or engine_window.get("coverage_proven") is True and not engine_window.get("reasons")
         ),
+        "retained_log_parent_missing": any(
+            "attributed_log_parent_missing" in item["gaps"]
+            for item in (snapshot, visible_snapshot)
+        ),
     }
     facts["unit_limitations_not_applicable"] = (
         baseline and facts["current_card_count"] == 0
@@ -516,7 +543,7 @@ async def _complete(sol: SolPort, payload: dict, *, daily: bool) -> dict:
             _object({
                 **card_fields,
                 "core": {"enum": [CoreVerdict.CORRECT.value]},
-                "root_group": {"type": "string", "minLength": 1},
+                "root_group": {**card_fields["root_group"], "type": "string"},
                 "expected_match": (
                     false if decoded["target"]["validation_mode"] == "baseline"
                     else card_fields["expected_match"]

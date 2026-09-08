@@ -106,10 +106,12 @@ class Sol:
         self.factories = factories or (output,)
         self.calls = []
         self.schemas = []
+        self.instructions = []
 
     async def complete_json(self, *, instructions, payload, schema):
         self.calls.append(deepcopy(payload))
         self.schemas.append(deepcopy(schema))
+        self.instructions.append(instructions)
         factory = self.factories[min(len(self.calls) - 1, len(self.factories) - 1)]
         return factory(expand_payload(payload))
 
