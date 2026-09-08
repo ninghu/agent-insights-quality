@@ -11,7 +11,7 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from .contracts import Target
-from .results import UnitId
+from .results import ISSUE_CATEGORIES, UnitId
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,12 @@ def load_catalog(root: Path) -> Catalog:
         yaml.safe_load((root / "catalogs" / filename).read_text(encoding="utf-8"))
         for filename in ("AGENT_CATALOG.yaml", "ISSUE_CATALOG.yaml")
     )
+    return catalog_from_documents(root, documents)
+
+
+def catalog_from_documents(root: Path, documents: tuple[dict, dict]) -> Catalog:
+    """Load caller-approved catalog snapshots without reading version source assets."""
+    root = Path(root).resolve()
     agents_doc, issues_doc = documents
     if not isinstance(agents_doc, dict) or not isinstance(issues_doc, dict):
         raise ValueError("Catalog documents must be objects")
@@ -61,6 +67,8 @@ def load_catalog(root: Path) -> Catalog:
             raise ValueError("Invalid issue catalog entry")
         if issue["id"] in by_id:
             raise ValueError("Duplicate issue identity")
+        if issue.get("category") not in ISSUE_CATEGORIES:
+            raise ValueError("Unknown reviewed issue category")
         by_id[issue["id"]] = issue
 
     names, targets, claimed = [], [], set()
@@ -121,14 +129,14 @@ def validate_catalog(catalog: Catalog) -> None:
         Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(document)
     ownership = {
-        "weather-agent": range(1, 7),
-        "healthcare-agent": range(7, 13),
-        "finance-agent": range(13, 21),
+        "weather-agent": (*range(1, 7), 38),
+        "healthcare-agent": (*range(7, 13), 37),
+        "finance-agent": (*range(13, 21), 40),
         "travel-agent": range(21, 29),
-        "support-ticket-agent": range(29, 37),
+        "support-ticket-agent": (*range(29, 37), 39),
     }
-    if set(catalog.agents) != set(ownership) or len(catalog.targets) != 41:
-        raise ValueError("Expected five Agents and 36 issues")
+    if set(catalog.agents) != set(ownership) or len(catalog.targets) != 45:
+        raise ValueError("Expected five Agents and 40 issues")
     for name, numbers in ownership.items():
         expected = {"v0", *(f"issue-{number:03d}" for number in numbers)}
         if {item.unit_id.logical_version for item in catalog.for_agent(name)} != expected:

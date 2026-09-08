@@ -233,7 +233,7 @@ def test_custom_container_without_builder_is_explicit_capability_error(target):
         )
 
 
-@pytest.mark.parametrize("version", ["v0", *(f"issue-{number:03d}" for number in range(29, 37))])
+@pytest.mark.parametrize("version", ["v0", *(f"issue-{number:03d}" for number in (*range(29, 37), 39))])
 def test_real_support_sources_satisfy_selected_acr_build_context(version, tmp_path):
     root = Path(__file__).resolve().parents[2]
     target = load_catalog(root).target("support-ticket-agent/" + version)

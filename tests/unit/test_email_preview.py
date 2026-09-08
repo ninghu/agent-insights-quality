@@ -35,10 +35,16 @@ def offline_renderer(monkeypatch):
     })
 
 
-def quality(*, failed=False, scoring_policy=None):
+def quality(*, failed=False, scoring_policy=None, categorized=False):
     baseline = PlannedUnit(UnitId("weather-agent", "v0"))
-    issue = PlannedUnit(UnitId("weather-agent", "issue-001"), "issue-001")
-    missed = PlannedUnit(UnitId("weather-agent", "issue-002"), "issue-002")
+    issue = PlannedUnit(
+        UnitId("weather-agent", "issue-001"), "issue-001",
+        "hallucinations" if categorized else None,
+    )
+    missed = PlannedUnit(
+        UnitId("weather-agent", "issue-002"), "issue-002",
+        "output_quality" if categorized else None,
+    )
     plan = (baseline, issue, missed)
     measured = (
         UnitResult(baseline.unit_id, cards=(CardVerdict("card-0001", CoreVerdict.INCORRECT),)),
@@ -54,11 +60,11 @@ def quality(*, failed=False, scoring_policy=None):
 
 def seed(
     runtime, *, mode="test", frozen=True, mutate=None, status="prepared", html=None,
-    scoring_policy=None, delivery_binding=None,
+    scoring_policy=None, delivery_binding=None, categorized=False,
 ):
     failed = mode in {"failure", "failed-test"}
     test_run = mode in {"test", "failed-test"}
-    result, plan = quality(failed=failed, scoring_policy=scoring_policy)
+    result, plan = quality(failed=failed, scoring_policy=scoring_policy, categorized=categorized)
     delivery_id = "daily-" + DAY + ("-test-2" if test_run else "")
     request = EmailRequest(
         delivery_id, PRIVATE if test_run or failed else (
@@ -210,6 +216,28 @@ def test_restyle_uses_frozen_result_current_style_and_distinct_local_identity(ru
     assert manifest["renderer"]["source_revision"] == RENDERER
     assert manifest["measurement_source_revision"] == SOURCE
     assert manifest["prepared_subject"] == request.subject
+
+
+def test_category_scores_survive_exact_and_explicit_rescoring_previews(runtime):
+    from agent_insights_quality.privacy import restore_public_result
+    from agent_insights_quality.scoring import LEGACY_SCORING_POLICY, SCORING_POLICY
+
+    request, original, plan = seed(
+        runtime, scoring_policy=LEGACY_SCORING_POLICY, categorized=True,
+    )
+    before = originals(runtime)
+    exact = exported(runtime, request)
+    assert message(exact).get_body(preferencelist=("html",)).get_content() == request.html
+    preview = exported(runtime, request, restyle=True, rescore=True)
+    payload = json.loads((preview.directory / "result.json").read_text())
+    result = restore_public_result(payload, allowed_units=plan)
+    assert result.scoring_policy == SCORING_POLICY
+    assert result.units == original.units and result.coverage == original.coverage
+    category = next(item for item in result.category_breakdown.categories if item.category == "hallucinations")
+    old_category = next(item for item in original.category_breakdown.categories if item.category == "hallucinations")
+    assert old_category.score == 80.0 and category.score == 66.7
+    assert originals(runtime) == before
+    assert result.category_breakdown.baseline == original.category_breakdown.baseline
 
 
 def test_rescoring_exports_new_policy_without_changing_measurement_or_prepared_mail(runtime):

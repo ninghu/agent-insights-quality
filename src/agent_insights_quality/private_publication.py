@@ -25,7 +25,7 @@ from .privacy import restore_public_result
 from .report_context import ReportMetadata, load_report_context
 from .report_review import RetainedReviewContext
 from .reporting import markdown_view, render_private_markdown
-from .results import PlannedUnit, QualityResult, UnitId
+from .results import PlannedUnit, QualityResult
 from .state import (
     RuntimeStore, StateError, _atomic_write, _confirm_durable, _encode,
     _inside, _open_snapshot, _parts, _unique_object,
@@ -371,7 +371,7 @@ class PrivateReportOutbox:
             "mode": "test" if test_run else "official" if result.team_report_eligible else "failure",
             "report_date": metadata.report_date, "source_revision": source_revision,
             "region": environment.region_display, "result_sha256": _hash(_json(retained)),
-            "plan_sha256": _hash(_json({"units": [asdict(u) for u in plan]})),
+            "plan_sha256": _hash(_json({"units": [u.to_dict() for u in plan]})),
             "assessment_sha256": _hash(_json(assessment)),
         }
 
@@ -430,7 +430,7 @@ class PrivateReportOutbox:
             "schema_version": "1.0", "identity": identity, "presentation_id": presentation_id,
             "account": _account(environment.storage_account_name), "container": CONTAINER,
             "prefix": f"reports/daily/{identity['mode']}/{self.run_id}/{presentation_id}",
-            "plan": [asdict(unit) for unit in allowed_units], "files": files,
+            "plan": [unit.to_dict() for unit in allowed_units], "files": files,
             "retained_review": review.provenance(),
         }
         # All bytes and destination are immutable before any provider call.
@@ -446,8 +446,8 @@ class PrivateReportOutbox:
                 "prefix", "plan", "files", "retained_review",
             } or request["schema_version"] != "1.0" or request["container"] != CONTAINER:
                 raise ValueError
-            plan = tuple(PlannedUnit(UnitId(**u["unit_id"]), u["expected_issue_alias"]) for u in request["plan"])
-            if request["plan"] != [asdict(unit) for unit in plan]:
+            plan = tuple(PlannedUnit.from_dict(unit) for unit in request["plan"])
+            if request["plan"] != [unit.to_dict() for unit in plan]:
                 raise ValueError
             pointer = self.run.read("quality-result")
             result = restore_public_result(self.run.read_artifact(pointer["artifact"]), allowed_units=plan)

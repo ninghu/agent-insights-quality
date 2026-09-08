@@ -1,7 +1,7 @@
 # Contributor guide
 
 This public repository measures Foundry Agent Insights against five synthetic Agents, five
-baselines and 36 reviewed single-root issues. The goal is credible evidence, not a high score.
+baselines and 40 reviewed single-root issues. The goal is credible evidence, not a high score.
 
 ## Rewrite status
 
@@ -35,7 +35,7 @@ staging/Daily fallbacks or stale procedural docs/skills as new authority.
 - Reuse the staging and Daily Sweden Central Accounts/Projects and their Agent objects, with
   separate g30 telemetry. Change versions/build artifacts only when deployment inputs change.
 - Staging selects changed, missing or incomplete targets. First use or explicit full staging
-  covers all 41 targets with ten attempts each. No deployed paired-v0 traffic; matched baseline
+  covers all 45 targets with ten attempts each. No deployed paired-v0 traffic; matched baseline
   comparisons belong in local Hosted tests. Retain unchanged results with their actual source/date.
 - Baselines need eight adequately evidenced healthy attempts and no proven healthy-contract
   violation. Deterministic issues need eight proven observations and no proven deterministic-contract

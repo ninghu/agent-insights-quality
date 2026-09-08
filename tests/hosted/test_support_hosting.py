@@ -6,6 +6,7 @@ import importlib.util
 from importlib.metadata import version as installed_version
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,7 +24,18 @@ from opentelemetry.trace import StatusCode
 
 
 ROOT = Path(__file__).resolve().parents[2] / "agents" / "support-ticket-agent"
-VERSIONS = ["v0", *(f"issue-{number:03}" for number in range(29, 37))]
+VERSIONS = ["v0", *(f"issue-{number:03}" for number in range(29, 37)), "issue-039"]
+PRIVATE_MARKERS = [
+    f"FICTIONAL_PRIVATE_{field}_{case}"
+    for field in ("CALLBACK", "ACCESS_NOTE") for case in ("ALPHA", "BETA")
+]
+
+
+def safe_capture(value):
+    encoded = json.dumps(value)
+    for marker in PRIVATE_MARKERS:
+        encoded = re.sub(marker, "[REDACTED]", encoded, flags=re.IGNORECASE)
+    return json.loads(encoded)
 
 
 def test_hosting_sdk_matches_deployed_plain_mapping_contract():
@@ -143,17 +155,18 @@ def invoke(monkeypatch):
         assert root.attributes["gen_ai.agent.name"] == "synthetic-support"
         assert root.attributes["gen_ai.agent.version"] == version
         assert root.attributes["issue.id"] == version
-        assert json.loads(root.attributes["gen_ai.input.messages"]) == request_body["input"]
+        assert json.loads(root.attributes["gen_ai.input.messages"]) == safe_capture(request_body["input"])
         assert root.attributes["aiq.terminal_response.success"] is True
         assert root.attributes["aiq.terminal_response.output_present"] is True
-        assert json.loads(root.attributes["gen_ai.output.messages"])[0]["parts"][0]["content"] == output
+        assert json.loads(root.attributes["gen_ai.output.messages"])[0]["parts"][0]["content"] == safe_capture(output)
+        assert root.attributes["support.telemetry.output_redacted"] == (safe_capture(output) != output)
         for child in spans:
             assert child.context.trace_id == root.context.trace_id
             if child is not root:
                 assert child.parent.span_id == root.context.span_id
             assert child.attributes["gen_ai.agent.version"] == version
         return SimpleNamespace(
-            output=output, envelope=envelope, spans=spans, requests=external_requests
+            output=output, envelope=envelope, spans=spans, requests=external_requests, root=root
         )
 
     yield send
@@ -392,3 +405,98 @@ def test_reviewed_probe_goes_through_actual_responses_host(invoke, version):
         assert result.output == assertions["exact_text"]
     for term in assertions.get("required_terms_all", []):
         assert term.lower() in result.output.lower()
+
+
+def assert_private_projection(result, ticket_id, exposed):
+    reads = [span for span in operations(result, "read_ticket") if tool_data(span)[1]["ok"]]
+    projections = operations(result, "prepare_ticket_response")
+    assert len(reads) == len(projections) == 1
+    read_args, read_result = tool_data(reads[0])
+    assert read_args == {"ticket_id": ticket_id}
+    assert read_result["ok"] is True
+    assert read_result["ticket_id"] == ticket_id
+    span = projections[0]
+    arguments, projected = tool_data(span)
+    assert arguments == {"ticket_id": ticket_id}
+    assert span.attributes["support.redaction.ticket_id"] == ticket_id
+    assert span.attributes["support.redaction.required_count"] == 2
+    assert span.attributes["support.redaction.masked_count"] == 2 - exposed
+    assert span.attributes["support.redaction.exposed_count"] == exposed
+    assert span.attributes["support.redaction.outcome"] == ("exposed" if exposed else "masked")
+    assert span.attributes["support.redaction.policy"] == "private-ticket-fields-v1"
+    assert set(span.attributes["support.redaction.required_fields"]) == {
+        "synthetic_callback", "synthetic_access_note",
+    }
+    assert span.attributes["support.telemetry.private_values_omitted"] is True
+    assert projected["private_fields"] == read_result["ticket"]["private_fields"] == {
+        "synthetic_callback": "[REDACTED]", "synthetic_access_note": "[REDACTED]",
+    }
+    captured = json.dumps([
+        {"attributes": dict(item.attributes), "events": [
+            {"name": event.name, "attributes": dict(event.attributes)} for event in item.events
+        ]} for item in result.spans
+    ])
+    assert all(marker not in captured for marker in PRIVATE_MARKERS)
+    assert all(marker not in json.dumps(result.requests) for marker in PRIVATE_MARKERS)
+    case = "ALPHA" if ticket_id == "ticket-demo-3" else "BETA"
+    other = "BETA" if case == "ALPHA" else "ALPHA"
+    for field in ("synthetic_callback", "synthetic_access_note"):
+        marker = f"FICTIONAL_PRIVATE_{field.removeprefix('synthetic_').upper()}_{case}"
+        expected = marker if exposed else "[REDACTED]"
+        assert f"private_fields.{field}={expected}" in result.output
+    assert all(marker not in result.output for marker in PRIVATE_MARKERS if marker.endswith(other))
+    assert not operations(result, "update_ticket")
+
+
+@pytest.mark.parametrize("index", range(10))
+def test_all_privacy_probes_disclose_endpoint_values_but_not_span_values(invoke, index):
+    traffic = json.loads((ROOT / "issues" / "issue-039" / "traffic.json").read_text())
+    attempt = traffic["attempts"][index]
+    probe = next(item for item in traffic["requests"] if item["id"] == attempt["probe_steps"][0])
+    ticket_id = "ticket-demo-3" if index % 2 == 0 else "ticket-demo-4"
+    for version, exposed in (("v0", 0), ("issue-039", 2)):
+        result = invoke(version, body=probe["request"]["body"])
+        assert_private_projection(result, ticket_id, exposed)
+        assert result.root.attributes["support.telemetry.output_redacted"] == bool(exposed)
+        assert len(result.requests) == len(model_spans(result)) == 1
+        assert f"Ticket ID {ticket_id}" in result.output
+
+
+@pytest.mark.parametrize("version", VERSIONS)
+def test_private_recovered_read_keeps_other_support_versions_single_root(invoke, version):
+    result = invoke(version, "Recover ticket-demo-3.")
+    assert_private_projection(result, "ticket-demo-3", 2 if version == "issue-039" else 0)
+
+
+@pytest.mark.parametrize("index,ticket_id", [(6, "ticket-demo-3"), (9, "ticket-demo-4"), (10, "ticket-demo-4")])
+def test_extended_baseline_privacy_probes_preserve_healthy_coverage(invoke, index, ticket_id):
+    traffic = json.loads((ROOT / "v0" / "traffic.json").read_text())
+    assert len(traffic["attempts"]) == 10
+    attempt = next(item for item in traffic["attempts"] if item["index"] == index)
+    probe = next(item for item in traffic["requests"] if item["id"] == attempt["probe_steps"][0])
+    result = invoke("v0", body=probe["request"]["body"])
+    assertions = probe["expected"]["semantic_assertions"]
+    for term in assertions.get("required_terms_all", []):
+        assert term in result.output
+    for term in assertions.get("forbidden_claims", []):
+        assert term not in result.output
+    if "exact_text" in assertions:
+        assert result.output == assertions["exact_text"]
+    assert_private_projection(result, ticket_id, 0)
+    if index == 9:
+        reads = operations(result, "read_ticket")
+        assert len(reads) == 2
+        assert tool_data(reads[0])[1]["error"]["code"] == "temporary_unavailable"
+    if index == 10:
+        assert tool_data(operations(result, "read_history")[0])[1]["error"]["code"] == "history_unavailable"
+        assert not result.requests
+
+
+def test_private_markers_in_history_and_model_echo_do_not_become_new_leaks(invoke):
+    marker = PRIVATE_MARKERS[0]
+    result = invoke("v0", body={"input": [
+        {"role": "user", "content": f"Earlier synthetic private label: {marker}."},
+        {"role": "user", "content": f"Summarize ticket-demo-3 without repeating {marker}."},
+    ]}, model_reply="Fictional ticket status: " + marker)
+    assert_private_projection(result, "ticket-demo-3", 0)
+    assert marker not in result.output

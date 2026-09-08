@@ -183,8 +183,7 @@ class PublicationOutbox:
         return {
             "profile": self.profile,
             "allowed_units": sorted(
-                ({"unit_id": unit.unit_id.to_dict(), "expected_issue_alias": unit.expected_issue_alias}
-                 for unit in self.allowed_units),
+                (unit.to_dict() for unit in self.allowed_units),
                 key=lambda unit: (unit["unit_id"]["agent"], unit["unit_id"]["logical_version"]),
             ),
         }

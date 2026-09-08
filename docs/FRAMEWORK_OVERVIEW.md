@@ -7,7 +7,7 @@ A score summarizes the measured cases; it is not proof of universal production q
 
 | Layer | Responsibility |
 | --- | --- |
-| Catalog and traffic | Five Agents, 36 reviewed single-root issues and canonical ten-attempt scenarios |
+| Catalog and traffic | Five Agents, 40 reviewed single-root issues and canonical ten-attempt scenarios |
 | Local tests | Pure domain checks and explicit real Hosted-framework/in-memory tracing checks |
 | Staging | Changed-target deployed execution, expected activation and scoped single-root hygiene; no Insights generation |
 | Daily | Five concurrent lanes, baseline plus four issues per Agent, trace readiness, Insights and final assessment |

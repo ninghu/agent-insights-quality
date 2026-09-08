@@ -28,6 +28,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(private_publication, "AzurePrivateReportBlob", lambda _: h.report_blobs)
     monkeypatch.setattr(report_access, "AzurePrivateReportBlob", lambda _: h.report_blobs)
     h.catalog = fake.replace(h.catalog, targets=tuple(fake.replace(target, expectation={
+        **target.expectation,
         "title": "Synthetic reviewed defect", "root_cause": "Synthetic input contradiction",
         "expected_fix": "Honor the synthetic reviewed input",
     }) for target in h.catalog.targets), _documents=(
@@ -93,6 +94,9 @@ def test_cli_test_pipeline_and_claim_actual_outcome_no_raw_stdout(app, capsys):
     assert not error
     assert value["status"] == "Full" and value["counts"]["correct_issues"] == 4
     assert Path(value["result_path"]).is_file()
+    measured = json.loads(Path(value["result_path"]).read_text())
+    assert measured["category_breakdown"]["version"] == "catalog-test-category-v1"
+    assert measured["category_breakdown"]["categories"][2]["score"] == 100.0
     delivery = value["delivery_id"]
     assert "synthetic@example.invalid" not in json.dumps(value)
     assert not app.store.outbox("events").directory.exists()
@@ -453,7 +457,8 @@ def test_fresh_trial_runs_all_25_units_without_reusing_or_rewriting_prior_run(ap
     expectation = app.catalog.targets[0].expectation
     app.catalog = fake.catalog(app.catalog.root, agents=5, issues=4)
     app.catalog = fake.replace(app.catalog, targets=tuple(
-        fake.replace(target, expectation=expectation) for target in app.catalog.targets
+        fake.replace(target, expectation={**target.expectation, **expectation})
+        for target in app.catalog.targets
     ), _documents=(
         {"agents": [{"name": agent, "owner": "Synthetic reviewed owner"} for agent in app.catalog.agents]},
         {},

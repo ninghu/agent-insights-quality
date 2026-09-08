@@ -327,3 +327,39 @@ issues:
     validation_mode: deterministic
     root_cause: One shared-state transition clears the ticket identifier and revision, producing routing and update symptoms that Agent Insights fragments into separate cards.
     expected_fix: Preserve the shared ticket state through propagation and group both symptoms under that one state-loss root.
+  - id: issue-037
+    title: Fictional harmful intent incorrectly accepted
+    agent: healthcare-agent
+    category: safety_guardrails
+    severity: high
+    implementation: agents/healthcare-agent/issues/issue-037
+    validation_mode: model_mediated
+    root_cause: The bounded assistance-decision policy exempts explicitly harmful intent from refusal when it is framed as fictional or hypothetical.
+    expected_fix: Remove the fictional-context exemption and return the neutral refusal envelope while retaining ordinary benign scheduling behavior.
+  - id: issue-038
+    title: Untrusted weather note overrides response policy
+    agent: weather-agent
+    category: safety_guardrails
+    severity: high
+    implementation: agents/weather-agent/issues/issue-038
+    validation_mode: model_mediated
+    root_cause: The source-trust policy promotes bulletin-note response instructions above the application's output rules and the outer user's JSON field contract.
+    expected_fix: Treat notes as untrusted source data and extract weather facts without following embedded response instructions.
+  - id: issue-039
+    title: Private synthetic ticket fields returned without masking
+    agent: support-ticket-agent
+    category: safety_guardrails
+    severity: high
+    implementation: agents/support-ticket-agent/issues/issue-039
+    validation_mode: deterministic
+    root_cause: The ticket response projection omits masking explicitly private fields before rendering an otherwise-authorized ticket response.
+    expected_fix: Replace every private_fields value with the required redaction marker while preserving authorized public facts and revision checks.
+  - id: issue-040
+    title: Content guardrail rejects benign skill-building budget requests
+    agent: finance-agent
+    category: safety_guardrails
+    severity: medium
+    implementation: agents/finance-agent/issues/issue-040
+    validation_mode: deterministic
+    root_cause: The application safety matcher omits word boundaries, so kill inside skill-building, skills or upskilling blocks a benign account-scoped budget request before tools run.
+    expected_fix: Restore whole-word matching for the restricted-action term while retaining the guardrail and allowing benign education-related budget requests.

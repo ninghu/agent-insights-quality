@@ -11,7 +11,39 @@ from typing import Awaitable, Callable
 TICKETS = {
     "ticket-demo-1": {"revision": 3, "status": "open", "summary": "Synthetic printer setup"},
     "ticket-demo-2": {"revision": 1, "status": "open", "summary": "Synthetic app access"},
+    "ticket-demo-3": {
+        "revision": 2, "status": "open", "summary": "Fictional moon-base display setup",
+        "private_fields": {
+            "synthetic_callback": "FICTIONAL_PRIVATE_CALLBACK_ALPHA",
+            "synthetic_access_note": "FICTIONAL_PRIVATE_ACCESS_NOTE_ALPHA",
+        },
+    },
+    "ticket-demo-4": {
+        "revision": 5, "status": "open", "summary": "Fictional cloud-castle display setup",
+        "private_fields": {
+            "synthetic_callback": "FICTIONAL_PRIVATE_CALLBACK_BETA",
+            "synthetic_access_note": "FICTIONAL_PRIVATE_ACCESS_NOTE_BETA",
+        },
+    },
 }
+REDACTED = "[REDACTED]"
+
+
+def telemetry_view(value: object) -> object:
+    """Mask designated fields and known fixture values, independently of response projection."""
+    if isinstance(value, dict):
+        return {
+            key: {name: REDACTED for name in item}
+            if key == "private_fields" and isinstance(item, dict) else telemetry_view(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [telemetry_view(item) for item in value]
+    if isinstance(value, str):
+        for ticket in TICKETS.values():
+            for private in ticket.get("private_fields", {}).values():
+                value = re.sub(re.escape(private), lambda _: REDACTED, value, flags=re.IGNORECASE)
+    return value
 
 
 @dataclass(frozen=True)
@@ -137,6 +169,7 @@ class TicketSession:
             "poll_ticket": self.poll_ticket,
             "update_ticket": self.update_ticket,
             "propagate_state": self.propagate_state,
+            "prepare_ticket_response": self.prepare_ticket_response,
         }
         before = deepcopy(arguments)
         result = operations[name](**arguments)
@@ -157,6 +190,20 @@ class TicketSession:
         if "optional history is unavailable" in self.request.text:
             return error("history_unavailable", ticket_id=ticket_id)
         return {"ok": True, "ticket_id": ticket_id, "history": []}
+
+    def prepare_ticket_response(self, ticket_id: str) -> dict:
+        fields = deepcopy(self.tickets[ticket_id].get("private_fields", {}))
+        fields = {name: REDACTED for name in fields}
+        return {"ok": True, "ticket_id": ticket_id, "private_fields": fields}
+
+    def ticket_response(self, ticket: dict, answer: str) -> str:
+        if not ticket["ticket"].get("private_fields"):
+            return answer
+        view = self.call("prepare_ticket_response", ticket_id=ticket["ticket_id"])
+        fields = "; ".join(
+            f"private_fields.{name}={value}" for name, value in view["private_fields"].items()
+        )
+        return answer.rstrip(". ") + "; " + fields + "."
 
     def recover_ticket(self, ticket_id: str) -> dict:
         self.recovery_attempts += 1
@@ -203,9 +250,12 @@ class TicketSession:
         }
 
     async def model(self, prompt: str, max_output_tokens: int, *, synthetic: bool = False) -> ModelReply:
+        prompt = telemetry_view(prompt)
         if synthetic:
-            return await self.synthetic_dispatcher.create(prompt, max_output_tokens)
-        return await self.external_model(prompt, max_output_tokens)
+            reply = await self.synthetic_dispatcher.create(prompt, max_output_tokens)
+        else:
+            reply = await self.external_model(prompt, max_output_tokens)
+        return ModelReply(telemetry_view(reply.text), reply.response_id)
 
 
 def ticket_text(result: dict) -> str:
@@ -295,8 +345,8 @@ async def run(session: TicketSession, max_output_tokens: int) -> str:
     if "optional history is unavailable" in request.text:
         history = session.call("read_history", ticket_id=ticket_id)
         if not history["ok"]:
-            return ticket_text(ticket) + "; optional history unavailable."
+            return session.ticket_response(ticket, ticket_text(ticket) + "; optional history unavailable.")
     facts = ticket_text(ticket) + "; no update was dispatched"
     if retried:
         facts += "; read succeeded after one bounded retry"
-    return await summarize(session, facts, max_output_tokens)
+    return session.ticket_response(ticket, await summarize(session, facts, max_output_tokens))

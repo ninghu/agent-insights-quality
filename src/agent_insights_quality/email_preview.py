@@ -25,7 +25,7 @@ from .report_context import ReportMetadata, load_report_context
 from .report_links import VerifiedScoringLink, configured_scoring_link, foundry_links
 from .report_review import RetainedReviewContext
 from .reporting import markdown_view, render_markdown, render_private_markdown
-from .results import PlannedUnit, UnitId
+from .results import PlannedUnit
 from .state import (
     RuntimeStore, StateConflict, StateError, _atomic_write, _confirm_durable,
     _encode, _inside, _open_snapshot, _parts,
@@ -204,9 +204,7 @@ def _frozen_inputs(runtime, request):
             ):
                 raise ValueError("Invalid reviewed text")
             planned = unit["planned"]
-            if not isinstance(planned, dict) or set(planned) != {"unit_id", "expected_issue_alias"}:
-                raise ValueError("Invalid reviewed plan")
-            plan.append(PlannedUnit(UnitId(**planned["unit_id"]), planned["expected_issue_alias"]))
+            plan.append(PlannedUnit.from_dict(planned))
         plan = tuple(plan)
     except (KeyError, TypeError, ValueError) as error:
         raise PreviewError("email_preview_frozen_invalid") from error

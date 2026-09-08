@@ -1,11 +1,13 @@
 """Date and dependency selection has no provider or state-store side effects."""
 
 import copy
+from collections import Counter
 import json
 import subprocess
 from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
+from math import gcd
 
 import pytest
 import yaml
@@ -31,10 +33,13 @@ def records(catalog):
 
 @pytest.mark.parametrize("start", [date(2026, 9, 3), date(2026, 9, 4), date(2026, 12, 31)])
 def test_rotation_covers_inventory_across_consecutive_weekdays(catalog, start):
-    following = start + timedelta(days=1)
-    while following.weekday() >= 5:
-        following += timedelta(days=1)
-    days = [select_daily(catalog, day) for day in (start, following)]
+    dates = [start]
+    while len(dates) < 3:
+        following = dates[-1] + timedelta(days=1)
+        while following.weekday() >= 5:
+            following += timedelta(days=1)
+        dates.append(following)
+    days = [select_daily(catalog, day) for day in dates]
     for selected in days:
         assert len(selected) == len({target.key for target in selected}) == 25
         for position, name in enumerate(catalog.agents):
@@ -45,6 +50,26 @@ def test_rotation_covers_inventory_across_consecutive_weekdays(catalog, start):
     assert {target.key for day in days for target in day} == {target.key for target in catalog.targets}
     reordered = replace(catalog, targets=tuple(reversed(catalog.targets)))
     assert select_daily(reordered, start) == days[0]
+
+
+def test_expanded_rotation_keeps_equal_issue_exposure_without_extra_daily_slots(catalog):
+    for agent in catalog.agents:
+        inventory = {target.key for target in catalog.for_agent(agent) if not target.is_baseline}
+        cycle = len(inventory) // gcd(len(inventory), 4)
+        day = date(2026, 9, 7)
+        observed = Counter()
+        for _ in range(cycle):
+            selected = select_daily(catalog, day)
+            assert len(selected) == 25 and sum(not target.is_baseline for target in selected) == 20
+            observed.update(
+                target.key for target in selected
+                if target.unit_id.agent == agent and not target.is_baseline
+            )
+            day += timedelta(days=1)
+            while day.weekday() >= 5:
+                day += timedelta(days=1)
+        assert set(observed) == inventory
+        assert set(observed.values()) == {4 // gcd(len(inventory), 4)}
 
 
 @pytest.mark.parametrize("day", [date(2026, 9, 5), date(2026, 9, 6)])
@@ -58,12 +83,12 @@ def test_private_weekend_planning_does_not_rewrite_the_execution_date(catalog, d
 
 
 def test_missing_full_incomplete_and_unchanged_failure(catalog):
-    assert len(select_staging(catalog)) == 41
+    assert len(select_staging(catalog)) == 45
     prior = records(catalog)
     first = catalog.targets[0].key
     prior[first] = LastTest("source-one", "FAIL", "2026-09-01")
     assert not select_staging(catalog, last_tests=prior)
-    assert len(select_staging(catalog, last_tests=prior, full=True)) == 41
+    assert len(select_staging(catalog, last_tests=prior, full=True)) == 45
     prior[first] = LastTest("source-one", "INCOMPLETE", "2026-09-01")
     missing = catalog.targets[-1].key
     del prior[missing]
@@ -133,7 +158,7 @@ def test_per_record_revision_and_explicit_verifier_dependencies(catalog):
         catalog, last_tests=prior, changed_paths=["src/custom_verifier.py"],
         evaluation_paths=["src/custom_verifier.py"],
     )
-    assert len(selected) == 41 and all(item.action == "reassess" for item in selected)
+    assert len(selected) == 45 and all(item.action == "reassess" for item in selected)
 
 
 def test_expectation_only_traffic_edits_do_not_retraffic(catalog):
@@ -160,11 +185,11 @@ def test_scoped_issue_catalog_change_does_not_reassess_unchanged_units(catalog):
     assert len(select_staging(
         catalog, last_tests=records(catalog), changed_paths=(path,),
         changes_by_revision={"source-one": changes},
-    )) == 41
+    )) == 45
     assert len(select_staging(
         catalog, last_tests=records(catalog), changed_paths=changes,
         changes_by_revision={"source-one": (Path("src/agent_insights_quality/assessment.py"),)},
-    )) == 41
+    )) == 45
 
 
 @pytest.mark.parametrize("mutation,targets", [
@@ -201,7 +226,7 @@ def test_git_catalog_scope_uses_entries_without_narrowing_global_or_inventory_ed
     elif mutation == "owner":
         issue["agent"] = "weather-agent"
     else:
-        document["issues"].append({**issue, "id": "issue-037"})
+        document["issues"].append({**issue, "id": "issue-041"})
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     git("add", "--all")
     git("commit", "--quiet", "-m", "Synthetic catalog change")
@@ -209,7 +234,7 @@ def test_git_catalog_scope_uses_entries_without_narrowing_global_or_inventory_ed
     expected = () if targets is None else ((relative, targets),)
     assert changes.evaluation_scopes == expected
     selected = select_staging(catalog, last_tests=records(catalog), changed_paths=changes)
-    assert len(selected) == (41 if targets is None else len(targets))
+    assert len(selected) == (45 if targets is None else len(targets))
 
 
 def test_catalog_scope_rejects_duplicate_entries_and_uncompared_scope_paths():

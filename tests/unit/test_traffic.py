@@ -74,7 +74,7 @@ def test_all_reviewed_attempts_resolve_without_losing_turns():
                 assert "activation_gate" not in step.expected
                 assert "defect_observed" not in step.expected
             turns += len(attempt.steps)
-    assert turns == 834
+    assert turns == 888
 
 
 def test_hosted_wire_bodies_omit_unsupported_budget_and_prompt_budgets_remain():
@@ -88,12 +88,12 @@ def test_hosted_wire_bodies_omit_unsupported_budget_and_prompt_budgets_remain():
         for attempt in attempts:
             for step in attempt.steps:
                 if target.is_prompt:
-                    assert step.body["max_output_tokens"] in {200, 400}
+                    assert step.body["max_output_tokens"] in {200, 250, 400}
                     prompt_turns += 1
                 else:
                     assert set(step.body) == {"input"}
                     hosted_turns += 1
-    assert (hosted_targets, hosted_attempts, hosted_turns, prompt_turns) == (27, 270, 540, 294)
+    assert (hosted_targets, hosted_attempts, hosted_turns, prompt_turns) == (29, 290, 560, 328)
 
 
 @pytest.mark.parametrize("violation", [

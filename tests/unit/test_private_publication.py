@@ -178,6 +178,25 @@ def test_partial_upload_resumes_frozen_bytes_without_rerender(prepared, monkeypa
     assert [k for k, *_ in client.writes].count(request["prefix"] + "/report.md") == 1
 
 
+def test_category_plan_and_result_survive_private_bundle_resume(prepared):
+    result, plan = publishing.quality(categorized=True)
+    run_id = seed(prepared.runtime, result, plan, test_run=True)
+    outbox = PrivateReportOutbox(prepared.runtime, run_id)
+    request = outbox.prepare(
+        prepared.root, result, allowed_units=plan, environment=ENVIRONMENT,
+        source_revision=SOURCE, report_date=DAY, test_run=True,
+    )
+    assert request["plan"] == [unit.to_dict() for unit in plan]
+    assert request["plan"][1]["category"] == "hallucinations"
+    assert "category" not in request["plan"][0]
+    resumed = PrivateReportOutbox(prepared.runtime, run_id)
+    assert resumed.request() == request
+    assert resumed.run.read_artifact("results/final") == result.to_dict()
+    client = FakeBlob()
+    assert resumed.flush(client)["status"] == "delivered"
+    assert not prepared.runtime.outbox("publication").directory.exists()
+
+
 @pytest.mark.parametrize("key", ["report.md", "report.html", "manifest.json", "latest.json"])
 def test_ambiguous_accepted_put_reconciles_exact_bytes(prepared, key):
     outbox, _ = prepared.build()

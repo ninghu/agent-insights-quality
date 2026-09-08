@@ -144,7 +144,7 @@ class ReviewedReportContext:
         """Snapshot diagnostics only; no unchecked from-dict approval path."""
         return {
             "catalog_root": str(self._root),
-            "units": [asdict(unit) for unit in self._units],
+            "units": [{**asdict(unit), "planned": unit.planned.to_dict()} for unit in self._units],
         }
 
 

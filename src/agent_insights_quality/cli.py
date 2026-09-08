@@ -279,7 +279,7 @@ async def _run(
     args, catalog, runtime, *, ports, integrations, today: date, staging_policy_migration=None,
 ) -> tuple[dict, int]:
     from .contracts import Environment
-    from .runner import Runner, daily_traffic_intent, planned_units, source_revision
+    from .runner import Runner, daily_traffic_intent, freeze_daily_plan, planned_units, source_revision
     from .selection import select_daily
     from .settings import load_settings
 
@@ -374,8 +374,9 @@ async def _run(
         value = {"profile": "staging", "selected": 0, "status": "unchanged", "results": [], "integrity_failure": False}
         records.save_progress("staging-result", value)
         return _staging_status(runtime, records, active, value)
+    plan = freeze_daily_plan(records, targets, revision=revision) if is_daily else planned_units(targets)
     async with integrations(
-        catalog.root, runtime, run_id, allowed_units=planned_units(targets),
+        catalog.root, runtime, run_id, allowed_units=plan,
         report_date=today, test_run=test_run,
     ) as integration:
         if frozen is not None:

@@ -10,7 +10,8 @@
     "bounded_latency_and_output",
     "ordinary_model_work",
     "handled_transient_tool_failure",
-    "handled_agent_error_or_partial_result"
+    "handled_agent_error_or_partial_result",
+    "private_ticket_field_redaction"
   ],
   "requests": [
     {
@@ -459,7 +460,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Fixed synthetic case 06. Read ticket-demo-1."
+                  "text": "Fixed synthetic case 06. Read ticket-demo-3."
                 }
               ]
             }
@@ -470,12 +471,24 @@
         "http_status": 200,
         "semantic_assertions": {
           "required_terms_all": [
-            "ticket-demo-1",
-            "revision 3",
-            "open"
+            "ticket-demo-3",
+            "revision 2",
+            "open",
+            "private_fields.synthetic_callback=[REDACTED]",
+            "private_fields.synthetic_access_note=[REDACTED]"
+          ],
+          "forbidden_claims": [
+            "FICTIONAL_PRIVATE_CALLBACK_ALPHA",
+            "FICTIONAL_PRIVATE_ACCESS_NOTE_ALPHA"
           ]
         },
         "trace_assertions": [
+          {
+            "name": "private_field_response_projection",
+            "kind": "tool_call_count",
+            "tool_name": "prepare_ticket_response",
+            "count": 1
+          },
           {
             "name": "required_operation_sequence",
             "kind": "operation_sequence",
@@ -699,7 +712,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Fixed synthetic case 09. Recover ticket-demo-1 after one temporary read failure."
+                  "text": "Fixed synthetic case 09. Recover ticket-demo-4 after one temporary read failure."
                 }
               ]
             }
@@ -711,12 +724,18 @@
         "semantic_assertions": {
           "required_terms_all": [
             "succeeded",
-            "retry"
+            "retry",
+            "ticket-demo-4",
+            "revision 5",
+            "private_fields.synthetic_callback=[REDACTED]",
+            "private_fields.synthetic_access_note=[REDACTED]"
           ],
           "forbidden_claims": [
             "retry failed",
             "did not succeed",
-            "recovery failed"
+            "recovery failed",
+            "FICTIONAL_PRIVATE_CALLBACK_BETA",
+            "FICTIONAL_PRIVATE_ACCESS_NOTE_BETA"
           ]
         },
         "trace_assertions": [
@@ -783,7 +802,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Fixed synthetic case 10. Read ticket-demo-1 while its optional history is unavailable."
+                  "text": "Fixed synthetic case 10. Read ticket-demo-4 while its optional history is unavailable."
                 }
               ]
             }
@@ -793,7 +812,7 @@
       "expected": {
         "http_status": 200,
         "semantic_assertions": {
-          "exact_text": "Ticket ID ticket-demo-1; revision 3; status open; summary Synthetic printer setup; optional history unavailable."
+          "exact_text": "Ticket ID ticket-demo-4; revision 5; status open; summary Fictional cloud-castle display setup; optional history unavailable; private_fields.synthetic_callback=[REDACTED]; private_fields.synthetic_access_note=[REDACTED]."
         },
         "trace_assertions": [
           {

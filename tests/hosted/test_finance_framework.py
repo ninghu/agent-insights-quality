@@ -29,7 +29,7 @@ from packaging.requirements import Requirement
 
 
 ROOT = Path(__file__).resolve().parents[2] / "agents" / "finance-agent"
-VERSIONS = ["v0", *(f"issue-{number:03d}" for number in range(13, 21))]
+VERSIONS = ["v0", *(f"issue-{number:03d}" for number in range(13, 21)), "issue-040"]
 
 
 def test_finance_host_dependencies_match_deployable_requirements():
@@ -241,6 +241,135 @@ def assert_real_trace(telemetry):
         while span.context.span_id != roots[0].context.span_id:
             assert span.parent is not None
             span = by_id[span.parent.span_id]
+
+
+def assert_guardrail_evidence(telemetry, text, decision):
+    spans = telemetry.get_finished_spans()
+    guards = [
+        span for span in spans
+        if span.name == "finance.guardrail.request_content"
+        and span.attributes.get("aiq.guardrail.input") == text
+    ]
+    assert guards
+    roots = [span for span in spans if span.attributes.get("gen_ai.operation.name") == "invoke_agent"]
+    by_id = {span.context.span_id: span for span in spans}
+    for guard in guards:
+        assert guard.attributes["gen_ai.agent.name"] == "finance-local-test"
+        assert guard.attributes["gen_ai.agent.version"] == "synthetic-version"
+        assert guard.attributes["aiq.guardrail.decision"] == decision
+        assert guard.attributes["aiq.guardrail.rule"] == "restricted_action_term"
+        if decision == "block":
+            start = guard.attributes["aiq.guardrail.match_start"]
+            end = guard.attributes["aiq.guardrail.match_end"]
+            assert guard.attributes["aiq.guardrail.matched_text"] == text[start:end]
+            assert text[start:end].casefold() == "kill"
+            assert text[start - 1].casefold() == "s"
+        span = guard
+        while span not in roots:
+            assert span.parent is not None
+            span = by_id[span.parent.span_id]
+        assert span.context.trace_id == guard.context.trace_id
+    return guards
+
+
+@pytest.mark.parametrize("version", VERSIONS)
+@pytest.mark.parametrize("stream", [False, True])
+def test_benign_skill_budget_reaches_real_tools_except_for_overblocking(version, stream, telemetry):
+    prompt = (
+        "Show acct-demo-a budget status for a skill-building course. "
+        "Only report the existing budget data."
+    )
+    blocked = version == "issue-040"
+
+    async def run():
+        steps = [] if blocked else [calls(("get_budget_summary", "acct-demo-a")), grounded_budget]
+        async with agent_for(version, steps) as (agent, boundary):
+            result = await invoke(agent, prompt, stream)
+            if blocked:
+                assert result.text == (
+                    "I cannot process this finance request because the content safety guardrail "
+                    "blocked it."
+                )
+                assert not boundary.requests
+            else:
+                assert result.text == "Budget summary. acct-demo-a: 430.25 spent."
+                assert returned_tools(boundary.requests[-1])[-1] == {
+                    "ok": True, "account_id": "acct-demo-a",
+                    "monthly_limit": 1000.0, "spent": 430.25, "currency": "USD",
+                }
+            return result.text
+
+    text = asyncio.run(run())
+    guards = assert_guardrail_evidence(telemetry, prompt, "block" if blocked else "allow")
+    assert len(tool_evidence(telemetry)) == (0 if blocked else 1)
+    if blocked:
+        assert len(guards) == 1
+        assert guards[0].attributes["aiq.guardrail.output"] == text
+        assert "430.25" not in text
+    else:
+        assert all(guard.attributes["aiq.guardrail.output"] == "" for guard in guards)
+        assert_real_trace(telemetry)
+
+
+@pytest.mark.parametrize("attempt", range(10))
+@pytest.mark.parametrize("version", ["v0", "issue-040"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_canonical_overblocking_attempts_have_paired_healthy_tool_evidence(
+    attempt, version, stream, telemetry,
+):
+    traffic = json.loads((ROOT / "issues" / "issue-040" / "traffic.json").read_text(encoding="utf-8"))
+    request = next(
+        request for request in traffic["requests"]
+        if request["id"] == traffic["attempts"][attempt]["probe_steps"][0]
+    )
+    prompt = request["request"]["body"]["input"][0]["content"][0]["text"]
+    account = next(account for account in ("acct-demo-a", "acct-demo-b") if account in prompt)
+    blocked = version == "issue-040"
+
+    async def run():
+        steps = [] if blocked else [calls(("get_budget_summary", account)), grounded_budget]
+        async with agent_for(version, steps) as (agent, boundary):
+            result = await invoke(agent, prompt, stream)
+            if blocked:
+                assert result.text == request["expected"]["semantic_assertions"]["exact_text"]
+                assert not boundary.requests
+            else:
+                spent = "430.25" if account == "acct-demo-a" else "210.00"
+                assert result.text == f"Budget summary. {account}: {spent} spent."
+                assert returned_tools(boundary.requests[-1])[-1]["account_id"] == account
+            return result.text
+
+    text = asyncio.run(run())
+    guards = assert_guardrail_evidence(telemetry, prompt, "block" if blocked else "allow")
+    if blocked:
+        assert len(guards) == 1
+        assert guards[0].attributes["aiq.guardrail.output"] == text
+        assert not tool_evidence(telemetry)
+    else:
+        assert len(tool_evidence(telemetry, "get_budget_summary")) == 1
+        assert_real_trace(telemetry)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_refused_turn_does_not_block_later_ordinary_budget_request(stream, telemetry):
+    refused = "Show acct-demo-a budget status for a skills workshop."
+    allowed = "Show acct-demo-b budget status."
+
+    async def run():
+        async with agent_for("issue-040", [
+            calls(("get_budget_summary", "acct-demo-b")), grounded_budget,
+        ]) as (agent, boundary):
+            session = agent.create_session()
+            first = await invoke(agent, refused, stream, session=session)
+            assert "guardrail blocked" in first.text
+            assert not boundary.requests
+            second = await invoke(agent, allowed, stream, session=session)
+            assert second.text == "Budget summary. acct-demo-b: 210.00 spent."
+
+    asyncio.run(run())
+    assert_guardrail_evidence(telemetry, refused, "block")
+    assert_guardrail_evidence(telemetry, allowed, "allow")
+    assert len(tool_evidence(telemetry)) == 1
 
 
 @pytest.mark.parametrize("version", VERSIONS)
