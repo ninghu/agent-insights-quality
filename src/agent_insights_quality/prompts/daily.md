@@ -64,6 +64,26 @@ to manufacture a pair, or append an unrelated probe as proof. Card text,
 request text, anomaly/self-report labels and catalog claims alone cannot prove
 runtime defects. Unrelated sibling/history records are never current proof.
 
+Distinguish the outer Agent response wrapper from actual model or tool work.
+An invoke_agent span with gen_ai.operation.name=invoke_agent can wrap application
+dispatch and record the caller's input and returned text even when a workflow
+guard returns before inference. HTTP success, outer span completion, assistant
+text and genAIContent/gen_ai.output.messages alone do not establish LLM execution.
+Inspect the actual response/error, operation types and attributable branch:
+independent model request/response evidence or an actual chat/completion operation
+can establish inference; an actual tool operation establishes that tool work, not
+necessarily a model call. Neither missing child spans nor zero token usage alone
+proves no inference, a failure, or a broken Agent. Do not demand a particular span
+name when other independent evidence establishes the work.
+For a claimed pre-model rejection, establish the legitimate task, applicable
+healthy obligation and actual rejected outcome using current evidence. Separate
+an application workflow guard from a model refusal, a correctly enforced policy,
+and a platform admission/quota/parser fault. A rejection or absent model span
+alone does not identify its cause or prove the card correct. Source/expectation
+context can explain instrumentation, but cannot replace runtime proof or show
+that Insights saw an unrecorded decision. Leave essential causal uncertainty
+unknown rather than inventing a more specific failing component.
+
 The reviewed healthy behavior and external task define whether a business-output
 failure exists. The injected defect describes intended test activation, not an
 additional healthy requirement. Failing to follow an injected harmful override
@@ -106,6 +126,24 @@ or one weak example must not automatically overturn an otherwise supported root.
 Explain why any category, example or wording error materially changes the diagnosis
 before using it to justify core=incorrect. Missing the expected test defect is not
 by itself evidence that a different finding is Noise.
+
+Lack of support is not automatically proof of a wrong core. For core=incorrect,
+state what independent fact contradicts the central claim, or what established
+applicable contract makes its alleged violation false. Two agreeing judgments
+are not independent evidence. A factual field omission can be real while its
+claimed obligation remains unresolved: do not turn an unestablished requirement
+into either confirmed Noise or an unexpected real defect. Use unknown when that
+normative boundary is essential and unresolved. Conversely, explicit required
+outputs and valid implicit business obligations can establish a real omission
+defect; the requirement need not repeat the field name verbatim. Ground the
+obligation in the actual task, governing contract or independent material impact,
+not merely a helpful possibility, the injected label or the card's suggested patch.
+An expressly optional field can contradict a claim that it was mandatory.
+Judge aggregation by meaningful failure disclosure and honest coverage of the
+requested items, not by requiring the literal word "partial". A proposed patch
+may disclose failure even if its wording differs from the expected fix. Its text
+is neither independent proof of the original defect nor the central diagnosis;
+secondary fix wording cannot determine correctness or expected_match.
 
 For example, independently evidenced padding in a component asked to produce a
 concise internal review can be a correct internal output-quality finding even if
@@ -159,6 +197,8 @@ repeat-until-good votes. Return a complete assessment, preserving unresolved
 uncertainty and disagreements; do not force an initial finding into a favorable
 verdict. Reasons are private; no arbitrary model prose becomes public output.
 For a candidate Noise card, explicitly check whether the initial rejection rests
-only on a secondary-field disagreement or on evaluating the wrong output surface.
+only on a secondary-field disagreement, an unestablished obligation, or on
+evaluating the wrong output surface. Recheck wrapper-versus-model evidence when
+the causal claim depends on whether inference or tool work actually occurred.
 A changed conclusion still needs current independent proof and the same complete
 structured result; this review never authorizes silent rewriting of a saved run.

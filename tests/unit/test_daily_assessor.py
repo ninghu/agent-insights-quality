@@ -12,6 +12,7 @@ from agent_insights_quality import catalogs, cli, report_context, runner
 from agent_insights_quality.errors import QualityError
 from agent_insights_quality.performance import RunMetrics
 from agent_insights_quality.settings import AssessmentSettings, load_assessment_settings
+from agent_insights_quality.state import RecordStore
 import test_runner as fake
 import test_provider_sol_cooldown as sol_fake
 
@@ -121,15 +122,16 @@ def test_unfinished_n1_resumes_frozen_sol_despite_new_astra_default_without_new_
     h = fake.Harness(tmp_path, issues=4)
     invoke, constructed = make_cli(h, monkeypatch)
     write_settings(h.store.root, "assessment.json", SOL)
-    original = h.sol.complete_json
+    original = RecordStore.save_artifact
     first = True
-    async def crash(**kwargs):
+    def crash_after_output(records, key, value):
         nonlocal first
-        if first:
+        result = original(records, key, value)
+        if first and key.endswith("/calls/initial/output"):
             first = False
-            raise OSError("synthetic failure before first judgment")
-        return await original(**kwargs)
-    h.sol.complete_json = crash
+            raise OSError("synthetic interruption after the first judgment was saved")
+        return result
+    monkeypatch.setattr(RecordStore, "save_artifact", crash_after_output)
     assert invoke("run-daily", "--test-run", "--rerun", "1") == 2
     n1 = constructed[0][0]
     assert h.store.run(n1).read_completed("assessment-settings") == SOL.to_dict()
@@ -146,6 +148,7 @@ def test_unfinished_n1_resumes_frozen_sol_despite_new_astra_default_without_new_
     assert all(sum(item[2] == request for item in h.cloud.invocations) == 1 for request in requests)
     assert all(sum(item[2] == operation for item in h.cloud.starts) == 1 for operation in operations)
     assert dict(h.cloud.resets) == resets
+    assert len(h.sol.calls) == len(h.catalog.targets)
     for target in h.catalog.targets:
         assert h.store.run(n1).read(f"targets/{target.key}/source")["configured_assessor"] == SOL.to_dict()
 

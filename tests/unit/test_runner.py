@@ -528,14 +528,14 @@ def test_incomplete_recollects_new_snapshot_without_resampling(tmp_path):
         assert h.store.run("stage").read_artifact(old["evidence_key"])["query_complete"] is False
 
 
-def test_daily_assessment_repair_does_not_repeat_insights_or_traffic(tmp_path):
+def test_daily_unknown_assessment_outcome_does_not_repeat_model_insights_or_traffic(tmp_path):
     h = Harness(tmp_path)
     h.sol.fail = True
     assert h.daily().score is None
-    count = len(h.cloud.invocations), len(h.cloud.starts)
+    count = len(h.cloud.invocations), len(h.cloud.starts), len(h.sol.calls)
     h.sol.fail = False
-    assert h.daily().score == 100
-    assert (len(h.cloud.invocations), len(h.cloud.starts)) == count
+    assert h.daily().score is None
+    assert (len(h.cloud.invocations), len(h.cloud.starts), len(h.sol.calls)) == count
 
 
 def test_private_new_rerun_reuses_unchanged_work_and_reset_with_provenance(tmp_path):

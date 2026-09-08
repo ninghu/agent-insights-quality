@@ -88,7 +88,7 @@ Skills are thin task entry points, not another orchestrator or a duplicate polic
 
 | Task | Skill |
 | --- | --- |
-| Maintain an Agent or issue; explicitly review inventory changes | [maintain-test-agents](.github/skills/maintain-test-agents/SKILL.md) |
+| Maintain Agents/framework; run an explicitly bounded private TEST repair loop | [maintain-test-agents](.github/skills/maintain-test-agents/SKILL.md) |
 | Launch authorized staging or resume its checkpoints | [staging-qualification](.github/skills/staging-qualification/SKILL.md) |
 | Launch Daily and hand off the exact prepared email | [agent-insights-quality-daily](.github/skills/agent-insights-quality-daily/SKILL.md) |
 

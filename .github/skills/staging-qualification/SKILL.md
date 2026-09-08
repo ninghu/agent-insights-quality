@@ -37,6 +37,16 @@ Same-source recovery retains the original run and date even across midnight. A c
 run is not repeated automatically. Use `--full --new-run` only for an explicitly requested fresh
 full exercise after the previous full run completed, never to discard interrupted work.
 
+An explicitly authorized single-target fresh measurement uses
+`run-staging --target finance-agent/issue-019 --new-run`, with one exact catalog key.
+It runs all ten canonical attempts, not selected misses, and never adds other targets.
+Repeat that command (or omit `--new-run`) to resume the same frozen measurement, even
+after a final FAIL/INCOMPLETE; use its committed source. A separately authorized later
+measurement requires `--new-run --after-run <actual-previous-targeted-run-id>`.
+Unresolved remote work or an active writer blocks replacement. Preserve old artifacts;
+do not claim full-inventory qualification from this one-target result. See the
+[single-target recovery contract](../../../docs/OPERATIONS.md#explicit-single-target-staging).
+
 For retained trace-context diagnostics, follow
 [the read-only audit](../../../docs/OPERATIONS.md#caller-invocation-context).
 Session precreation is a separate explicitly authorized
