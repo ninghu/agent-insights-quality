@@ -24,8 +24,9 @@ DASHBOARD = json.loads(
     (ROOT / "dashboards" / "agent-insights-quality.template.json").read_text(encoding="utf-8")
 )
 KQL = (ROOT / "infra" / "quality-analytics.kql").read_text(encoding="utf-8")
-FUNCTIONS = dict(re.findall(r"\) (AIQ\w+)\([^)]*\) \{\n(.*?)\n\}", KQL, re.DOTALL))
+FUNCTIONS = dict(re.findall(r"\) (AIQ\w+)\([^\n]*\) \{\n(.*?)\n\}", KQL, re.DOTALL))
 VARIABLES = re.compile(r"\b_[a-zA-Z]\w*\b")
+FIXED_SCOPE = f"_startTime, _endTime, 'swedencentral', '{SCORING_POLICY.version}'"
 TEST_CATEGORIES = (
     "context_memory", "cost_tokens", "hallucinations", "latency",
     "output_quality", "reliability_errors", "safety_guardrails", "tool_call_failures",
@@ -42,7 +43,7 @@ def visible_pages(parameter):
 
 def test_dashboard_references_layout_and_visual_contracts():
     assert [page["name"] for page in DASHBOARD["pages"]] == [
-        "Overview", "Explain change", "Legacy history (read-only)",
+        "Overview", "Explain change",
     ]
     assert DASHBOARD["schema_version"] == "20"
     assert DASHBOARD["autoRefresh"] == {"enabled": False}
@@ -75,7 +76,10 @@ def test_dashboard_references_layout_and_visual_contracts():
         else:
             assert tile["visualType"] == "table"
             assert options["table__enableRenderLinks"] is False
-    assert [len(per_page[page["id"]]) for page in DASHBOARD["pages"]] == [5, 4, 3]
+    assert [len(per_page[page["id"]]) for page in DASHBOARD["pages"]] == [5, 4]
+    headline, categories = DASHBOARD["tiles"][:2]
+    assert categories["title"].startswith("Scores by category")
+    assert categories["layout"]["y"] == headline["layout"]["y"] + headline["layout"]["height"]
 
 
 def test_filters_exist_only_on_pages_that_consume_them_and_use_matching_contracts():
@@ -89,25 +93,23 @@ def test_filters_exist_only_on_pages_that_consume_them_and_use_matching_contract
             consuming = {tile["pageId"] for tile in DASHBOARD["tiles"]
                          if variable in tile["usedParamVariables"]}
             assert consuming == visible_pages(parameter)
-    legacy = DASHBOARD["pages"][-1]["id"]
     for parameter in DASHBOARD["parameters"]:
         if parameter["kind"] == "duration":
             continue
         source = parameter["dataSource"]
+        assert source["kind"] == "query"
         assert set(source["consumedVariables"]) == set(VARIABLES.findall(source["query"]))
         assert source["dataSourceId"] == DASHBOARD["dataSources"][0]["id"]
         for dependency in source["consumedVariables"]:
             assert visible_pages(parameter) <= visible_pages(by_variable[dependency])
-        assert ("AIQDaily" in source["query"]) == (visible_pages(parameter) == {legacy})
-    assert by_variable["_policy"]["defaultValue"]["value"] == SCORING_POLICY.version
-    assert by_variable["_policy"]["selectionType"] == "single"
-    assert by_variable["_region"]["selectionType"] == "single"
+        assert "AIQDaily" not in source["query"]
+        assert visible_pages(parameter) == {DASHBOARD["pages"][1]["id"]}
+    assert set(by_variable) == {"_startTime", "_endTime", "_snapshot", "_currentAgent", "_testCategory"}
     for tile in DASHBOARD["tiles"]:
         assert set(tile["usedParamVariables"]) <= by_variable.keys()
-        if tile["pageId"] != legacy:
-            assert "AIQDaily" not in tile["query"]
-            assert "CoverageStatus" not in tile["query"]
-            assert "RegionKey == _region and ScoringPolicy == _policy" in tile["query"]
+        assert "AIQDaily" not in tile["query"]
+        assert "CoverageStatus" not in tile["query"]
+        assert FIXED_SCOPE in tile["query"]
 
 
 def test_query_dependencies_are_defined_current_read_models_not_raw_or_legacy_data():
@@ -119,7 +121,8 @@ def test_query_dependencies_are_defined_current_read_models_not_raw_or_legacy_da
         assert set(re.findall(r"\b(AIQ\w+)\(", query)) <= FUNCTIONS.keys()
     current = KQL.split("// Current framework data", 1)[1]
     assert "DailyQualityPublications" not in current
-    for name in ("AIQSnapshotsV1", "AIQSnapshotChangesV1", "AIQUnitChangesV1",
+    for name in ("AIQSnapshotRunsV1", "AIQSnapshotsV1", "AIQSnapshotChangesV1",
+                 "AIQUnitPairV1", "AIQUnitChangesV1",
                  "AIQCategorySnapshotsV1", "AIQCategoryChangesV1"):
         assert "QualityReportsV1" not in FUNCTIONS[name]
         assert "AIQDaily" not in FUNCTIONS[name]
@@ -280,7 +283,7 @@ def test_snapshot_selection_deduplicates_replays_and_same_date_revisions():
     assert "arg_min(PublishedAt, *) by FrameworkRunId" in report
     assert "ContentHashes = make_set(ContentHash, 2)" in report
     assert "array_length(ContentHashes) == 1" in report
-    snapshot = FUNCTIONS["AIQSnapshotsV1"]
+    snapshot = FUNCTIONS["AIQSnapshotRunsV1"]
     assert "SnapshotOrder = strcat(format_datetime(PublishedAt, 'yyyyMMddHHmmssfffffff'), '/', FrameworkRunId)" in snapshot
     assert "arg_max(SnapshotOrder, *) by ReportDate, RegionKey, ScoringPolicy, CoveragePolicy" in snapshot
 
@@ -304,7 +307,7 @@ def test_previous_snapshot_never_crosses_region_or_policy_and_precedes_date_filt
     assert "RegionKey == prev(RegionKey) and ScoringPolicy == prev(ScoringPolicy)" in changes
     assert "CoveragePolicy == prev(CoveragePolicy)" in changes
     assert "PreviousRunId = iff(SameSeries, prev(FrameworkRunId), '')" in changes
-    assert "| where" not in changes
+    assert changes.index("| where FrameworkRunId in (Selected") > changes.index("prev(PlannedCohort)")
 
 
 def cohort_spec(payload, predicate=lambda unit: True):
@@ -334,7 +337,7 @@ def test_comparison_limits_distinguish_rotation_exclusion_identity_and_baselines
     changes = FUNCTIONS["AIQSnapshotChangesV1"]
     for name in ("PlannedCohort", "ScoredCohort", "BaselineCohort"):
         assert f"{name} != prev({name})" in changes
-    units = FUNCTIONS["AIQUnitChangesV1"]
+    units = FUNCTIONS["AIQUnitPairV1"]
     assert "join kind=fullouter Previous on Agent, LogicalVersion, Kind, ExpectedIssueAlias" in units
     assert "M = iff(Scorable and Kind == 'issue', ExpectedIssues - CorrectIssues, long(null))" in units
     assert "isnull(CurrentPresent), 'not planned'" in units
@@ -445,8 +448,8 @@ def test_category_exclusions_zero_the_whole_unit_without_a_baseline_score(exclud
 def test_category_read_model_only_projects_stored_values_after_snapshot_selection():
     categories = FUNCTIONS["AIQCategorySnapshotsV1"]
     changes = FUNCTIONS["AIQCategoryChangesV1"]
-    assert "AIQSnapshotsV1()" in categories
-    assert "AIQReportsV1()" in categories
+    assert "AIQSnapshotsV1(startDate, endDate, regionKey, scoringPolicy, true, runIds)" in categories
+    assert "AIQReportsV1(datetime(null), datetime(null), '', '', RunIds)" in categories
     assert "Breakdown = Payload.category_breakdown" in categories
     assert "tostring(Breakdown.version) == 'catalog-test-category-v1'" in categories
     assert "array_length(Breakdown.categories) == 8" in categories
@@ -454,7 +457,7 @@ def test_category_read_model_only_projects_stored_values_after_snapshot_selectio
     for index in range(8):
         assert f"tostring(Breakdown.categories[{index}].category)" in categories
     assert "array_concat(Categories, dynamic(['Baseline']))" in categories
-    assert categories.index("AIQSnapshotsV1()") < categories.index("| mv-expand")
+    assert categories.index("AIQSnapshotsV1(") < categories.index("| mv-expand")
     assert "Bucket = iff(Category == 'Baseline', Breakdown.baseline," in categories
     assert ("CategoryScore = iff(CategoryAvailable and Category != 'Baseline', "
             "todouble(Bucket.score), real(null))") in categories
@@ -469,7 +472,7 @@ def test_category_read_model_only_projects_stored_values_after_snapshot_selectio
     assert "M = iff(CategoryAvailable and Category != 'Baseline', E - C, long(null))" in categories
     assert "E == 0, 'N/A: no scored expected issues'" in categories
     assert "Global penalties only; no baseline quality score" in categories
-    assert "AIQSnapshotChangesV1()" in changes
+    assert "AIQSnapshotChangesV1(startDate, endDate, regionKey, scoringPolicy, selectedRunIds)" in changes
     assert "join kind=leftouter Previous on PreviousRunId, Category" in changes
     assert "CategoryLimitReasons = set_union(LimitReasons," in changes
     assert "PlannedCategoryCohort != PreviousPlannedCategoryCohort" in changes
@@ -524,9 +527,10 @@ def test_category_availability_never_changes_replay_revision_or_prior_date_selec
     selected = snapshot_spec([older, latest_legacy_revision, current, conflict])
     assert max(selected.values(), key=lambda item: item["ReportDate"]) == latest_legacy_revision
     query = next(tile["query"] for tile in DASHBOARD["tiles"]
-                 if tile["title"].startswith("Stored test-category quality"))
-    assert query.index("| take 1") < query.index("AIQCategoryChangesV1()")
-    assert "| where FrameworkRunId == Latest" in query
+                 if tile["title"].startswith("Scores by category"))
+    assert query.index("| take 1") < query.index("AIQCategoryChangesV1(")
+    assert "SelectedRunIds = toscalar(Latest | summarize make_set(FrameworkRunId))" in query
+    assert f"AIQCategoryChangesV1({FIXED_SCOPE}, SelectedRunIds)" in query
     assert "| where CategoryAvailable" not in query
 
 
@@ -565,8 +569,8 @@ def test_category_drilldown_is_a_scoped_selector_not_a_global_score_or_card_filt
     query = parameter["dataSource"]["query"]
     for name in (*TEST_CATEGORIES, "Baseline"):
         assert f"'{name}'" in query
-    assert "AIQUnitsV1()" in query
-    assert "Selected | project PreviousRunId" in query
+    assert "AIQUnitsV1(RunIds)" in query
+    assert "Selected | project pack_array(FrameworkRunId, PreviousRunId)" in query
     assert "iff(Kind == 'baseline', 'Baseline', TestCategory)" in query
     consuming = [tile for tile in DASHBOARD["tiles"]
                  if "_testCategory" in tile["usedParamVariables"]]
@@ -578,13 +582,13 @@ def test_category_drilldown_is_a_scoped_selector_not_a_global_score_or_card_filt
         assert "Finding.category" not in tile["query"]
         assert "(_testCategory == 'Baseline' and Kind == 'baseline')" in tile["query"]
         assert "Kind == 'issue'" in tile["query"]
-    paired = next(tile["query"] for tile in consuming if "AIQUnitChangesV1(" in tile["query"])
+    paired = next(tile["query"] for tile in consuming if "AIQUnitPairV1(" in tile["query"])
     assert "CurrentCategory == _testCategory or PreviousCategory == _testCategory" in paired
     assert "PreviousCategory, CurrentCategory" in paired
-    assert "CurrentCategory = TestCategory" in FUNCTIONS["AIQUnitChangesV1"]
-    assert "PreviousCategory = TestCategory" in FUNCTIONS["AIQUnitChangesV1"]
-    findings = next(tile["query"] for tile in consuming if "AIQFindingsV1()" in tile["query"])
-    assert "FrameworkRunId in (CurrentRun, PreviousRun)" in findings
+    assert "CurrentCategory = TestCategory" in FUNCTIONS["AIQUnitPairV1"]
+    assert "PreviousCategory = TestCategory" in FUNCTIONS["AIQUnitPairV1"]
+    findings = next(tile["query"] for tile in consuming if "AIQFindingsV1(RunIds)" in tile["query"])
+    assert "Selected | project pack_array(FrameworkRunId, PreviousRunId)" in findings
     assert "Kind, TestCategory, Scored, Classification" in findings
     global_context = next(tile for tile in DASHBOARD["tiles"]
                           if tile["title"].startswith("Unfiltered global comparison"))
@@ -593,3 +597,179 @@ def test_category_drilldown_is_a_scoped_selector_not_a_global_score_or_card_filt
     assert "QualityScore, PreviousScore, ComparisonNote" in global_context["query"]
     assert "All includes legacy uncategorized issues" in global_context["query"]
     assert "Empty filtered rows are not zero counts" in global_context["query"]
+
+
+def test_fourteen_day_defaults_and_fixed_scope_remain_valid_without_publications():
+    parameters = {item.get("variableName", "_dates"): item for item in DASHBOARD["parameters"]}
+    assert set(parameters) == {"_dates", "_snapshot", "_currentAgent", "_testCategory"}
+    assert parameters["_dates"]["defaultValue"] == {"count": 14, "kind": "dynamic", "unit": "days"}
+    for variable in ("_snapshot", "_currentAgent", "_testCategory"):
+        assert parameters[variable]["defaultValue"] == {"kind": "all"}
+        query = parameters[variable]["dataSource"]["query"]
+        assert f"AIQSnapshotRunsV1({FIXED_SCOPE}" in query
+        assert "AIQSnapshotChangesV1" not in query and "AIQSnapshotsV1" not in query
+        assert "AIQCategoryChangesV1" not in query
+    assert snapshot_spec([]) == {}
+    only_v1 = row(4, policy=LEGACY_SCORING_POLICY)
+    assert not [item for item in snapshot_spec([only_v1]).values()
+                if item["ScoringPolicy"] == SCORING_POLICY.version]
+
+
+def test_every_tile_and_query_filter_has_fixed_sweden_v2_scope_without_legacy_ui():
+    queries = [tile["query"] for tile in DASHBOARD["tiles"]]
+    queries += [parameter["dataSource"]["query"] for parameter in DASHBOARD["parameters"]
+                if "dataSource" in parameter]
+    assert len(queries) == 12
+    for query in queries:
+        calls = re.findall(r"\bAIQ(?:Snapshot(?:Runs|Changes)|CategoryChanges)V1\(([^)]*)\)", query)
+        assert calls
+        assert all(args in (FIXED_SCOPE, FIXED_SCOPE + ", true",
+                            FIXED_SCOPE + ", SelectedRunIds") for args in calls)
+        assert "AIQDaily" not in query and LEGACY_SCORING_POLICY.version not in query
+        assert not re.search(r"\bAIQ\w+V1\(\)", query)
+    obsolete = {"_region", "_policy", "_reportDate", "_agent", "_issue", "_result", "_ownership"}
+    assert not obsolete.intersection(VARIABLES.findall(json.dumps(DASHBOARD)))
+    assert {
+        "AIQDailyPublications", "AIQDailyRuns", "AIQDailyAgents", "AIQDailyIssues",
+        "AIQDailyFields", "AIQDailyBaselines", "AIQDailyCards", "AIQDailyHighlights",
+        "AIQOperationsV1", "AIQPublicationConflictsV1", "AIQUnitChangesV1",
+    } <= FUNCTIONS.keys()
+    assert ".create-merge table DailyQualityPublications" in KQL
+
+
+def test_empty_state_has_null_counts_and_never_masks_function_errors():
+    latest = DASHBOARD["tiles"][0]["query"]
+    assert "Publication = 'No official public-safe v2 publications" in latest
+    assert "QualityScore = real(null)" in latest and "M = long(null)" in latest
+    assert "where toscalar(Latest | count) == 0" in latest
+    metadata = next(tile["query"] for tile in DASHBOARD["tiles"]
+                    if tile["title"].startswith("Unfiltered global comparison"))
+    assert "where toscalar(Selected | count) == 0" in metadata
+    assert "QualityScore = real(null)" in metadata and "Metadata = dynamic(null)" in metadata
+    assert "Private TEST results are never published here" in metadata
+    for tile in DASHBOARD["tiles"]:
+        assert "isfuzzy" not in tile["query"] and "best_effort" not in tile["query"]
+        assert "AIQDaily" not in tile["query"]
+
+
+def test_bounded_identity_reads_preserve_cross_filter_conflicts_and_first_ingestion():
+    candidates, reconciliation = FUNCTIONS["AIQReportsV1"].split("    QualityReportsV1\n", 1)
+    for predicate in (
+        "ReportDate >= startofday(startDate)", "ReportDate <= startofday(endDate)",
+        "tolower(replace_string(Region, ' ', '')) == regionKey",
+        "tostring(Payload.scoring_policy.version) == scoringPolicy",
+        "isnull(runIds) or FrameworkRunId in (runIds)",
+    ):
+        assert predicate in candidates and predicate not in reconciliation
+    assert "FrameworkRunId in (Candidates)" in reconciliation
+    assert "arg_min(PublishedAt, *) by FrameworkRunId" in reconciliation
+    requested = row(20, categorized=True)
+    conflict = dict(requested, ReportDate="2026-09-01",
+                    Region="synthetic-other-region", ContentHash="c" * 64)
+    assert snapshot_spec([requested, conflict]) == {}
+
+
+def test_only_selected_units_expand_and_empty_ids_never_mean_all_history():
+    runs = FUNCTIONS["AIQSnapshotRunsV1"]
+    assert "AIQRunsV1(iff(includePrevious, datetime(null), startDate), endDate, regionKey, scoringPolicy)" in runs
+    assert "mv-expand" not in runs and "AIQUnitsV1" not in runs
+    snapshots = FUNCTIONS["AIQSnapshotsV1"]
+    assert "AIQSnapshotRunsV1(startDate, endDate, regionKey, scoringPolicy, includePrevious)" in snapshots
+    assert "| where isnull(runIds) or FrameworkRunId in (runIds)" in snapshots
+    assert "let RunIds = toscalar(Runs | summarize make_set(FrameworkRunId))" in snapshots
+    assert "let Cohorts = AIQUnitsV1(RunIds)" in snapshots
+    units = FUNCTIONS["AIQUnitsV1"]
+    assert units.index("AIQReportsV1(datetime(null), datetime(null), '', '', runIds)") < units.index("mv-expand Unit")
+    assert "AIQUnitsV1(runIds)" in FUNCTIONS["AIQFindingsV1"]
+    pair = FUNCTIONS["AIQUnitPairV1"]
+    assert "materialize(AIQUnitsV1(pack_array(frameworkRunId, previousRunId)))" in pair
+    assert "let Current = PairUnits" in pair and "let Previous = PairUnits" in pair
+    assert "AIQSnapshotChangesV1" not in pair and "AIQSnapshotsV1" not in pair
+    assert "AIQSnapshotRunsV1(CurrentDate, CurrentDate, CurrentRegion, CurrentPolicy, true)" in FUNCTIONS["AIQUnitChangesV1"]
+    queries = [tile["query"] for tile in DASHBOARD["tiles"]]
+    queries += [parameter["dataSource"]["query"] for parameter in DASHBOARD["parameters"]
+                if "dataSource" in parameter]
+    for query in queries:
+        if "AIQUnitsV1(RunIds)" in query or "AIQFindingsV1(RunIds)" in query:
+            assert "coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]))" in query
+        if "SelectedRunIds" in query:
+            assert "| summarize make_set(FrameworkRunId)" in query
+    for tile in DASHBOARD["tiles"]:
+        if tile["visualType"] == "line" or tile["title"].startswith("Latest stored"):
+            assert "AIQSnapshotChangesV1" not in tile["query"]
+            assert "AIQSnapshotsV1" not in tile["query"]
+
+
+def test_category_validation_and_comparisons_are_bounded_to_selected_run_pairs():
+    changes = FUNCTIONS["AIQSnapshotChangesV1"]
+    assert "| where isnull(selectedRunIds) or FrameworkRunId in (selectedRunIds)" in changes
+    assert "Current = make_set(FrameworkRunId), Previous = make_set(PreviousRunId)" in changes
+    assert "| project set_union(Current, Previous)" in changes
+    assert "AIQSnapshotsV1(startDate, endDate, regionKey, scoringPolicy, true, RunIds)" in changes
+    assert changes.index("| where FrameworkRunId in (Selected") > changes.index("prev(PlannedCohort)")
+    categories = FUNCTIONS["AIQCategoryChangesV1"]
+    assert "materialize(AIQSnapshotChangesV1(startDate, endDate, regionKey, scoringPolicy, selectedRunIds))" in categories
+    assert "let RunIds = toscalar(Changes" in categories
+    assert "Current = make_set(FrameworkRunId), Previous = make_set(PreviousRunId)" in categories
+    assert "materialize(AIQCategorySnapshotsV1(startDate, endDate, regionKey, scoringPolicy, RunIds))" in categories
+    snapshots = FUNCTIONS["AIQCategorySnapshotsV1"]
+    assert "materialize(AIQSnapshotsV1(startDate, endDate, regionKey, scoringPolicy, true, runIds))" in snapshots
+    assert "let Cohorts = AIQUnitsV1(RunIds)" in snapshots
+    assert "AIQReportsV1(datetime(null), datetime(null), '', '', RunIds)" in snapshots
+    assert snapshots.index("let RunIds =") < snapshots.index("let Cohorts =")
+    for name in ("AIQCategorySnapshotsV1", "AIQCategoryChangesV1"):
+        assert not re.search(r"\bAIQ\w+V1\(\)", FUNCTIONS[name])
+
+
+def window_spec(rows, start, end, *, include_previous):
+    """Bounded metadata reference; deliberately not KQL execution."""
+    daily = snapshot_spec(rows)
+    visible = {key: value for key, value in daily.items() if start <= key[-1] <= end}
+    if include_previous:
+        for series in {key[:-1] for key in visible}:
+            previous = [key for key in daily if key[:-1] == series and key[-1] < start]
+            if previous:
+                key = max(previous)
+                visible[key] = daily[key]
+    return visible
+
+
+def selected_pair_spec(rows, start, end, selected_ids):
+    bounded = window_spec(rows, start, end, include_previous=True)
+    pairs, previous = set(), {}
+    for key in sorted(bounded):
+        current = bounded[key]
+        if current["FrameworkRunId"] in selected_ids and start <= current["ReportDate"] <= end:
+            pairs.add(current["FrameworkRunId"])
+            if key[:-1] in previous:
+                pairs.add(previous[key[:-1]])
+        previous[key[:-1]] = current["FrameworkRunId"]
+    return pairs
+
+
+def test_bounded_category_pairs_keep_immediate_legacy_prior_not_older_categorized_rows():
+    earlier, predecessor, first, latest = (
+        row(1, categorized=True), row(2), row(20, categorized=True), row(25),
+    )
+    no_visible_series = row(3, revision=1, policy=LEGACY_SCORING_POLICY)
+    rows = [earlier, predecessor, first, latest, no_visible_series]
+    bounded = window_spec(rows, "2026-09-12", "2026-09-25", include_previous=True)
+    assert [bounded[key]["ReportDate"] for key in sorted(bounded)] == [
+        "2026-09-02", "2026-09-20", "2026-09-25",
+    ]
+    assert len(window_spec(rows, "2026-09-12", "2026-09-25", include_previous=False)) == 2
+    assert window_spec(rows, "2026-09-26", "2026-09-30", include_previous=True) == {}
+    assert selected_pair_spec(rows, "2026-09-12", "2026-09-25", {first["FrameworkRunId"]}) == {
+        predecessor["FrameworkRunId"], first["FrameworkRunId"],
+    }
+    assert selected_pair_spec(rows, "2026-09-12", "2026-09-25", {latest["FrameworkRunId"]}) == {
+        first["FrameworkRunId"], latest["FrameworkRunId"],
+    }
+    assert not any(category_projection_spec(predecessor["Payload"]).values())
+    assert not any(category_projection_spec(latest["Payload"]).values())
+    assert selected_pair_spec(rows, "2026-09-12", "2026-09-25", set()) == set()
+    assert selected_pair_spec(rows, "2026-09-12", "2026-09-25", {"missing-snapshot"}) == set()
+    runs = FUNCTIONS["AIQSnapshotRunsV1"]
+    assert "ReportDate < startofday(startDate)" in runs
+    assert "arg_max(ReportDate, *) by RegionKey, ScoringPolicy, CoveragePolicy" in runs
+    assert "join kind=leftsemi (Visible | distinct RegionKey, ScoringPolicy, CoveragePolicy)" in runs
