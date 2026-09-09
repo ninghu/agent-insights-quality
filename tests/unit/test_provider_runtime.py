@@ -659,13 +659,14 @@ def test_invocation_incomplete_is_not_a_completed_response(environment, target):
     assert result.response == value
 
 
-def test_daily_monitors_are_agent_scoped_and_paginated(environment):
+@pytest.mark.parametrize("pagination", [{"next_link": "?after=other"}, {"has_more": True}])
+def test_daily_monitors_are_agent_scoped_and_paginated(environment, pagination):
     environment = replace(environment, profile="daily")
     transport = FakeTransport(
         response(
             {
                 "data": [{"id": "other", "agent_name": "other"}],
-                "next_link": "?after=other",
+                **pagination,
             }
         ),
         response({"data": [{"id": "native-monitor", "agent_name": "example-agent"}]}),
@@ -676,6 +677,10 @@ def test_daily_monitors_are_agent_scoped_and_paginated(environment):
     )
     assert len(transport.requests) == 2 and all(
         wire.method == "GET" for wire in transport.requests
+    )
+    assert all(
+        wire.headers["Foundry-Features"] == "AgentInsights=V1Preview"
+        for wire in transport.requests
     )
 
 
@@ -695,6 +700,10 @@ def test_missing_monitor_create_has_no_version_filter(environment):
         "run_interval_hours": 24,
         "model_deployment_name": "terra-insight-generation",
     }
+    assert all(
+        wire.headers["Foundry-Features"] == "AgentInsights=V1Preview"
+        for wire in transport.requests
+    )
 
 
 @pytest.mark.parametrize(
@@ -738,6 +747,10 @@ def test_fractional_insights_lookback_native_operation_and_exact_retry(environme
     first, second = transport.requests
     assert first.body == second.body == b'{"lookback_hours":0.01234567}'
     assert all("traceparent" not in wire.headers for wire in transport.requests)
+    assert all(
+        wire.headers["Foundry-Features"] == "AgentInsights=V1Preview"
+        for wire in transport.requests
+    )
     assert (
         first.headers["Operation-Id"]
         == second.headers["Operation-Id"]
@@ -775,6 +788,34 @@ def test_reset_accepted_is_not_silently_completed_or_retried(environment):
         )
     assert error.value.request_accepted is True and not error.value.retryable
     assert len(transport.requests) == 1
+    assert transport.requests[0].headers["Foundry-Features"] == "AgentInsights=V1Preview"
+
+
+@pytest.mark.parametrize("insights_endpoint", [
+    "", "https://insights.example.invalid/api/projects/insights",
+])
+def test_insights_polling_retries_retain_preview_header(environment, insights_endpoint):
+    environment = replace(environment, profile="daily", insights_endpoint=insights_endpoint)
+    waits = []
+
+    async def sleep(delay):
+        waits.append(delay)
+
+    transport = FakeTransport(
+        response(status=503), TimeoutError(), response({"id": "run", "status": "completed"}),
+    )
+    result = run(
+        runtime(environment, transport, sleep=sleep).get_insights_run("monitor", "run")
+    )
+    assert result == {"id": "run", "status": "completed"}
+    assert waits == [1, 2]
+    endpoint = insights_endpoint or environment.project_endpoint
+    assert len(transport.requests) == 3
+    for wire in transport.requests:
+        assert wire.method == "GET"
+        assert wire.url == endpoint + "/agent_insight_monitors/monitor/runs/run?api-version=v1"
+        assert wire.headers["Foundry-Features"] == "AgentInsights=V1Preview"
+        assert "Operation-Id" not in wire.headers
 
 
 def test_card_pages_preserve_cumulative_links_and_actual_count(environment):
@@ -800,6 +841,10 @@ def test_card_pages_preserve_cumulative_links_and_actual_count(environment):
     assert result == (card, revised)
     assert "run_id" not in result[0]
     assert all("include_details=true" in wire.url for wire in transport.requests)
+    assert all(
+        wire.headers["Foundry-Features"] == "AgentInsights=V1Preview"
+        for wire in transport.requests
+    )
 
 
 def test_pagination_rejects_foreign_origin_without_sending(environment):
@@ -836,6 +881,7 @@ def test_get_retries_are_bounded_and_injected(environment):
         == []
     )
     assert waits == [1, 2]
+    assert all("Foundry-Features" not in wire.headers for wire in transport.requests)
 
 
 def test_telemetry_preserves_tables_columns_values_and_partial_state():

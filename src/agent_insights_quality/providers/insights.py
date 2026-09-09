@@ -10,6 +10,9 @@ from agent_insights_quality.providers.callbacks import safe_persist
 from agent_insights_quality.providers.transport import JsonClient, check_status, segment
 
 
+INSIGHTS_HEADERS = {"Foundry-Features": "AgentInsights=V1Preview"}
+
+
 class InsightsClient:
     def __init__(self, environment: Environment, client: JsonClient) -> None:
         self.environment = environment
@@ -23,7 +26,9 @@ class InsightsClient:
     async def ensure_monitor(self, agent_name: str) -> str:
         self._daily()
         segment(agent_name)
-        values = await self.client.pages("/agent_insight_monitors?limit=100")
+        values = await self.client.pages(
+            "/agent_insight_monitors?limit=100", headers=INSIGHTS_HEADERS
+        )
         matches = [value for value in values if value.get("agent_name") == agent_name]
         if len(matches) > 1:
             raise QualityError("insights_monitor_ambiguous")
@@ -39,6 +44,7 @@ class InsightsClient:
                     "run_interval_hours": 24,
                     "model_deployment_name": "terra-insight-generation",
                 },
+                headers=INSIGHTS_HEADERS,
             )
         )
         identity = value.get("id")
@@ -51,7 +57,8 @@ class InsightsClient:
     async def reset_monitor(self, monitor_id: str) -> None:
         self._daily()
         response = await self.client.request(
-            "POST", "/agent_insight_monitors/" + segment(monitor_id) + ":reset"
+            "POST", "/agent_insight_monitors/" + segment(monitor_id) + ":reset",
+            headers=INSIGHTS_HEADERS,
         )
         check_status(response, {200, 202, 204})
         if response.status == 202:
@@ -98,7 +105,7 @@ class InsightsClient:
                 "POST",
                 "/agent_insight_monitors/" + segment(monitor_id) + "/runs",
                 body,
-                headers={"Operation-Id": operation_id},
+                headers={**INSIGHTS_HEADERS, "Operation-Id": operation_id},
             )
             check_status(response, {200, 201, 202}, idempotent=True)
         except QualityError as error:
@@ -153,6 +160,7 @@ class InsightsClient:
             + segment(monitor_id)
             + "/runs/"
             + segment(run_id),
+            headers=INSIGHTS_HEADERS,
         )
 
     async def list_insights(self, monitor_id: str) -> tuple[JsonObject, ...]:
@@ -161,6 +169,7 @@ class InsightsClient:
             await self.client.pages(
                 "/agent_insight_monitors/"
                 + segment(monitor_id)
-                + "/insights?include_details=true&limit=100"
+                + "/insights?include_details=true&limit=100",
+                headers=INSIGHTS_HEADERS,
             )
         )
