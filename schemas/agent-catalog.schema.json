@@ -76,7 +76,7 @@
           "issue_ids": {
             "type": "array",
             "minItems": 4,
-            "maxItems": 9,
+            "maxItems": 10,
             "uniqueItems": true,
             "items": {"type": "string", "pattern": "^issue-[0-9]{3}$"}
           }

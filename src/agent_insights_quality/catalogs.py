@@ -11,7 +11,7 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from .contracts import Target
-from .results import UnitId
+from .results import ISSUE_CATEGORIES, UnitId
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,12 @@ def load_catalog(root: Path) -> Catalog:
         yaml.safe_load((root / "catalogs" / filename).read_text(encoding="utf-8"))
         for filename in ("AGENT_CATALOG.yaml", "ISSUE_CATALOG.yaml")
     )
+    return catalog_from_documents(root, documents)
+
+
+def catalog_from_documents(root: Path, documents: tuple[dict, dict]) -> Catalog:
+    """Load caller-approved catalog snapshots without reading version source assets."""
+    root = Path(root).resolve()
     agents_doc, issues_doc = documents
     if not isinstance(agents_doc, dict) or not isinstance(issues_doc, dict):
         raise ValueError("Catalog documents must be objects")
@@ -61,6 +67,8 @@ def load_catalog(root: Path) -> Catalog:
             raise ValueError("Invalid issue catalog entry")
         if issue["id"] in by_id:
             raise ValueError("Duplicate issue identity")
+        if issue.get("category") not in ISSUE_CATEGORIES:
+            raise ValueError("Unknown reviewed issue category")
         by_id[issue["id"]] = issue
 
     names, targets, claimed = [], [], set()
@@ -120,13 +128,13 @@ def validate_catalog(catalog: Catalog) -> None:
         )
         Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(document)
-    if len(catalog.agents) != 5 or len(catalog.targets) != 41:
-        raise ValueError("Expected five Agents and 36 issues")
+    if len(catalog.agents) != 5 or len(catalog.targets) != 45:
+        raise ValueError("Expected five Agents and 40 issues")
     issue_ids = [
         target.unit_id.logical_version for target in catalog.targets if not target.is_baseline
     ]
-    if len(issue_ids) != 36 or set(issue_ids) != {
-        f"issue-{number:03d}" for number in range(1, 37)
+    if len(issue_ids) != 40 or set(issue_ids) != {
+        f"issue-{number:03d}" for number in range(1, 41)
     }:
         raise ValueError("Reviewed issue inventory changed")
     # Ownership comes from the two agreeing catalogs, not numeric issue ranges.

@@ -74,7 +74,7 @@ def test_all_reviewed_attempts_resolve_without_losing_turns():
                 assert "activation_gate" not in step.expected
                 assert "defect_observed" not in step.expected
             turns += len(attempt.steps)
-    assert turns == 835
+    assert turns == 889
 
 
 def test_hosted_wire_bodies_omit_unsupported_budget_and_prompt_budgets_remain():
@@ -88,14 +88,14 @@ def test_hosted_wire_bodies_omit_unsupported_budget_and_prompt_budgets_remain():
         for attempt in attempts:
             for step in attempt.steps:
                 if target.is_prompt:
-                    assert step.body["max_output_tokens"] in {200, 400}
+                    assert step.body["max_output_tokens"] in {200, 250, 400}
                     prompt_turns += 1
                 else:
                     assert set(step.body) == {"input"}
                     hosted_turns += 1
     # Issue-007 moved its ten two-turn attempts from pure Prompt to Support Hosted.
     # Healthcare's baseline also returns to the wider evidence scope after choosing a slot.
-    assert (hosted_targets, hosted_attempts, hosted_turns, prompt_turns) == (28, 280, 560, 275)
+    assert (hosted_targets, hosted_attempts, hosted_turns, prompt_turns) == (30, 300, 580, 309)
 
 
 @pytest.mark.parametrize("violation", [

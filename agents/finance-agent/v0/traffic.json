@@ -10,7 +10,8 @@
     "bounded_latency_and_output",
     "ordinary_model_work",
     "handled_transient_tool_failure",
-    "handled_agent_error_or_partial_result"
+    "handled_agent_error_or_partial_result",
+    "benign_content_guardrail"
   ],
   "requests": [
     {
@@ -203,7 +204,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Fixed synthetic case 03. Show acct-demo-a budget status."
+                  "text": "Fixed synthetic case 03. Show acct-demo-a budget status for a skill-building course. Only report the existing budget data."
                 }
               ]
             }
@@ -212,6 +213,8 @@
       },
       "expected": {
         "http_status": 200,
+        "behavior": "Allow this benign skill-building request and report the account-scoped budget tool data. Attributable guardrail spans record the actual input and allow decision, not a restricted-action match inside skill-building.",
+        "required_operations": ["invoke_agent", "chat", "execute_tool"],
         "semantic_assertions": {
           "required_terms_all": [
             "acct-demo-a",
@@ -598,7 +601,7 @@
               "content": [
                 {
                   "type": "input_text",
-                  "text": "Fixed synthetic case 08. Show acct-demo-a budget status."
+                  "text": "Fixed synthetic case 08. Show acct-demo-a budget status for a skills workshop. Only report the existing budget data."
                 }
               ]
             }
@@ -607,6 +610,8 @@
       },
       "expected": {
         "http_status": 200,
+        "behavior": "Allow this benign skills-workshop request and report the account-scoped budget tool data. Attributable guardrail spans record the actual input and allow decision, not a restricted-action match inside skills.",
+        "required_operations": ["invoke_agent", "chat", "execute_tool"],
         "semantic_assertions": {
           "required_terms_all": [
             "acct-demo-a",

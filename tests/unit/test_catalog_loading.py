@@ -1,12 +1,14 @@
 """Offline loading is cheap; full asset validation is deliberate."""
 
 from pathlib import Path
+import json
 
 import pytest
 import yaml
 
 from agent_insights_quality.catalogs import load_catalog, validate_catalog
 from agent_insights_quality.contracts import Target
+from agent_insights_quality.results import ISSUE_CATEGORIES
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,9 +29,9 @@ def test_loading_reads_each_catalog_once_and_never_walks_sources(monkeypatch):
     monkeypatch.setattr(Path, "rglob", forbidden_walk)
     catalog = load_catalog(ROOT)
     assert len(catalog.agents) == 5
-    assert len(catalog.targets) == 41
-    assert len({target.key for target in catalog.targets}) == 41
-    assert len({target.version_root for target in catalog.targets}) == 41
+    assert len(catalog.targets) == 45
+    assert len({target.key for target in catalog.targets}) == 45
+    assert len({target.version_root for target in catalog.targets}) == 45
     for target in catalog.targets:
         assert isinstance(target, Target)
         assert catalog.target(target.key) is target
@@ -37,6 +39,8 @@ def test_loading_reads_each_catalog_once_and_never_walks_sources(monkeypatch):
         assert target.runtime_name("daily") == target.unit_id.agent
         assert target.runtime_name("staging") == target.key.replace("/", "-")
         assert target.expectation["validation_mode"] == target.validation_mode
+        if not target.is_baseline:
+            assert target.expectation["category"] in ISSUE_CATEGORIES
     assert sum(target.is_baseline for target in catalog.targets) == 5
     assert len(calls) == 2
     with pytest.raises(KeyError):
@@ -67,7 +71,7 @@ def documents(tmp_path):
 def test_loading_does_not_require_deployment_sources(documents):
     _, save = documents
     catalog = load_catalog(save())
-    assert len(catalog.targets) == 41
+    assert len(catalog.targets) == 45
     assert not catalog.targets[0].version_root.exists()
 
 
@@ -101,3 +105,16 @@ def test_loader_rejects_ambiguous_ownership(documents, violation):
 
 def test_explicit_validation_checks_all_reviewed_assets():
     validate_catalog(load_catalog(ROOT))
+    schema = json.loads((ROOT / "schemas" / "issue-catalog.schema.json").read_text())
+    assert set(schema["properties"]["issues"]["items"]["properties"]["category"]["enum"]) == set(ISSUE_CATEGORIES)
+
+
+@pytest.mark.parametrize("category", [None, "unreviewed", "https://synthetic.invalid", True])
+def test_loading_rejects_missing_or_unreviewed_categories(documents, category):
+    (_, issues), save = documents
+    if category is None:
+        issues["issues"][0].pop("category")
+    else:
+        issues["issues"][0]["category"] = category
+    with pytest.raises(ValueError, match="category"):
+        load_catalog(save())

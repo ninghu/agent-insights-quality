@@ -11,21 +11,57 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from agent_insights_quality.catalogs import load_catalog
+import yaml
+
+from agent_insights_quality.catalogs import Catalog, catalog_from_documents
 from agent_insights_quality.errors import QualityError
 from agent_insights_quality.privacy import restore_public_result
 from agent_insights_quality.report_context import ReportMetadata, load_report_context
 from agent_insights_quality.reporting import render_markdown
-from agent_insights_quality.results import PlannedUnit
-from agent_insights_quality.results import QualityResult
+from agent_insights_quality.results import PlannedUnit, QualityResult
 from agent_insights_quality.selection import select_daily
 
 
-def _plan(root: Path, report_date: date) -> tuple[PlannedUnit, ...]:
+def _plan(catalog: Catalog, report_date: date, *, categorized: bool) -> tuple[PlannedUnit, ...]:
     return tuple(
-        PlannedUnit(item.unit_id, None if item.is_baseline else item.unit_id.logical_version)
-        for item in select_daily(load_catalog(root), report_date)
+        PlannedUnit(
+            item.unit_id, None if item.is_baseline else item.unit_id.logical_version,
+            item.expectation["category"] if categorized and not item.is_baseline else None,
+        )
+        for item in select_daily(catalog, report_date)
     )
+
+
+def _trusted_source(root: Path, revision: str) -> None:
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise QualityError("public_report_source_untrusted")
+    trusted = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", revision, "HEAD"],
+        cwd=root, capture_output=True, check=False,
+    )
+    if trusted.returncode:
+        raise QualityError("public_report_source_untrusted")
+
+
+def _source_catalog(root: Path, revision: str) -> Catalog:
+    """Historical rotation and category attribution use both original authorities."""
+    _trusted_source(root, revision)
+    documents = []
+    for filename in ("AGENT_CATALOG.yaml", "ISSUE_CATALOG.yaml"):
+        snapshot = subprocess.run(
+            ["git", "show", f"{revision}:catalogs/{filename}"],
+            cwd=root, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        if snapshot.returncode:
+            raise QualityError("public_report_source_catalog_unavailable")
+        try:
+            documents.append(yaml.safe_load(snapshot.stdout))
+        except yaml.YAMLError as error:
+            raise QualityError("public_report_source_catalog_invalid") from error
+    try:
+        return catalog_from_documents(root, tuple(documents))
+    except (KeyError, TypeError, ValueError) as error:
+        raise QualityError("public_report_source_catalog_invalid") from error
 
 
 def approved_document(
@@ -37,7 +73,12 @@ def approved_document(
         report_date = date.fromisoformat(document["report_date"])
     except (KeyError, ValueError, TypeError) as error:
         raise QualityError("public_report_date_invalid") from error
-    plan = _plan(root, report_date)
+    catalog = _source_catalog(root, document.get("source_commit"))
+    plan = _plan(
+        catalog, report_date,
+        categorized=isinstance(document.get("report"), Mapping)
+        and "category_breakdown" in document["report"],
+    )
     value = validate_public_report(document, allowed_units=plan)
     result = restore_public_result(value["report"], allowed_units=plan)
     return value, result, plan
@@ -76,12 +117,6 @@ def verify_artifact(
         match = re.fullmatch(r"reports/daily/(\d{4})/(\d{2})/(\d{2})/report.json", repository_path)
         if match is None or "-".join(match.groups()) != value["report_date"]:
             raise QualityError("public_report_path_mismatch")
-    trusted = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", value["source_commit"], "HEAD"],
-        cwd=root, capture_output=True, check=False,
-    )
-    if trusted.returncode:
-        raise QualityError("public_report_source_untrusted")
     if markdown_path is not None and markdown_path.read_text(encoding="utf-8") != public_markdown(root, value):
         raise QualityError("public_report_rendering_mismatch")
 

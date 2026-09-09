@@ -46,7 +46,7 @@ def test_real_catalog_single_target_is_canonical_and_duplicate_catalog_is_reject
     catalog = load_catalog(Path(__file__).resolve().parents[2])
     args = cli.parser().parse_args(["run-staging", "--target", "finance-agent/issue-019", "--new-run"])
     target = staging_target.argument_target(args, catalog)
-    assert target.key == "finance-agent/issue-019" and len(catalog.targets) == 41
+    assert target.key == "finance-agent/issue-019" and len(catalog.targets) == 45
     assert staging_target.selection(target) == (runner.Selection(target, "traffic", ("fresh_target",)),)
     with pytest.raises(fake.QualityError, match="staging_target_invalid"):
         staging_target.argument_target(args, fake.replace(catalog, targets=(*catalog.targets, target)))

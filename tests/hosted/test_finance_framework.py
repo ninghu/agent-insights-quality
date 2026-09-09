@@ -9,19 +9,24 @@ import importlib
 import importlib.util
 from importlib.metadata import requires, version as installed_version
 import json
+import logging
 import socket
 import sys
 from collections import Counter, deque
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 import pytest
+from agent_framework import FunctionInvocationContext
 from agent_framework.foundry import FoundryChatClient
 from agent_framework.observability import enable_instrumentation
 from openai import AsyncOpenAI
 from opentelemetry import trace
+from opentelemetry.instrumentation.logging.handler import LoggingHandler
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -29,7 +34,7 @@ from packaging.requirements import Requirement
 
 
 ROOT = Path(__file__).resolve().parents[2] / "agents" / "finance-agent"
-VERSIONS = ["v0", *(f"issue-{number:03d}" for number in range(13, 21))]
+VERSIONS = ["v0", *(f"issue-{number:03d}" for number in range(13, 21)), "issue-040"]
 
 
 def test_finance_host_dependencies_match_deployable_requirements():
@@ -227,6 +232,29 @@ def tool_evidence(telemetry, name=None):
     ]
 
 
+@contextmanager
+def retry_completion_logs():
+    app = load_app("issue-019")
+    exporter = InMemoryLogRecordExporter()
+    provider = LoggerProvider()
+    provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    handler = LoggingHandler(level=logging.INFO, logger_provider=provider)
+    app.logger.addHandler(handler)
+    try:
+        yield exporter
+    finally:
+        app.logger.removeHandler(handler)
+        handler.close()
+        provider.shutdown()
+
+
+def completion_summaries(exporter):
+    return [
+        (item.log_record, json.loads(item.log_record.body))
+        for item in exporter.get_finished_logs()
+    ]
+
+
 def assert_real_trace(telemetry):
     spans = telemetry.get_finished_spans()
     operations = {span.attributes.get("gen_ai.operation.name") for span in spans}
@@ -241,6 +269,135 @@ def assert_real_trace(telemetry):
         while span.context.span_id != roots[0].context.span_id:
             assert span.parent is not None
             span = by_id[span.parent.span_id]
+
+
+def assert_guardrail_evidence(telemetry, text, decision):
+    spans = telemetry.get_finished_spans()
+    guards = [
+        span for span in spans
+        if span.name == "finance.guardrail.request_content"
+        and span.attributes.get("aiq.guardrail.input") == text
+    ]
+    assert guards
+    roots = [span for span in spans if span.attributes.get("gen_ai.operation.name") == "invoke_agent"]
+    by_id = {span.context.span_id: span for span in spans}
+    for guard in guards:
+        assert guard.attributes["gen_ai.agent.name"] == "finance-local-test"
+        assert guard.attributes["gen_ai.agent.version"] == "synthetic-version"
+        assert guard.attributes["aiq.guardrail.decision"] == decision
+        assert guard.attributes["aiq.guardrail.rule"] == "restricted_action_term"
+        if decision == "block":
+            start = guard.attributes["aiq.guardrail.match_start"]
+            end = guard.attributes["aiq.guardrail.match_end"]
+            assert guard.attributes["aiq.guardrail.matched_text"] == text[start:end]
+            assert text[start:end].casefold() == "kill"
+            assert text[start - 1].casefold() == "s"
+        span = guard
+        while span not in roots:
+            assert span.parent is not None
+            span = by_id[span.parent.span_id]
+        assert span.context.trace_id == guard.context.trace_id
+    return guards
+
+
+@pytest.mark.parametrize("version", VERSIONS)
+@pytest.mark.parametrize("stream", [False, True])
+def test_benign_skill_budget_reaches_real_tools_except_for_overblocking(version, stream, telemetry):
+    prompt = (
+        "Show acct-demo-a budget status for a skill-building course. "
+        "Only report the existing budget data."
+    )
+    blocked = version == "issue-040"
+
+    async def run():
+        steps = [] if blocked else [calls(("get_budget_summary", "acct-demo-a")), grounded_budget]
+        async with agent_for(version, steps) as (agent, boundary):
+            result = await invoke(agent, prompt, stream)
+            if blocked:
+                assert result.text == (
+                    "I cannot process this finance request because the content safety guardrail "
+                    "blocked it."
+                )
+                assert not boundary.requests
+            else:
+                assert result.text == "Budget summary. acct-demo-a: 430.25 spent."
+                assert returned_tools(boundary.requests[-1])[-1] == {
+                    "ok": True, "account_id": "acct-demo-a",
+                    "monthly_limit": 1000.0, "spent": 430.25, "currency": "USD",
+                }
+            return result.text
+
+    text = asyncio.run(run())
+    guards = assert_guardrail_evidence(telemetry, prompt, "block" if blocked else "allow")
+    assert len(tool_evidence(telemetry)) == (0 if blocked else 1)
+    if blocked:
+        assert len(guards) == 1
+        assert guards[0].attributes["aiq.guardrail.output"] == text
+        assert "430.25" not in text
+    else:
+        assert all(guard.attributes["aiq.guardrail.output"] == "" for guard in guards)
+        assert_real_trace(telemetry)
+
+
+@pytest.mark.parametrize("attempt", range(10))
+@pytest.mark.parametrize("version", ["v0", "issue-040"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_canonical_overblocking_attempts_have_paired_healthy_tool_evidence(
+    attempt, version, stream, telemetry,
+):
+    traffic = json.loads((ROOT / "issues" / "issue-040" / "traffic.json").read_text(encoding="utf-8"))
+    request = next(
+        request for request in traffic["requests"]
+        if request["id"] == traffic["attempts"][attempt]["probe_steps"][0]
+    )
+    prompt = request["request"]["body"]["input"][0]["content"][0]["text"]
+    account = next(account for account in ("acct-demo-a", "acct-demo-b") if account in prompt)
+    blocked = version == "issue-040"
+
+    async def run():
+        steps = [] if blocked else [calls(("get_budget_summary", account)), grounded_budget]
+        async with agent_for(version, steps) as (agent, boundary):
+            result = await invoke(agent, prompt, stream)
+            if blocked:
+                assert result.text == request["expected"]["semantic_assertions"]["exact_text"]
+                assert not boundary.requests
+            else:
+                spent = "430.25" if account == "acct-demo-a" else "210.00"
+                assert result.text == f"Budget summary. {account}: {spent} spent."
+                assert returned_tools(boundary.requests[-1])[-1]["account_id"] == account
+            return result.text
+
+    text = asyncio.run(run())
+    guards = assert_guardrail_evidence(telemetry, prompt, "block" if blocked else "allow")
+    if blocked:
+        assert len(guards) == 1
+        assert guards[0].attributes["aiq.guardrail.output"] == text
+        assert not tool_evidence(telemetry)
+    else:
+        assert len(tool_evidence(telemetry, "get_budget_summary")) == 1
+        assert_real_trace(telemetry)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_refused_turn_does_not_block_later_ordinary_budget_request(stream, telemetry):
+    refused = "Show acct-demo-a budget status for a skills workshop."
+    allowed = "Show acct-demo-b budget status."
+
+    async def run():
+        async with agent_for("issue-040", [
+            calls(("get_budget_summary", "acct-demo-b")), grounded_budget,
+        ]) as (agent, boundary):
+            session = agent.create_session()
+            first = await invoke(agent, refused, stream, session=session)
+            assert "guardrail blocked" in first.text
+            assert not boundary.requests
+            second = await invoke(agent, allowed, stream, session=session)
+            assert second.text == "Budget summary. acct-demo-b: 210.00 spent."
+
+    asyncio.run(run())
+    assert_guardrail_evidence(telemetry, refused, "block")
+    assert_guardrail_evidence(telemetry, allowed, "allow")
+    assert len(tool_evidence(telemetry)) == 1
 
 
 @pytest.mark.parametrize("version", VERSIONS)
@@ -367,6 +524,321 @@ def test_permanent_error_synthesis_and_retry_loop(version, stream, telemetry):
         for _, arguments, result in evidence
     )
     assert_real_trace(telemetry)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("retained_executions", [1, 2])
+def test_missing_retry_spans_do_not_mean_fewer_permanent_error_executions(
+    stream, retained_executions, telemetry, monkeypatch, caplog,
+):
+    export = telemetry.export
+    actual_results = []
+
+    def export_with_tool_span_loss(spans):
+        retained = []
+        for span in spans:
+            if span.name == "finance.tool.get_balance":
+                actual_results.append(json.loads(span.attributes["aiq.tool.call.result"]))
+            is_balance_execution = (
+                span.attributes.get("gen_ai.operation.name") == "execute_tool"
+                and span.attributes.get("gen_ai.tool.name") == "get_balance"
+            )
+            if not is_balance_execution or len(actual_results) <= retained_executions:
+                retained.append(span)
+        return export(retained)
+
+    monkeypatch.setattr(telemetry, "export", export_with_tool_span_loss)
+
+    async def run():
+        async with agent_for("issue-019", [
+            answer("Acknowledged."),
+            calls(("get_balance", "acct-demo-missing")), grounded_balance,
+        ]) as (agent, boundary):
+            session = agent.create_session()
+            await invoke(agent, "Acknowledge the synthetic conversation.", stream, session=session)
+            response = await invoke(
+                agent, "Show the balance for acct-demo-missing.", stream, session=session,
+            )
+            assert response.text == "Balance lookup failed: account_not_found."
+            assert len(boundary.requests) == 3
+            assert returned_tools(boundary.requests[-1]) == [actual_results[-1]]
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="agent_framework"),
+        retry_completion_logs() as completion_logs,
+    ):
+        asyncio.run(run())
+        [(record, summary)] = completion_summaries(completion_logs)
+
+    assert actual_results == [{
+        "ok": False, "account_id": "acct-demo-missing",
+        "error": {"code": "account_not_found"},
+    }] * 3
+    assert caplog.messages.count("Function get_balance succeeded.") == 3
+    assert len(tool_evidence(telemetry, "get_balance")) == retained_executions
+    assert summary == {
+        "event": "finance.retry.execution_summary",
+        "tool_name": "get_balance",
+        "attempted_executions": 3,
+        "completed_executions": 3,
+        "outcomes": [
+            {"execution": index, "status": "returned", "ok": False, "error_code": "account_not_found"}
+            for index in (1, 2, 3)
+        ],
+    }
+    request_span = next(
+        span for span in telemetry.get_finished_spans()
+        if span.context.span_id == record.span_id
+    )
+    assert request_span.attributes["gen_ai.operation.name"] == "invoke_agent"
+    assert request_span.context.trace_id == record.trace_id
+    assert "acct-demo-missing" in json.dumps(dict(request_span.attributes))
+    assert record.attributes["gen_ai.agent.name"] == "finance-local-test"
+    assert record.attributes["gen_ai.agent.version"] == "synthetic-version"
+    assert "acct-demo-missing" not in record.body
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("tool_name,account,ok", [
+    ("get_balance", "acct-demo-a", True),
+    ("get_budget_summary", "acct-demo-missing", False),
+])
+def test_retry_completion_summary_reports_single_nonrepeated_execution(
+    stream, tool_name, account, ok, telemetry,
+):
+    async def run():
+        async with agent_for("issue-019", [
+            calls((tool_name, account)), answer("Natural terminal."),
+        ]) as (agent, _):
+            await invoke(agent, f"Look up {account}.", stream)
+
+    with retry_completion_logs() as logs:
+        asyncio.run(run())
+        [(record, summary)] = completion_summaries(logs)
+    assert summary["tool_name"] == tool_name
+    assert summary["attempted_executions"] == summary["completed_executions"] == 1
+    outcome = {"execution": 1, "status": "returned", "ok": ok}
+    if not ok:
+        outcome["error_code"] = "account_not_found"
+    assert summary["outcomes"] == [outcome]
+    assert len(tool_evidence(telemetry)) == 1
+    assert record.span_id != 0
+
+
+@pytest.mark.parametrize("fail_on", [1, 2, 3])
+@pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
+@pytest.mark.parametrize("broken_log_sink", [False, True])
+def test_retry_completion_summary_preserves_exception_and_cancellation(
+    fail_on, error_type, broken_log_sink, monkeypatch, capsys,
+):
+    app = load_app("issue-019")
+    finance = importlib.import_module(f"{app.__package__}.finance")
+    context = FunctionInvocationContext(
+        function=finance.get_balance, arguments={"account_id": "acct-demo-missing"},
+    )
+    failure = error_type("Synthetic boundary failure")
+    calls_made = 0
+
+    async def execute():
+        nonlocal calls_made
+        calls_made += 1
+        if calls_made == fail_on:
+            raise failure
+        context.result = {"ok": False, "error": {"code": "account_not_found"}}
+
+    if broken_log_sink:
+        def reject_log(*args, **kwargs):
+            raise OSError("Synthetic private diagnostic sink detail")
+        monkeypatch.setattr(app.logger, "info", reject_log)
+    with retry_completion_logs() as logs:
+        with pytest.raises(error_type) as captured:
+            asyncio.run(app.PermanentFailureRetryLoop().process(context, execute))
+        summaries = completion_summaries(logs)
+    assert captured.value is failure
+    assert calls_made == fail_on
+    if broken_log_sink:
+        assert summaries == []
+        assert capsys.readouterr().err == "AIQ_FINANCE_RETRY_SUMMARY_LOG_UNAVAILABLE\n"
+        return
+    [(record, summary)] = summaries
+    assert capsys.readouterr().err == ""
+    assert calls_made == summary["attempted_executions"] == fail_on
+    assert summary["completed_executions"] == fail_on - 1
+    assert summary["outcomes"] == [
+        *[
+            {"execution": index, "status": "returned", "ok": False, "error_code": "account_not_found"}
+            for index in range(1, fail_on)
+        ],
+        {"execution": fail_on, "status": "raised", "exception_type": error_type.__name__},
+    ]
+    assert "Synthetic boundary failure" not in record.body
+
+
+@pytest.mark.parametrize("broken_log_sink", [False, True])
+def test_retry_diagnostics_preserve_actual_varying_results_and_final_result(
+    broken_log_sink, monkeypatch, capsys,
+):
+    app = load_app("issue-019")
+    finance = importlib.import_module(f"{app.__package__}.finance")
+    context = FunctionInvocationContext(
+        function=finance.get_balance, arguments={"account_id": "acct-demo-missing"},
+    )
+    results = [
+        {"ok": False, "error": {"code": "account_not_found"}},
+        {"ok": True, "balance": 7.0},
+        {"ok": False, "error": {"code": "temporary_unavailable", "retryable": True}},
+    ]
+    completed = []
+
+    async def execute():
+        assert context.arguments == {"account_id": "acct-demo-missing"}
+        context.result = results[len(completed)]
+        completed.append(context.result)
+
+    if broken_log_sink:
+        def reject_log(*args, **kwargs):
+            raise OSError("Synthetic private diagnostic sink detail")
+        monkeypatch.setattr(app.logger, "info", reject_log)
+    with retry_completion_logs() as logs:
+        asyncio.run(app.PermanentFailureRetryLoop().process(context, execute))
+        summaries = completion_summaries(logs)
+    assert completed == results
+    assert context.result is results[-1]
+    if broken_log_sink:
+        assert summaries == []
+        assert capsys.readouterr().err == "AIQ_FINANCE_RETRY_SUMMARY_LOG_UNAVAILABLE\n"
+    else:
+        assert capsys.readouterr().err == ""
+        [(record, summary)] = summaries
+        assert summary["attempted_executions"] == summary["completed_executions"] == len(completed)
+        assert summary["outcomes"] == [
+            {"execution": 1, "status": "returned", "ok": False, "error_code": "account_not_found"},
+            {"execution": 2, "status": "returned", "ok": True},
+            {"execution": 3, "status": "returned", "ok": False, "error_code": "temporary_unavailable"},
+        ]
+        assert '"balance":' not in record.body
+
+
+@pytest.mark.parametrize("error_type", [None, RuntimeError, asyncio.CancelledError])
+def test_retry_log_and_stderr_failures_remain_visible_without_replacing_business_outcome(
+    error_type, monkeypatch, telemetry,
+):
+    app = load_app("issue-019")
+    finance = importlib.import_module(f"{app.__package__}.finance")
+    context = FunctionInvocationContext(
+        function=finance.get_balance, arguments={"account_id": "acct-demo-a"},
+    )
+    result = {"ok": True}
+    failure = error_type("Synthetic original failure") if error_type else None
+
+    async def execute():
+        if failure is not None:
+            raise failure
+        context.result = result
+
+    def reject_log(*args, **kwargs):
+        raise OSError("Synthetic diagnostic sink detail")
+
+    class UnavailableStderr:
+        def write(self, text):
+            raise OSError("Synthetic warning sink detail")
+
+    monkeypatch.setattr(app.logger, "info", reject_log)
+    with trace.get_tracer("synthetic-retry").start_as_current_span("retry-warning-test") as span:
+        with monkeypatch.context() as patch:
+            patch.setattr(app.sys, "stderr", UnavailableStderr())
+            if failure is not None:
+                with pytest.raises(error_type) as captured:
+                    asyncio.run(app.PermanentFailureRetryLoop().process(context, execute))
+                assert captured.value is failure
+            else:
+                asyncio.run(app.PermanentFailureRetryLoop().process(context, execute))
+                assert context.result is result
+        assert span.attributes["finance.retry.summary_log_unavailable"] is True
+        assert span.attributes["finance.retry.summary_warning_unavailable"] is True
+
+
+def test_retry_summary_reader_programming_error_propagates_without_claiming_complete_data(
+    monkeypatch, capsys,
+):
+    app = load_app("issue-019")
+    finance = importlib.import_module(f"{app.__package__}.finance")
+    context = FunctionInvocationContext(
+        function=finance.get_balance, arguments={"account_id": "acct-demo-missing"},
+    )
+    results = [
+        {"ok": False, "error": {"code": "account_not_found"}},
+        {"ok": True},
+    ]
+    failure = ValueError("Synthetic private projection detail")
+    read_result = app.tool_result_payload
+    completed = []
+
+    def read_summary(result):
+        if result is results[1]:
+            raise failure
+        return read_result(result)
+
+    async def execute():
+        context.result = results[len(completed)]
+        completed.append(context.result)
+
+    monkeypatch.setattr(app, "tool_result_payload", read_summary)
+    with retry_completion_logs() as logs:
+        with pytest.raises(ValueError) as captured:
+            asyncio.run(app.PermanentFailureRetryLoop().process(context, execute))
+        [(record, summary)] = completion_summaries(logs)
+    assert captured.value is failure
+    assert completed == results
+    assert summary["attempted_executions"] == summary["completed_executions"] == 2
+    assert summary["outcomes"][-1] == {
+        "execution": 2, "status": "returned", "result_summary_unavailable": True,
+    }
+    assert "Synthetic private projection detail" not in record.body
+    assert capsys.readouterr().err == ""
+
+
+def test_unstructured_result_is_preserved_and_explicitly_marked_unavailable():
+    app = load_app("issue-019")
+    finance = importlib.import_module(f"{app.__package__}.finance")
+    context = FunctionInvocationContext(
+        function=finance.get_balance, arguments={"account_id": "acct-demo-missing"},
+    )
+    result = "Synthetic non-JSON tool result"
+
+    async def execute():
+        context.result = result
+
+    with retry_completion_logs() as logs:
+        asyncio.run(app.PermanentFailureRetryLoop().process(context, execute))
+        [(record, summary)] = completion_summaries(logs)
+    assert context.result is result
+    assert summary["attempted_executions"] == summary["completed_executions"] == 1
+    assert summary["outcomes"] == [
+        {"execution": 1, "status": "returned", "result_summary_unavailable": True},
+    ]
+    assert result not in record.body
+
+
+def test_unexpected_logger_programming_error_is_not_silently_ignored(monkeypatch, capsys):
+    app = load_app("issue-019")
+    finance = importlib.import_module(f"{app.__package__}.finance")
+    context = FunctionInvocationContext(
+        function=finance.get_balance, arguments={"account_id": "acct-demo-a"},
+    )
+    failure = RuntimeError("Synthetic private logger programming detail")
+
+    async def execute():
+        context.result = {"ok": True}
+
+    def reject_log(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(app.logger, "info", reject_log)
+    with pytest.raises(RuntimeError) as captured:
+        asyncio.run(app.PermanentFailureRetryLoop().process(context, execute))
+    assert captured.value is failure
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize("version", ["v0", "issue-017"])

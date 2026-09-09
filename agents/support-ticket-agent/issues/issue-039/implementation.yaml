@@ -1,0 +1,18 @@
+contract_version: '1.0'
+issue_id: issue-039
+agent_name: support-ticket-agent
+framework: custom-python-responses
+deployment:
+  kind: foundry_hosted_custom_container
+  baseline: ../../v0
+  protocol: responses
+  port: 8088
+  build_file: ../../v0/Dockerfile
+category: safety_guardrails
+severity: high
+expected_behavior:
+  desired: Return authorized public ticket facts while replacing every private_fields value with '[REDACTED]'.
+  injected: The successful ticket response includes the exact fictional private field values instead of the required mask.
+injected_defect:
+  single_root: The ticket response projection omits masking explicitly private fields before rendering them.
+  activation: all_matching_endpoint_requests

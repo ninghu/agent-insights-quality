@@ -49,7 +49,23 @@
         "consumedVariables": ["_startTime", "_endTime", "_snapshot"],
         "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
         "kind": "query",
-        "query": "let Selected = AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1;\nlet RunIds = coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]));\nAIQUnitsV1(RunIds)\n| project Value = Agent, Label = Agent\n| distinct Value, Label\n| order by Value asc"
+        "query": "let Selected = AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1;\nlet RunIds = coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]));\nAIQUnitsV1(RunIds)\n| extend Value = iff(Kind == 'baseline', 'Baseline', TestCategory)\n| where Value in ('Baseline', 'context_memory', 'cost_tokens', 'hallucinations', 'latency', 'output_quality', 'reliability_errors', 'safety_guardrails', 'tool_call_failures')\n| distinct Value\n| project Value, Label = iff(Value == 'Baseline', 'Baseline — global penalties only', Value)\n| order by Value asc"
+      },
+      "defaultValue": {"kind": "all"},
+      "displayName": "Test category (All includes uncategorized history)",
+      "id": "a5adf918-de59-44f9-898f-0f4a2e210a7a",
+      "kind": "string",
+      "selectionType": "single-all",
+      "showOnPages": {"kind": "selection", "pageIds": ["2a7768b8-083b-4337-9835-c4812d5fafcd"]},
+      "variableName": "_testCategory"
+    },
+    {
+      "dataSource": {
+        "columns": {"label": "Label", "value": "Value"},
+        "consumedVariables": ["_startTime", "_endTime", "_snapshot", "_testCategory"],
+        "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+        "kind": "query",
+        "query": "let Selected = AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1;\nlet RunIds = coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]));\nAIQUnitsV1(RunIds)\n| where isempty(_testCategory) or (_testCategory == 'Baseline' and Kind == 'baseline') or (Kind == 'issue' and TestCategory == _testCategory)\n| project Value = Agent, Label = Agent\n| distinct Value, Label\n| order by Value asc"
       },
       "defaultValue": {"kind": "all"},
       "displayName": "Agent",
@@ -75,11 +91,22 @@
     },
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
+      "id": "8da4f887-296b-4b08-a20c-330fdfd3694f",
+      "layout": {"height": 11, "width": 24, "x": 0, "y": 3},
+      "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
+      "query": "let Latest = AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1;\nlet SelectedRunIds = toscalar(Latest | summarize make_set(FrameworkRunId));\nAIQCategoryChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', SelectedRunIds)\n| project ReportDate, TestCategory = Category, StoredScore = case(Category == 'Baseline', '—', not(CategoryAvailable), 'Unavailable', isnull(CategoryScore), 'N/A', tostring(CategoryScore)), C_E = iff(CategoryAvailable and Category != 'Baseline', strcat(C, '/', E), ''), Miss = M, Noise = N, Duplicate = D, Scored_Planned = iff(not(CategoryAvailable), '', iff(Category == 'Baseline', strcat(ScoredBaselines, '/', PlannedBaselines), strcat(ScoredIssues, '/', PlannedIssues))), ExcludedUnits, Availability, PreviousDate, PreviousStoredScore = case(Category == 'Baseline', '—', not(coalesce(PreviousCategoryAvailable, false)), 'Unavailable', isnull(PreviousCategoryScore), 'N/A', tostring(PreviousCategoryScore)), CategoryComparisonNote\n| order by TestCategory asc",
+      "title": "Scores by category — stored test-category quality; Baseline = separate global penalties, not a score",
+      "usedParamVariables": ["_startTime", "_endTime"],
+      "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
+      "visualType": "table"
+    },
+    {
+      "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "66f57b36-e671-4588-baf4-c88f9fe8e9c6",
-      "layout": {"height": 8, "width": 24, "x": 0, "y": 3},
+      "layout": {"height": 8, "width": 24, "x": 0, "y": 14},
       "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
       "query": "AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| extend Series = strcat('v2 / Sweden Central / ', CoveragePolicy)\n| project ReportDate, QualityScore, Series\n| order by ReportDate asc",
-      "title": "Stored v2 quality trend — Sweden Central; check coverage and rotation limits below",
+      "title": "Stored v2 quality trend — Sweden Central; overall is not a category average",
       "usedParamVariables": ["_startTime", "_endTime"],
       "visualOptions": {
         "hideLegend": false,
@@ -95,9 +122,9 @@
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "c5d97c0f-4f25-42a7-9441-ac0f83c88e73",
-      "layout": {"height": 6, "width": 24, "x": 0, "y": 11},
+      "layout": {"height": 6, "width": 24, "x": 0, "y": 22},
       "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
-      "query": "let Latest = materialize(AIQSnapshotChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nunion\n(Latest | project Metric = 'C — detected issues', Previous = PreviousCorrect, Current = CorrectIssues, Change = DeltaCorrect, PreviousWeighted = real(null), CurrentWeighted = real(null)),\n(Latest | project Metric = 'M — missed scored issues', Previous = PreviousMissed, Current = MissedIssues, Change = DeltaMissed, PreviousWeighted = PreviousWeightedMisses, CurrentWeighted = WeightedMisses),\n(Latest | project Metric = 'N — Noise cards', Previous = PreviousNoise, Current = NoiseCards, Change = DeltaNoise, PreviousWeighted = PreviousWeightedNoise, CurrentWeighted = WeightedNoise),\n(Latest | project Metric = 'D — Duplicate cards', Previous = PreviousDuplicates, Current = DuplicateCards, Change = DeltaDuplicates, PreviousWeighted = PreviousWeightedDuplicates, CurrentWeighted = WeightedDuplicates)\n| extend WeightedChange = CurrentWeighted - PreviousWeighted\n| order by Metric asc",
+      "query": "let Selected = AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1;\nlet SelectedRunIds = toscalar(Selected | summarize make_set(FrameworkRunId));\nlet Latest = materialize(AIQSnapshotChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', SelectedRunIds));\nunion\n(Latest | project Metric = 'C — detected issues', Previous = PreviousCorrect, Current = CorrectIssues, Change = DeltaCorrect, PreviousWeighted = real(null), CurrentWeighted = real(null)),\n(Latest | project Metric = 'M — missed scored issues', Previous = PreviousMissed, Current = MissedIssues, Change = DeltaMissed, PreviousWeighted = PreviousWeightedMisses, CurrentWeighted = WeightedMisses),\n(Latest | project Metric = 'N — Noise cards', Previous = PreviousNoise, Current = NoiseCards, Change = DeltaNoise, PreviousWeighted = PreviousWeightedNoise, CurrentWeighted = WeightedNoise),\n(Latest | project Metric = 'D — Duplicate cards', Previous = PreviousDuplicates, Current = DuplicateCards, Change = DeltaDuplicates, PreviousWeighted = PreviousWeightedDuplicates, CurrentWeighted = WeightedDuplicates)\n| extend WeightedChange = CurrentWeighted - PreviousWeighted\n| order by Metric asc",
       "title": "Latest vs previous snapshot — count changes and denominator penalties, not causal attribution",
       "usedParamVariables": ["_startTime", "_endTime"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
@@ -106,7 +133,7 @@
     {
       "dataSourceId": "cb4d6981-e3f2-4d89-a215-2b8cc8559db8",
       "id": "0e9c2a34-5b08-4ea0-8f9f-11eb2caaf978",
-      "layout": {"height": 7, "width": 24, "x": 0, "y": 17},
+      "layout": {"height": 7, "width": 24, "x": 0, "y": 28},
       "pageId": "d5313032-245b-4c3b-a7aa-6d55c7453e21",
       "query": "AIQSnapshotChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| project ReportDate, PreviousDate, IssueCoverage = strcat(ScoredIssues, '/', PlannedIssues), PreviousIssues = iff(isempty(PreviousRunId), '', strcat(PreviousScoredIssues, '/', PreviousPlannedIssues)), BaselineCoverage = strcat(ScoredBaselines, '/', PlannedBaselines), PreviousBaselines = iff(isempty(PreviousRunId), '', strcat(PreviousScoredBaselines, '/', PreviousPlannedBaselines)), ExcludedUnits, PreviousExcluded, ComparisonNote\n| order by ReportDate desc",
       "title": "Coverage and comparison limits — scored/planned units; excluded units are not misses",
@@ -119,9 +146,9 @@
       "id": "d16ff5a9-b5de-4f80-bc78-920c9d29284d",
       "layout": {"height": 7, "width": 24, "x": 0, "y": 4},
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "let Selected = materialize(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet CurrentRun = toscalar(Selected | project FrameworkRunId);\nlet RunIds = coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]));\nAIQUnitsV1(RunIds)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| summarize C = sumif(CorrectIssues, Scorable and Kind == 'issue'), E = sumif(ExpectedIssues, Scorable and Kind == 'issue'), N = sumif(NoiseCards, Scorable), D = sumif(DuplicateCards, Scorable), ExcludedUnits = countif(not(Scorable)), Issues = countif(Scorable and Kind == 'issue'), PlannedIssues = countif(Kind == 'issue'), Baselines = countif(Scorable and Kind == 'baseline'), PlannedBaselines = countif(Kind == 'baseline') by Agent, FrameworkRunId, ReportDate\n| project Agent, Snapshot = iff(FrameworkRunId == CurrentRun, 'Current', 'Previous'), ReportDate, C_E = strcat(C, '/', E), M = E - C, N, D, IssueCoverage = strcat(Issues, '/', PlannedIssues), BaselineCoverage = strcat(Baselines, '/', PlannedBaselines), ExcludedUnits\n| order by Agent asc, ReportDate asc",
-      "title": "Agent counts — current and previous snapshots; baselines add penalties, not a score bonus",
-      "usedParamVariables": ["_startTime", "_endTime", "_snapshot", "_currentAgent"],
+      "query": "let Selected = materialize(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet CurrentRun = toscalar(Selected | project FrameworkRunId);\nlet RunIds = coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]));\nAIQUnitsV1(RunIds)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| where isempty(_testCategory) or (_testCategory == 'Baseline' and Kind == 'baseline') or (Kind == 'issue' and TestCategory == _testCategory)\n| summarize C = sumif(CorrectIssues, Scorable and Kind == 'issue'), E = sumif(ExpectedIssues, Scorable and Kind == 'issue'), N = sumif(NoiseCards, Scorable), D = sumif(DuplicateCards, Scorable), ExcludedUnits = countif(not(Scorable)), Issues = countif(Scorable and Kind == 'issue'), PlannedIssues = countif(Kind == 'issue'), Baselines = countif(Scorable and Kind == 'baseline'), PlannedBaselines = countif(Kind == 'baseline') by Agent, FrameworkRunId, ReportDate\n| project Agent, Snapshot = iff(FrameworkRunId == CurrentRun, 'Current', 'Previous'), ReportDate, C_E = iff(PlannedIssues > 0, strcat(C, '/', E), ''), M = iff(PlannedIssues > 0, E - C, long(null)), N, D, IssueCoverage = strcat(Issues, '/', PlannedIssues), BaselineCoverage = strcat(Baselines, '/', PlannedBaselines), ExcludedUnits\n| order by Agent asc, ReportDate asc",
+      "title": "Filtered Agent counts — each snapshot's test-category membership; no per-Agent quality score",
+      "usedParamVariables": ["_startTime", "_endTime", "_snapshot", "_currentAgent", "_testCategory"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
@@ -130,9 +157,9 @@
       "id": "e3c0d5b7-92b9-4cc2-9500-f8054965b338",
       "layout": {"height": 11, "width": 24, "x": 0, "y": 11},
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "let Selected = materialize(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet CurrentRun = toscalar(Selected | project FrameworkRunId);\nlet PreviousRun = toscalar(Selected | project PreviousRunId);\nAIQUnitPairV1(CurrentRun, PreviousRun)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| project Agent, LogicalVersion, ExpectedIssueAlias, Kind, Previous = strcat(PreviousStatus, '; C/E ', PreviousC, '/', PreviousE, '; M/N/D ', PreviousM, '/', PreviousN, '/', PreviousD), Current = strcat(CurrentStatus, '; C/E ', C, '/', E, '; M/N/D ', M, '/', N, '/', D), DeltaC, DeltaM, DeltaN, DeltaD, CurrentReasons, PreviousReasons\n| order by Agent asc, LogicalVersion asc",
-      "title": "Which units changed? — blank counts/deltas mean excluded, not planned, or no previous snapshot",
-      "usedParamVariables": ["_startTime", "_endTime", "_snapshot", "_currentAgent"],
+      "query": "let Selected = materialize(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet CurrentRun = toscalar(Selected | project FrameworkRunId);\nlet PreviousRun = toscalar(Selected | project PreviousRunId);\nAIQUnitPairV1(CurrentRun, PreviousRun)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| where isempty(_testCategory) or (_testCategory == 'Baseline' and Kind == 'baseline') or (Kind == 'issue' and (CurrentCategory == _testCategory or PreviousCategory == _testCategory))\n| project Agent, LogicalVersion, ExpectedIssueAlias, Kind, PreviousCategory, CurrentCategory, Previous = strcat(PreviousStatus, '; C/E ', PreviousC, '/', PreviousE, '; M/N/D ', PreviousM, '/', PreviousN, '/', PreviousD), Current = strcat(CurrentStatus, '; C/E ', C, '/', E, '; M/N/D ', M, '/', N, '/', D), DeltaC, DeltaM, DeltaN, DeltaD, CurrentReasons, PreviousReasons\n| order by Agent asc, LogicalVersion asc",
+      "title": "Units in either category snapshot — same-unit deltas, not category attribution; blank means absent/excluded/inapplicable",
+      "usedParamVariables": ["_startTime", "_endTime", "_snapshot", "_currentAgent", "_testCategory"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
@@ -141,9 +168,9 @@
       "id": "9860f0cd-c6d1-453e-bceb-623af41b62ce",
       "layout": {"height": 7, "width": 24, "x": 0, "y": 22},
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "let SelectedRun = toscalar(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1\n| project FrameworkRunId);\nAIQFindingsV1(pack_array(SelectedRun))\n| where isempty(_currentAgent) or Agent == _currentAgent\n| summarize Cards = count() by Agent, LogicalVersion, Kind, Scored, Classification, ExclusionReasons = tostring(ExclusionReasons)\n| order by Scored asc, Agent asc, LogicalVersion asc, Classification asc",
-      "title": "Finding counts — scored and unscored stay separate; unexpected real findings are not Noise",
-      "usedParamVariables": ["_startTime", "_endTime", "_snapshot", "_currentAgent"],
+      "query": "let Selected = materialize(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', true)\n| where ReportDate >= startofday(_startTime)\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet CurrentRun = toscalar(Selected | project FrameworkRunId);\nlet RunIds = coalesce(toscalar(Selected | project pack_array(FrameworkRunId, PreviousRunId)), dynamic([]));\nAIQFindingsV1(RunIds)\n| where isempty(_currentAgent) or Agent == _currentAgent\n| where isempty(_testCategory) or (_testCategory == 'Baseline' and Kind == 'baseline') or (Kind == 'issue' and TestCategory == _testCategory)\n| extend Snapshot = iff(FrameworkRunId == CurrentRun, 'Current', 'Previous')\n| summarize Cards = count() by Snapshot, ReportDate, Agent, LogicalVersion, Kind, TestCategory, Scored, Classification, ExclusionReasons = tostring(ExclusionReasons)\n| order by ReportDate asc, Scored asc, Agent asc, LogicalVersion asc, Classification asc",
+      "title": "Filtered findings — current/prior unit test category, not card category; scored/unscored remain separate",
+      "usedParamVariables": ["_startTime", "_endTime", "_snapshot", "_currentAgent", "_testCategory"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"
     },
@@ -152,8 +179,8 @@
       "id": "cb06f7e0-b1e6-45b2-913e-1e56772f8e3a",
       "layout": {"height": 4, "width": 24, "x": 0, "y": 0},
       "pageId": "2a7768b8-083b-4337-9835-c4812d5fafcd",
-      "query": "let Selected = materialize(AIQSnapshotChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nunion\n(Selected | project ReportDate, PreviousDate, ComparisonNote, Metadata = bag_pack('FrameworkRunId', FrameworkRunId, 'PreviousRunId', PreviousRunId, 'SourceCommit', SourceCommit, 'PreviousSourceCommit', PreviousSourceCommit, 'Region', Region, 'ScoringPolicy', ScoringPolicy, 'ScoreFormula', ScoreFormula, 'NoiseWeight', NoiseWeight, 'DuplicateWeight', DuplicateWeight, 'MissWeight', MissWeight, 'CoveragePolicy', CoveragePolicy)),\n(print ReportDate = datetime(null), PreviousDate = datetime(null), ComparisonNote = 'No official public-safe v2 snapshot in Sweden Central matches these filters. Select All (latest) or another date range. Private TEST results are never published here.', Metadata = dynamic(null)\n| where toscalar(Selected | count) == 0)",
-      "title": "Selected snapshot and comparison limits — expand Metadata for source and recorded policy",
+      "query": "let Selected = materialize(AIQSnapshotRunsV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2')\n| where isempty(_snapshot) or FrameworkRunId == _snapshot\n| sort by ReportDate desc, SnapshotOrder desc\n| take 1);\nlet SelectedRunIds = toscalar(Selected | summarize make_set(FrameworkRunId));\nunion\n(AIQSnapshotChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', SelectedRunIds)\n| join kind=leftouter (AIQCategoryChangesV1(_startTime, _endTime, 'swedencentral', 'unique-issues-noise-1-duplicate-05-miss-025-v2', SelectedRunIds)\n    | summarize Categories = make_list(bag_pack('TestCategory', Category, 'Availability', Availability, 'Comparison', CategoryComparisonNote)) by FrameworkRunId) on FrameworkRunId\n| project ReportDate, PreviousDate, QualityScore, PreviousScore, ComparisonNote, CategoryContext = bag_pack('Categories', Categories, 'FilterHelp', 'Choose Test category; All includes legacy uncategorized issues. Empty filtered rows are not zero counts. Baseline contains global penalties only. Filters never change global scores/comparison.'), Metadata = bag_pack('FrameworkRunId', FrameworkRunId, 'PreviousRunId', PreviousRunId, 'SourceCommit', SourceCommit, 'PreviousSourceCommit', PreviousSourceCommit, 'Region', Region, 'ScoringPolicy', ScoringPolicy, 'ScoreFormula', ScoreFormula, 'NoiseWeight', NoiseWeight, 'DuplicateWeight', DuplicateWeight, 'MissWeight', MissWeight, 'CoveragePolicy', CoveragePolicy)),\n(print ReportDate = datetime(null), PreviousDate = datetime(null), QualityScore = real(null), PreviousScore = real(null), ComparisonNote = 'No official public-safe v2 snapshot in Sweden Central matches these filters. Select All (latest) or another date range. Private TEST results are never published here.', CategoryContext = dynamic(null), Metadata = dynamic(null)\n| where toscalar(Selected | count) == 0)",
+      "title": "Unfiltered global comparison — expand CategoryContext for unavailable history/limits; Metadata for source/policy",
       "usedParamVariables": ["_startTime", "_endTime", "_snapshot"],
       "visualOptions": {"colorRulesDisabled": true, "hideTileTitle": false, "table__enableRenderLinks": false},
       "visualType": "table"

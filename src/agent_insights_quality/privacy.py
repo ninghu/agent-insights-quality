@@ -14,6 +14,8 @@ from jsonschema import Draft202012Validator
 
 from .errors import QualityError
 from .results import (
+    CATEGORY_POLICY,
+    ISSUE_CATEGORIES,
     Contribution,
     CoreVerdict,
     DeliveryStatus,
@@ -69,6 +71,13 @@ _COUNTS = _object({
         "correct_issues", "expected_issues", "noise_cards", "duplicate_cards",
     )
 })
+_COVERAGE = _object({
+    name: _COUNT for name in (
+        "planned_issues", "scored_issues", "planned_baselines",
+        "scored_baselines", "excluded_units",
+    )
+})
+_SCORE = {"type": ["number", "null"], "minimum": 0, "maximum": 100}
 _SUMMARY = {"enum": [None, *SUMMARIES.values()]}
 _FINDING = _object({
     "card_alias": {"type": "string", "pattern": r"^card-[0-9]{4}$"},
@@ -95,6 +104,18 @@ _UNIT = _object({
     "findings": {"type": "array", "items": _FINDING, "maxItems": 9999},
     "summary": _SUMMARY,
 })
+_UNIT["properties"]["category"] = {"enum": list(ISSUE_CATEGORIES)}
+_CATEGORY_BREAKDOWN = _object({
+    "version": {"const": CATEGORY_POLICY},
+    "categories": {
+        "type": "array", "minItems": len(ISSUE_CATEGORIES), "maxItems": len(ISSUE_CATEGORIES),
+        "items": _object({
+            "category": {"enum": list(ISSUE_CATEGORIES)},
+            "score": _SCORE, "counts": _COUNTS, "coverage": _COVERAGE,
+        }),
+    },
+    "baseline": _object({"counts": _COUNTS, "coverage": _COVERAGE}),
+})
 PUBLIC_RESULT_SCHEMA = _object({
     "scoring_policy": {"oneOf": [
         _object({
@@ -107,21 +128,17 @@ PUBLIC_RESULT_SCHEMA = _object({
         "version": "whole-unit-max-two-exclusions-v1",
         "max_excluded_units": 2, "minimum_scored_issues": 1,
     }},
-    "score": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "score": _SCORE,
     "status": _enum(DeliveryStatus),
     "team_report_eligible": {"type": "boolean"},
     "failure_reasons": {
         "type": "array", "items": _enum(FailureReason), "uniqueItems": True,
     },
     "counts": _COUNTS,
-    "coverage": _object({
-        name: _COUNT for name in (
-            "planned_issues", "scored_issues", "planned_baselines",
-            "scored_baselines", "excluded_units",
-        )
-    }),
+    "coverage": _COVERAGE,
     "units": {"type": "array", "items": _UNIT, "minItems": 1},
 })
+PUBLIC_RESULT_SCHEMA["properties"]["category_breakdown"] = _CATEGORY_BREAKDOWN
 _VALIDATOR = Draft202012Validator(PUBLIC_RESULT_SCHEMA)
 
 
@@ -144,13 +161,19 @@ def validate_public_projection(
         or not _VALIDATOR.is_valid(value)
     ):
         raise PrivacyError()
-    score = value["score"]
-    if score is not None and (
-        type(score) not in (int, float) or not math.isfinite(score)
-    ):
-        raise PrivacyError()
+    scores = [value["score"]]
     count_objects = [value["counts"], value["coverage"]]
     count_objects.extend(unit["counts"] for unit in value["units"])
+    if "category_breakdown" in value:
+        breakdown = value["category_breakdown"]
+        scores.extend(category["score"] for category in breakdown["categories"])
+        for bucket in (*breakdown["categories"], breakdown["baseline"]):
+            count_objects.extend((bucket["counts"], bucket["coverage"]))
+    if any(
+        score is not None and (type(score) not in (int, float) or not math.isfinite(score))
+        for score in scores
+    ):
+        raise PrivacyError()
     if any(type(number) is not int for counts in count_objects for number in counts.values()):
         raise PrivacyError()
     by_id = {
@@ -166,6 +189,7 @@ def validate_public_projection(
         if (
             unit["expected_issue_alias"] != planned.expected_issue_alias
             or unit["kind"] != ("issue" if planned.is_issue else "baseline")
+            or unit.get("category") != planned.category
         ):
             raise PrivacyError()
         aliases = set()

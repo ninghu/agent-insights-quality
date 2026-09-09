@@ -6,7 +6,7 @@ and coverage policies; do not reinterpret an older report using newer weights or
 ## Staging
 
 Staging normally selects changed, missing or incomplete targets. First use or an explicit full run
-covers five baselines and 36 issues with ten attempts per target. There is no deployed paired-v0.
+covers five baselines and 40 issues with ten attempts per target. There is no deployed paired-v0.
 
 Baselines require eight adequately evidenced healthy attempts with no proven healthy-contract
 violation. Deterministic issues require eight proven defect observations with no proven contradiction
@@ -15,6 +15,16 @@ Evaluate all ten attempts, not just the first eight successes.
 
 Missing evidence is not the same as a behavior failure. Preserve PASS, FAIL and INCOMPLETE
 separately, and never resample a behavioral miss until it passes.
+
+Retained span totals do not establish execution counts when telemetry is missing.
+Reconcile nested instrumentation and copied records before counting executions. An attributable
+function-completion log can survive the loss of its parent span; per-turn assessment
+context points to such owned logs without synthesizing spans or granting new citation
+authority. Reconcile actual completion records, arguments and structured outcomes before
+judging retry counts. A model tool-call ID can cover repeated physical executions.
+Fewer retained spans alone do not prove fewer calls: unresolved count evidence is
+INCOMPLETE, while independently proven behavior can remain scorable despite unrelated
+capture gaps. A complete query does not certify complete telemetry retention.
 
 For example, seven observations plus three sufficiently evidenced nonobservations fail the
 observation threshold. Six observations plus four insufficient attempts are INCOMPLETE, not a
@@ -70,6 +80,18 @@ Daily plans 20 issues and five baselines. Six distinct attributable probe attemp
 establish telemetry readiness, not defect correctness. It does not require every child span or
 repeat staging's deep behavioral checks before Insights.
 The eight-observation staging policy does not raise this six-attempt Daily readiness requirement.
+
+The reviewed inventory has 40 issues, including nine `safety_guardrails` cases. Issues
+037-040 extend coverage to a bounded unsafe-request refusal decision, untrusted-input
+instructions, synthetic sensitive-field redaction and benign-request overblocking.
+They use non-actionable synthetic inputs and outputs; this is application-guardrail
+coverage, not a claim of comprehensive content safety or foundation-model safety.
+Each case still owns one root cause and receives no extra scoring weight or Daily slot.
+
+Daily continues to rotate four issues per Agent. The largest inventories now contain
+ten issues, so complete inventory exposure requires up to three consecutive weekdays,
+not two. Historical public artifacts reconstruct their selected units from both catalogs
+at their trusted source commit; a larger current inventory does not change an older plan.
 
 Core diagnosis, reasonable category and independently supporting current evidence determine
 correctness. Severity and suggested fixes are diagnostic only. A candidate gap receives bounded
@@ -156,6 +178,34 @@ units remain visible as unscored diagnostics.
 More than two unscorable units, no scorable issue or systemic integrity failure produces no team
 score/report and only a private failure notice. Compare trends with scoring policy and coverage
 visible; Partial is not interchangeable with Full.
+
+### Test-category scores
+
+New Daily runs freeze each issue's reviewed `ISSUE_CATALOG.yaml` category in the private
+`result-plan` checkpoint before provider work. `catalog-test-category-v1` partitions whole
+issue units by that frozen category, not the labels or text of Insights cards. Every scored
+unit's C/E/Noise/Duplicate counts belong to its test category, even if a noisy card describes
+a different type of problem. Excluded units retain their category and unscored findings but
+contribute no counts or misses.
+
+Python computes and stores all eight category slices in the unified result's optional
+`category_breakdown`, using the run's recorded scorer and one-decimal rounding. Each slice
+includes planned/scored coverage and exclusions. A fully measured miss is 0.0; no scored
+expected issue is null/N/A, including categories not planned that day. Ineligible runs have
+no category scores, even if some category units completed.
+
+Baseline counts and coverage form a separate global-penalties bucket, without a score or
+healthy bonus. They are not apportioned to categories. The global score is unchanged and is
+not the mean of the category scores. Category counts plus baseline counts reconcile to the
+global totals. Small samples and daily rotation limit comparisons; a changed cohort must
+not be presented as evidence of an Engine-caused regression.
+
+Existing runs and results without category metadata remain uncategorized; neither resume,
+restoration nor a dashboard lookup backfills them from today's catalog. Explicit rescoring
+of a categorized result recomputes its category scores under the selected reviewed policy
+without changing classification, category attribution, coverage or the prepared email.
+Public category fields use the same closed vocabulary and whole-result reconstruction as
+all other published counts. Dashboard queries only read these stored scores.
 
 ### Historical scoring policies
 
