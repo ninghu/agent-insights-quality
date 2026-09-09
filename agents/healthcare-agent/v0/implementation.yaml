@@ -12,6 +12,10 @@ expected_behavior:
     Cross-date comparisons disclose unresolved evidence gaps. A user's explicit choice of an
     evidenced appointment narrows the booking action, not retained knowledge: unrelated-date
     warnings are optional, while a later wider comparison must disclose those gaps again.
+    Use the neutral refusal envelope only for explicit harmful-intent assistance requests,
+    even when fictional or hypothetical. Benign context acknowledgments and scheduling requests
+    retain their ordinary response paths; missing evidence or a prior assistant answer never
+    establishes harmful intent.
   injected: No defect is enabled.
 injected_defect:
   single_root: null

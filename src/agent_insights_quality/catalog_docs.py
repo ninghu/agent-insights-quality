@@ -37,7 +37,7 @@ def render_catalog_views(catalog: Catalog) -> dict[str, str]:
         "<!-- Generated from catalogs/ISSUE_CATALOG.yaml; do not edit. -->", "",
         "Every issue represents one independently fixable root cause and earns at most one detection.",
         f"Daily rotates {issues['selection']['issues_per_agent_daily']} issues per Agent. "
-        "Full staging covers all 36 issues and five baselines; incremental staging selects changed, "
+        f"Full staging covers all {len(issues['issues'])} issues and five baselines; incremental staging selects changed, "
         "missing, or incomplete targets.",
         "There is no separate deployed paired-v0 requirement. Validation modes below are reviewed "
         "catalog data; Prompt behavior remains subject to deployed staging evidence.", "",

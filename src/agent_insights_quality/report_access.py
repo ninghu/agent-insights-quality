@@ -160,7 +160,7 @@ class VerifiedReportAccess:
         parts = _parts(record_key)
         if len(parts) != 4 or parts[2] != "access":
             raise ReportAccessError("report_access_descriptor_invalid")
-        outbox = PrivateReportOutbox(runtime, parts[0])
+        outbox = PrivateReportOutbox(runtime, parts[0], presentation_id=parts[1])
         request = outbox.request()
         outbox.read_receipt(request)
         try:

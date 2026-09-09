@@ -32,7 +32,7 @@ agents:
       semantic_assertions: required_per_request
       function_calling: forbidden
       validation_mode: baseline
-    issue_ids: [issue-001, issue-002, issue-003, issue-004, issue-005, issue-006]
+    issue_ids: [issue-001, issue-002, issue-003, issue-004, issue-005, issue-006, issue-038]
   - name: healthcare-agent
     owner: Ilya Matiach
     type: prompt
@@ -45,7 +45,7 @@ agents:
       semantic_assertions: required_per_request
       function_calling: forbidden
       validation_mode: baseline
-    issue_ids: [issue-008, issue-009, issue-010, issue-011, issue-012]
+    issue_ids: [issue-008, issue-009, issue-010, issue-011, issue-012, issue-037]
   - name: finance-agent
     owner: Han Che
     type: hosted_code
@@ -58,7 +58,7 @@ agents:
       semantic_assertions: required
       function_calling: not_applicable
       validation_mode: baseline
-    issue_ids: [issue-013, issue-014, issue-015, issue-016, issue-017, issue-018, issue-019, issue-020]
+    issue_ids: [issue-013, issue-014, issue-015, issue-016, issue-017, issue-018, issue-019, issue-020, issue-040]
   - name: travel-agent
     owner: Sean Gayler
     type: hosted_code
@@ -84,4 +84,4 @@ agents:
       semantic_assertions: required
       function_calling: not_applicable
       validation_mode: baseline
-    issue_ids: [issue-007, issue-029, issue-030, issue-031, issue-032, issue-033, issue-034, issue-035, issue-036]
+    issue_ids: [issue-007, issue-029, issue-030, issue-031, issue-032, issue-033, issue-034, issue-035, issue-036, issue-039]

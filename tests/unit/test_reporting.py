@@ -217,7 +217,7 @@ def test_all_catalog_units_bind_titles_and_version_owned_reproduction_without_re
         target.unit_id, None if target.is_baseline else target.unit_id.logical_version,
     ) for target in targets)
     contexts = load_report_context(catalog_root, allowed_units=plan).for_plan(plan)
-    assert len(contexts) == 41
+    assert len(contexts) == 45
     assert not (catalog_root / "agents").exists()
     for target in targets:
         context = contexts[target.unit_id]

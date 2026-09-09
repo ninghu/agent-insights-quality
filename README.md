@@ -33,7 +33,7 @@ visible healthy requirement, baseline coverage and preservation of older invento
 - Local tests exercise actual Hosted business/framework code with controlled external boundaries
   and in-memory tracing. Prompt runtime behavior is evaluated in staging.
 - Staging tests changed or missing targets. The initial full inventory is five baselines plus
-  36 issues, with ten attempts each and no deployed paired-v0. Qualification requires eight
+  40 issues, with ten attempts each and no deployed paired-v0. Qualification requires eight
   adequately evidenced observations; a proven baseline or deterministic-contract violation
   still disqualifies the version. Scoped single-root hygiene separately checks for additional
   independent Agent defects; unresolved material candidates or inadequate evidence stay

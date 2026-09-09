@@ -251,8 +251,8 @@
     folder = 'Agent Insights Quality v1',
     docstring = 'Immutable current reports. Exact replay is deduplicated; conflicting run content is not scored.'
 ) AIQReportsV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', runIds:dynamic=dynamic(null)) {
-    // Scope candidates before carrying payloads, but reconcile each candidate's
-    // entire identity: a conflicting copy outside the filter must not be hidden.
+    // Scope candidates, then reconcile every copy of each identity. A conflict
+    // outside the requested dates/region/policy must not be hidden.
     let Candidates = QualityReportsV1
         | where PayloadVersion == '1'
         | where isnull(startDate) or ReportDate >= startofday(startDate)
@@ -314,6 +314,7 @@
         LogicalVersion = tostring(Unit.unit_id.logical_version),
         Kind = tostring(Unit.kind),
         ExpectedIssueAlias = tostring(Unit.expected_issue_alias),
+        TestCategory = iff(tostring(Unit.kind) == 'issue', tostring(Unit.category), ''),
         Scorable = tobool(Unit.scorable),
         CorrectIssues = tolong(Unit.counts.correct_issues),
         ExpectedIssues = tolong(Unit.counts.expected_issues),
@@ -332,7 +333,7 @@
     | mv-expand Finding = Findings to typeof(dynamic)
     | project
         ReportDate, FrameworkRunId, Region, CoverageStatus, ScoringPolicy,
-        Agent, LogicalVersion, Kind, Scorable, ExclusionReasons,
+        Agent, LogicalVersion, Kind, TestCategory, Scorable, ExclusionReasons,
         CardAlias = tostring(Finding.card_alias),
         RootCauseAlias = tostring(Finding.root_cause_alias),
         Core = tostring(Finding.core),
@@ -348,7 +349,7 @@
 // the scoring policy: historical scores and absent v1 MissWeight stay unchanged.
 .create-or-alter function with (
     folder = 'Agent Insights Quality dashboard',
-    docstring = 'Lightweight daily snapshot metadata. Optionally retain exactly one pre-window snapshot for each visible region/scoring/coverage series; never expand units here.'
+    docstring = 'Lightweight daily snapshot metadata. Optionally retain exactly one pre-window snapshot per visible region/scoring/coverage series; never expand units here.'
 ) AIQSnapshotRunsV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', includePrevious:bool=false) {
     let Daily = materialize(
         AIQRunsV1(iff(includePrevious, datetime(null), startDate), endDate, regionKey, scoringPolicy)
@@ -376,8 +377,9 @@
 .create-or-alter function with (
     folder = 'Agent Insights Quality dashboard',
     docstring = 'One snapshot per report date, normalized region and recorded scoring/coverage policy. First ingestion orders same-date revisions; replay cannot change selection.'
-) AIQSnapshotsV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', includePrevious:bool=false) {
-    let Runs = materialize(AIQSnapshotRunsV1(startDate, endDate, regionKey, scoringPolicy, includePrevious));
+) AIQSnapshotsV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', includePrevious:bool=false, runIds:dynamic=dynamic(null)) {
+    let Runs = materialize(AIQSnapshotRunsV1(startDate, endDate, regionKey, scoringPolicy, includePrevious)
+        | where isnull(runIds) or FrameworkRunId in (runIds));
     let RunIds = toscalar(Runs | summarize make_set(FrameworkRunId));
     let Cohorts = AIQUnitsV1(RunIds)
         | extend UnitKey = strcat(Agent, '/', LogicalVersion, '/', Kind, '/', ExpectedIssueAlias)
@@ -430,8 +432,14 @@
 .create-or-alter function with (
     folder = 'Agent Insights Quality dashboard',
     docstring = 'Immediate earlier report-date snapshot in the same region/scoring/coverage policy, before any dashboard date filter. Changed unit mix is disclosed, not skipped to find a nicer comparison.'
-) AIQSnapshotChangesV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='') {
-    AIQSnapshotsV1(startDate, endDate, regionKey, scoringPolicy, true)
+) AIQSnapshotChangesV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', selectedRunIds:dynamic=dynamic(null)) {
+    let Selected = materialize(AIQSnapshotRunsV1(startDate, endDate, regionKey, scoringPolicy, true)
+        | where isnull(startDate) or ReportDate >= startofday(startDate)
+        | where isnull(selectedRunIds) or FrameworkRunId in (selectedRunIds));
+    let RunIds = toscalar(Selected
+        | summarize Current = make_set(FrameworkRunId), Previous = make_set(PreviousRunId)
+        | project set_union(Current, Previous));
+    AIQSnapshotsV1(startDate, endDate, regionKey, scoringPolicy, true, RunIds)
     | sort by RegionKey asc, ScoringPolicy asc, CoveragePolicy asc, ReportDate asc
     | serialize
     | extend SameSeries = coalesce(
@@ -475,8 +483,128 @@
         DeltaNoise = NoiseCards - PreviousNoise,
         DeltaDuplicates = DuplicateCards - PreviousDuplicates
     | project-away SameSeries
-    // The predecessor seed must survive until AFTER prev() and all comparisons.
-    | where isnull(startDate) or ReportDate >= startofday(startDate)
+    // Remove seeds only after comparison; preserve the exact metadata-selected predecessor.
+    | where FrameworkRunId in (Selected | project FrameworkRunId)
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality dashboard',
+    docstring = 'Stored catalog test-category scores and a separate global baseline penalties bucket for every selected snapshot. Missing metadata stays unavailable; no scoring or catalog backfill.'
+) AIQCategorySnapshotsV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', runIds:dynamic=dynamic(null)) {
+    let Runs = materialize(AIQSnapshotsV1(startDate, endDate, regionKey, scoringPolicy, true, runIds));
+    let RunIds = toscalar(Runs | summarize make_set(FrameworkRunId));
+    let Categories = dynamic(['context_memory', 'cost_tokens', 'hallucinations', 'latency',
+        'output_quality', 'reliability_errors', 'safety_guardrails', 'tool_call_failures']);
+    let Cohorts = AIQUnitsV1(RunIds)
+        | extend Category = iff(Kind == 'baseline', 'Baseline', TestCategory),
+            UnitKey = strcat(Agent, '/', LogicalVersion, '/', Kind, '/', ExpectedIssueAlias)
+        | summarize
+            PlannedCategoryCohort = make_set(UnitKey),
+            ScoredCategoryCohort = make_set_if(UnitKey, Scorable),
+            UnitPlannedIssues = countif(Kind == 'issue'),
+            UnitScoredIssues = countif(Scorable and Kind == 'issue'),
+            UnitPlannedBaselines = countif(Kind == 'baseline'),
+            UnitScoredBaselines = countif(Scorable and Kind == 'baseline'),
+            UnitExcluded = countif(not(Scorable)),
+            UnitCorrect = sumif(CorrectIssues, Scorable and Kind == 'issue'),
+            UnitExpected = sumif(ExpectedIssues, Scorable and Kind == 'issue'),
+            UnitNoise = sumif(NoiseCards, Scorable),
+            UnitDuplicates = sumif(DuplicateCards, Scorable)
+          by FrameworkRunId, Category
+        | extend PlannedCategoryCohort = tostring(array_sort_asc(PlannedCategoryCohort)),
+            ScoredCategoryCohort = tostring(array_sort_asc(ScoredCategoryCohort));
+    Runs
+    | project ReportDate, FrameworkRunId, SnapshotOrder, RegionKey, ScoringPolicy, CoveragePolicy, CohortComplete
+    | join kind=leftouter (AIQReportsV1(datetime(null), datetime(null), '', '', RunIds)
+        | project FrameworkRunId, Breakdown = Payload.category_breakdown) on FrameworkRunId
+    | extend BreakdownAvailable = coalesce(
+        tostring(Breakdown.version) == 'catalog-test-category-v1'
+        and array_length(Breakdown.categories) == 8
+        and tostring(pack_array(
+            tostring(Breakdown.categories[0].category), tostring(Breakdown.categories[1].category),
+            tostring(Breakdown.categories[2].category), tostring(Breakdown.categories[3].category),
+            tostring(Breakdown.categories[4].category), tostring(Breakdown.categories[5].category),
+            tostring(Breakdown.categories[6].category), tostring(Breakdown.categories[7].category))) == tostring(Categories),
+        false)
+    // Expand a fixed grid AFTER snapshot selection so legacy/latest rows cannot disappear.
+    | mv-expand with_itemindex=BucketIndex Category = array_concat(Categories, dynamic(['Baseline'])) to typeof(string)
+    | extend Bucket = iff(Category == 'Baseline', Breakdown.baseline, Breakdown.categories[BucketIndex])
+    | join kind=leftouter Cohorts on FrameworkRunId, Category
+    | extend PlannedCategoryCohort = coalesce(PlannedCategoryCohort, '[]'),
+        ScoredCategoryCohort = coalesce(ScoredCategoryCohort, '[]'),
+        C = tolong(Bucket.counts.correct_issues), E = tolong(Bucket.counts.expected_issues),
+        N = tolong(Bucket.counts.noise_cards), D = tolong(Bucket.counts.duplicate_cards),
+        PlannedIssues = tolong(Bucket.coverage.planned_issues),
+        ScoredIssues = tolong(Bucket.coverage.scored_issues),
+        PlannedBaselines = tolong(Bucket.coverage.planned_baselines),
+        ScoredBaselines = tolong(Bucket.coverage.scored_baselines),
+        ExcludedUnits = tolong(Bucket.coverage.excluded_units)
+    | extend CategoryAvailable = BreakdownAvailable and CohortComplete and coalesce(
+        PlannedIssues == coalesce(UnitPlannedIssues, 0) and ScoredIssues == coalesce(UnitScoredIssues, 0)
+        and PlannedBaselines == coalesce(UnitPlannedBaselines, 0) and ScoredBaselines == coalesce(UnitScoredBaselines, 0)
+        and ExcludedUnits == coalesce(UnitExcluded, 0)
+        and C == coalesce(UnitCorrect, 0) and E == coalesce(UnitExpected, 0)
+        and N == coalesce(UnitNoise, 0) and D == coalesce(UnitDuplicates, 0)
+        and iff(Category == 'Baseline', C == 0 and E == 0 and PlannedIssues == 0 and ScoredIssues == 0,
+            PlannedBaselines == 0 and ScoredBaselines == 0
+            and iff(E == 0, isnull(Bucket.score), isnotnull(todouble(Bucket.score)))), false)
+    | extend CategoryScore = iff(CategoryAvailable and Category != 'Baseline', todouble(Bucket.score), real(null)),
+        Availability = case(
+            not(BreakdownAvailable), 'Unavailable: category metadata absent or unsupported; no backfill',
+            not(CategoryAvailable), 'Unavailable: category counts/coverage do not match unit details',
+            Category == 'Baseline', 'Global penalties only; no baseline quality score',
+            E == 0, 'N/A: no scored expected issues', 'Stored test-category score')
+    | project ReportDate, FrameworkRunId, SnapshotOrder, RegionKey, ScoringPolicy, CoveragePolicy,
+        Category, CategoryAvailable, Availability, CategoryScore, PlannedCategoryCohort, ScoredCategoryCohort,
+        C = iff(CategoryAvailable, C, long(null)), E = iff(CategoryAvailable, E, long(null)),
+        M = iff(CategoryAvailable and Category != 'Baseline', E - C, long(null)),
+        N = iff(CategoryAvailable, N, long(null)), D = iff(CategoryAvailable, D, long(null)),
+        PlannedIssues = iff(CategoryAvailable, PlannedIssues, long(null)),
+        ScoredIssues = iff(CategoryAvailable, ScoredIssues, long(null)),
+        PlannedBaselines = iff(CategoryAvailable, PlannedBaselines, long(null)),
+        ScoredBaselines = iff(CategoryAvailable, ScoredBaselines, long(null)),
+        ExcludedUnits = iff(CategoryAvailable, ExcludedUnits, long(null))
+}
+
+.create-or-alter function with (
+    folder = 'Agent Insights Quality dashboard',
+    docstring = 'Category comparison uses the existing immediate prior snapshot, never the last categorized publication. Global limits and changed category membership remain visible.'
+) AIQCategoryChangesV1(startDate:datetime=datetime(null), endDate:datetime=datetime(null), regionKey:string='', scoringPolicy:string='', selectedRunIds:dynamic=dynamic(null)) {
+    let Changes = materialize(AIQSnapshotChangesV1(startDate, endDate, regionKey, scoringPolicy, selectedRunIds));
+    let RunIds = toscalar(Changes
+        | summarize Current = make_set(FrameworkRunId), Previous = make_set(PreviousRunId)
+        | project set_union(Current, Previous));
+    let Categories = materialize(AIQCategorySnapshotsV1(startDate, endDate, regionKey, scoringPolicy, RunIds));
+    let Previous = Categories
+        | project PreviousRunId = FrameworkRunId, Category,
+            PreviousCategoryAvailable = CategoryAvailable, PreviousAvailability = Availability,
+            PreviousCategoryScore = CategoryScore, PreviousCategoryExpected = E,
+            PreviousPlannedCategoryCohort = PlannedCategoryCohort,
+            PreviousScoredCategoryCohort = ScoredCategoryCohort;
+    Changes
+    | project FrameworkRunId, PreviousRunId, PreviousDate, LimitReasons, ComparisonNote,
+        SourceCommit, PreviousSourceCommit
+    | join kind=inner Categories on FrameworkRunId
+    | join kind=leftouter Previous on PreviousRunId, Category
+    | extend BothCategoriesAvailable = CategoryAvailable and coalesce(PreviousCategoryAvailable, false)
+    | extend CategoryLimitReasons = set_union(LimitReasons, set_difference(pack_array(
+        iff(not(CategoryAvailable), 'current category metadata unavailable', ''),
+        iff(isnotempty(PreviousRunId) and not(coalesce(PreviousCategoryAvailable, false)),
+            'previous category metadata unavailable; no older categorized fallback', ''),
+        iff(BothCategoriesAvailable and PlannedCategoryCohort != PreviousPlannedCategoryCohort,
+            'planned category/baseline membership changed (rotation or category reassignment)', ''),
+        iff(BothCategoriesAvailable and ScoredCategoryCohort != PreviousScoredCategoryCohort,
+            'scored category/baseline membership changed', ''),
+        iff(Category != 'Baseline' and ((CategoryAvailable and E == 0)
+            or (coalesce(PreviousCategoryAvailable, false) and PreviousCategoryExpected == 0)),
+            'category score N/A: no scored expected issues', ''),
+        iff(isnotempty(PreviousRunId) and SourceCommit != PreviousSourceCommit, 'source commit changed', '')
+    ), dynamic([''])))
+    | extend CategoryComparisonNote = strcat(
+        iff(array_length(CategoryLimitReasons) > 0,
+            strcat('Limited: ', strcat_array(CategoryLimitReasons, '; ')), 'Same recorded category membership and coverage'),
+        '; descriptive, not causal: even the same source does not prove the same assessor, evidence or execution')
+    | project-away FrameworkRunId1, PreviousRunId1, Category1, BothCategoriesAvailable
 }
 
 .create-or-alter function with (
@@ -488,6 +616,7 @@
     let Current = PairUnits
         | where FrameworkRunId == frameworkRunId
         | project Agent, LogicalVersion, Kind, ExpectedIssueAlias,
+            CurrentCategory = TestCategory,
             CurrentPresent = true, CurrentScorable = Scorable,
             C = iff(Scorable and Kind == 'issue', CorrectIssues, long(null)),
             E = iff(Scorable and Kind == 'issue', ExpectedIssues, long(null)),
@@ -497,6 +626,7 @@
     let Previous = PairUnits
         | where FrameworkRunId == PreviousRun
         | project Agent, LogicalVersion, Kind, ExpectedIssueAlias,
+            PreviousCategory = TestCategory,
             PreviousPresent = true, PreviousScorable = Scorable,
             PreviousC = iff(Scorable and Kind == 'issue', CorrectIssues, long(null)),
             PreviousE = iff(Scorable and Kind == 'issue', ExpectedIssues, long(null)),
@@ -521,7 +651,7 @@
 
 .create-or-alter function with (
     folder = 'Agent Insights Quality dashboard',
-    docstring = 'Compatibility entry point for a single run alias. New dashboards resolve the metadata pair once and call AIQUnitPairV1 directly.'
+    docstring = 'Compatibility entry point. New dashboards resolve the metadata pair and call AIQUnitPairV1 directly.'
 ) AIQUnitChangesV1(frameworkRunId:string) {
     let Context = materialize(AIQRunsV1(datetime(null), datetime(null), '', '', pack_array(frameworkRunId)));
     let CurrentDate = coalesce(toscalar(Context | project ReportDate), datetime(0001-01-01));

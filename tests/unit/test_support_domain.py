@@ -456,6 +456,24 @@ def test_handoff_collects_full_typed_facts_without_mutation_or_model_work(domain
     assert not session.escalations and not session.poll_attempts and not models
 
 
+@pytest.mark.parametrize("ticket_id", ["ticket-demo-3", "ticket-demo-4"])
+def test_private_ticket_handoff_does_not_render_private_fields_or_change_its_root(domain, ticket_id):
+    facts = dict(owner="Synthetic desk", next_action="Review the display", deadline="tomorrow",
+                 validation="Compare the synthetic sample")
+    output, session, models = execute(domain, handoff_text(ticket_id, facts))
+    expected = {"ticket_id": ticket_id, **facts}
+    if domain.__name__.endswith("007"):
+        expected.pop("deadline")
+        expected.pop("validation")
+    assert json.loads(output) == expected
+    assert [call["name"] for call in session.calls] == ["read_ticket", "prepare_handoff"]
+    assert calls(session, "prepare_handoff")[0]["result"]["handoff"] == facts
+    assert session.tickets == domain.TICKETS
+    assert not models and not calls(session, "prepare_ticket_response")
+    assert "private_fields" not in output
+    assert all(value not in output for value in domain.TICKETS[ticket_id]["private_fields"].values())
+
+
 @pytest.mark.parametrize("invalid", [
     {}, {"owner": "Synthetic desk"}, {"owner": 7}, {"deadline": " "},
     {"validation": None}, {"next_action": ["read"]}, {"unexpected": "extra field"},
@@ -523,4 +541,119 @@ def test_baseline_handoff_replaces_only_a_redundant_read_coverage_slot():
     assert set(traffic["coverage"]) == {
         "grounded_success", "normal_latency_and_token_use", "bounded_latency_and_output",
         "ordinary_model_work", "handled_transient_tool_failure", "handled_agent_error_or_partial_result",
+        "private_ticket_field_redaction",
     }
+
+
+@pytest.mark.parametrize("ticket_id", ["ticket-demo-3", "ticket-demo-4"])
+def test_private_fields_use_response_projection_without_entering_model_facts(domain, ticket_id):
+    output, session, model_calls = execute(domain, f"Recover {ticket_id}.")
+    source = domain.TICKETS[ticket_id]
+    projection = calls(session, "prepare_ticket_response")
+    assert len(projection) == len(model_calls) == 1
+    assert projection[0]["arguments"] == {"ticket_id": ticket_id}
+    assert session.tickets[ticket_id] == source
+    assert f"revision {source['revision']}; status open" in output
+    assert not calls(session, "update_ticket")
+    for name, private in source["private_fields"].items():
+        assert private not in model_calls[0][0]
+        assert name not in model_calls[0][0]
+        if domain.__name__.endswith("039"):
+            assert f"private_fields.{name}={private}" in output
+            assert projection[0]["result"]["private_fields"][name] == private
+        else:
+            assert f"private_fields.{name}=[REDACTED]" in output
+            assert private not in output
+            assert projection[0]["result"]["private_fields"][name] == "[REDACTED]"
+
+
+@pytest.mark.parametrize("ticket_id", ["ticket-demo-3", "ticket-demo-4"])
+@pytest.mark.parametrize("action", ["Read", "Summarize"])
+def test_private_ticket_admission_rejection_still_precedes_redaction_dispatch(
+    observed_issue032, ticket_id, action,
+):
+    module, decisions = observed_issue032
+    output, session, models = execute(module, f"{action} {ticket_id}.")
+    assert output == "Valid ticket request rejected before model or tool dispatch."
+    assert decisions == [{
+        "request_kind": action.lower(), "ticket_known": True, "decision": "reject",
+        "reason": "request_kind_blocked", "short_circuit_stage": "before_business_dispatch",
+    }]
+    assert not session.calls and not models
+    assert session.tickets == module.TICKETS
+
+
+@pytest.mark.parametrize("version", ["v0", "issue-039"])
+@pytest.mark.parametrize("index", range(10))
+def test_all_ten_privacy_cases_have_matched_domain_evidence(version, index):
+    traffic = json.loads((ROOT / "issues" / "issue-039" / "traffic.json").read_text())
+    assert len(traffic["attempts"]) == 10
+    attempt = traffic["attempts"][index]
+    probe = next(item for item in traffic["requests"] if item["id"] == attempt["probe_steps"][0])
+    module = load_domain(version)
+    text = module.input_text(probe["request"]["body"]["input"])
+    output, session, model_calls = execute(module, text)
+    selected = session.request.ticket_id
+    read = calls(session, "read_ticket")
+    prepared = calls(session, "prepare_ticket_response")
+    assert len(read) == len(prepared) == len(model_calls) == 1
+    assert read[0]["result"]["ok"] is True
+    assert read[0]["result"]["ticket_id"] == prepared[0]["result"]["ticket_id"] == selected
+    assert session.tickets == module.TICKETS
+    for field, private in module.TICKETS[selected]["private_fields"].items():
+        assert private not in text
+        assert private not in model_calls[0][0]
+        assert (f"private_fields.{field}={private}" in output) == (version == "issue-039")
+        assert (f"private_fields.{field}=[REDACTED]" in output) == (version == "v0")
+    other = "ticket-demo-4" if selected == "ticket-demo-3" else "ticket-demo-3"
+    assert other not in output
+    assert all(value not in output for value in module.TICKETS[other]["private_fields"].values())
+
+
+def test_healthy_projection_masks_new_field_names_and_does_not_mutate_input():
+    module = load_domain("v0")
+    tickets = {"ticket-custom-7": {
+        "revision": 9, "status": "open", "summary": "Fictional local setup",
+        "private_fields": {
+            "synthetic_extra": "FICTIONAL_PRIVATE_EXTRA_GAMMA",
+            "synthetic_nested": {"label": "FICTIONAL_PRIVATE_NESTED_GAMMA"},
+            "synthetic_empty": "",
+        },
+    }}
+    output, session, model_calls = execute(module, "Read ticket-custom-7.", tickets)
+    assert output.count("=[REDACTED]") == 3
+    assert "FICTIONAL_PRIVATE_" not in output
+    assert "private_fields" not in model_calls[0][0]
+    assert session.tickets == tickets
+    assert tickets["ticket-custom-7"]["private_fields"]["synthetic_extra"] == "FICTIONAL_PRIVATE_EXTRA_GAMMA"
+
+
+@pytest.mark.parametrize("version", VERSIONS)
+def test_telemetry_projection_is_independent_of_ticket_output_projection(version):
+    module = load_domain(version)
+    source = module.TICKETS["ticket-demo-3"]
+    private = source["private_fields"]["synthetic_callback"]
+    record = {"ticket": source, "messages": [{"role": "assistant", "content": private.lower()}]}
+    safe = module.telemetry_view(record)
+    assert safe["ticket"]["private_fields"] == {
+        "synthetic_callback": "[REDACTED]", "synthetic_access_note": "[REDACTED]",
+    }
+    assert safe["messages"] == [{"role": "assistant", "content": "[REDACTED]"}]
+    assert private not in json.dumps(safe)
+    assert record["ticket"]["private_fields"]["synthetic_callback"] == private
+
+
+@pytest.mark.parametrize("sentences,reply", [
+    ("one sentence", "The fictional ticket is open at revision 2."),
+    ("two sentences", "The fictional ticket is open. Its revision is 2."),
+])
+def test_private_summary_keeps_sentence_format_and_masks_model_echo(sentences, reply):
+    module = load_domain("v0")
+    private = module.TICKETS["ticket-demo-3"]["private_fields"]["synthetic_callback"]
+    text = f"Summarize ticket-demo-3 in {sentences}; do not repeat {private}."
+    output, _, model_calls = execute(module, text, model_reply=reply)
+    assert output.count(".") == reply.count(".") + 2  # Two dotted field paths, no new sentence.
+    assert "=[REDACTED]" in output
+    assert private.lower() not in model_calls[0][0].lower()
+    output, _, _ = execute(module, "Read ticket-demo-3.", model_reply=private)
+    assert private not in output

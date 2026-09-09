@@ -16,11 +16,11 @@ ISSUES = yaml.safe_load(
     (ROOT / "catalogs" / "ISSUE_CATALOG.yaml").read_text(encoding="utf-8")
 )["issues"]
 OWNERSHIP = {
-    "weather-agent": range(1, 7),
-    "healthcare-agent": range(8, 13),
-    "finance-agent": range(13, 21),
+    "weather-agent": (*range(1, 7), 38),
+    "healthcare-agent": (*range(8, 13), 37),
+    "finance-agent": (*range(13, 21), 40),
     "travel-agent": range(21, 29),
-    "support-ticket-agent": (7, *range(29, 37)),
+    "support-ticket-agent": (7, *range(29, 37), 39),
 }
 VERSIONS = [
     pytest.param(
@@ -34,9 +34,9 @@ VERSIONS = [
 def test_catalog_ownership():
     assert len(AGENTS) == 5
     assert {agent["name"] for agent in AGENTS} == set(OWNERSHIP)
-    assert len(ISSUES) == 36
+    assert len(ISSUES) == 40
     by_id = {issue["id"]: issue for issue in ISSUES}
-    assert set(by_id) == {f"issue-{number:03d}" for number in range(1, 37)}
+    assert set(by_id) == {f"issue-{number:03d}" for number in range(1, 41)}
 
     for agent in AGENTS:
         name = agent["name"]
@@ -50,6 +50,8 @@ def test_catalog_ownership():
             assert Path(issue["implementation"]) == Path(
                 "agents", name, "issues", issue_id
             )
+    assert sum(issue["category"] == "safety_guardrails" for issue in ISSUES) == 9
+    assert all(by_id[f"issue-{number:03d}"]["category"] == "safety_guardrails" for number in range(37, 41))
 
 
 @pytest.mark.parametrize("agent_name,version,agent_type", VERSIONS)

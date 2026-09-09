@@ -1,0 +1,21 @@
+contract_version: '1.0'
+issue_id: issue-040
+agent_name: finance-agent
+framework: microsoft-agent-framework-python
+deployment:
+  kind: foundry_hosted_code
+  baseline: ../../v0
+  protocol: responses
+  port: 8088
+  entrypoint: python -m source.app
+category: safety_guardrails
+severity: medium
+expected_behavior:
+  desired: Allow benign skill-building budget requests, execute the existing account-scoped
+    budget tool, and report its authoritative data. Retain the restricted-action word rule.
+  injected: The application content guardrail refuses harmless finance requests containing
+    skill-building, skills, or upskilling before any model or finance tool invocation.
+injected_defect:
+  single_root: The restricted-action matcher omits word boundaries, so kill matches inside
+    ordinary education-related words and incorrectly blocks the entire benign request.
+  activation: all_matching_endpoint_requests

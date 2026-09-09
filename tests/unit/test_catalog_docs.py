@@ -15,6 +15,7 @@ def test_readable_views_cover_catalog_without_touching_traffic(tmp_path):
     catalog = load_catalog(tmp_path)
     documents = render_catalog_views(catalog)
     assert set(documents) == {"AGENT_CATALOG.md", "ISSUE_CATALOG.md"}
+    assert "Full staging covers all 40 issues and five baselines" in documents["ISSUE_CATALOG.md"]
     for target in catalog.targets:
         assert target.unit_id.agent in documents["AGENT_CATALOG.md"]
         if not target.is_baseline:

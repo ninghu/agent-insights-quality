@@ -3,20 +3,65 @@ from __future__ import annotations
 import json
 import os
 from typing import Annotated
+from uuid import uuid4
 
-from agent_framework import Agent, FunctionInvocationContext, tool
+from agent_framework import (
+    Agent,
+    ChatContext,
+    ChatMiddleware,
+    ChatResponse,
+    ChatResponseUpdate,
+    Content,
+    FunctionInvocationContext,
+    Message,
+    ResponseStream,
+    tool,
+)
 from agent_framework.observability import enable_instrumentation
 from opentelemetry import trace
 from pydantic import Field
 
 from . import tools as domain
+from .guardrail import REFUSAL, check_request_content
 from .observability import configure_observability
+from .responses import latest_user_text
 from .runtime_identity import require_foundry_runtime_identity
 
 
 RUNTIME_IDENTITY = require_foundry_runtime_identity()
 configure_observability(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
 tracer = trace.get_tracer(RUNTIME_IDENTITY.name, RUNTIME_IDENTITY.version)
+
+
+class RequestContentGuardrail(ChatMiddleware):
+    async def process(self, context: ChatContext, call_next) -> None:
+        text = latest_user_text(context.messages)
+        with RUNTIME_IDENTITY.start_span(tracer, "finance.guardrail.request_content") as span:
+            decision = check_request_content(text)
+            span.set_attribute("gen_ai.operation.name", "guardrail")
+            span.set_attribute("aiq.guardrail.name", "finance_request_content")
+            span.set_attribute("aiq.guardrail.input", text)
+            for key, value in decision.items():
+                span.set_attribute(f"aiq.guardrail.{key}", value)
+            blocked = decision["decision"] == "block"
+            span.set_attribute("aiq.guardrail.output", REFUSAL if blocked else "")
+        if not blocked:
+            await call_next()
+            return
+        response_id = f"resp_{uuid4().hex}"
+        if context.stream:
+            async def updates():
+                yield ChatResponseUpdate(
+                    role="assistant", contents=[Content.from_text(REFUSAL)],
+                    response_id=response_id, finish_reason="stop",
+                )
+
+            context.result = ResponseStream(updates(), finalizer=ChatResponse.from_updates)
+        else:
+            context.result = ChatResponse(
+                messages=[Message("assistant", [REFUSAL])],
+                response_id=response_id, finish_reason="stop",
+            )
 
 
 def finish_tool_span(name: str, result: dict) -> dict:
@@ -102,7 +147,7 @@ def create_agent(middleware, *, client=None, balance_tool=get_balance) -> Agent:
             get_budget_summary,
             list_monthly_items,
         ],
-        middleware=middleware,
+        middleware=[RequestContentGuardrail(), *middleware],
         default_options={"store": False},
     )
 

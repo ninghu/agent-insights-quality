@@ -235,6 +235,7 @@ def prepare_email(
     region_display: str | None = None, source_revision: str | None = None,
     scoring_link: VerifiedScoringLink | None = None, agent_links: dict[str, str] | None = None,
     report_access=None, delivery_binding: dict | None = None,
+    presentation_only: bool = False,
 ) -> EmailRequest:
     """Prepare one private record (including the HTML preview), without sending.
 
@@ -242,6 +243,8 @@ def prepare_email(
     under an existing delivery identity is a conflict, including after delivery.
     Test mode cannot select the team recipient or invoke any public sink.
     """
+    if type(presentation_only) is not bool or presentation_only and not test_run:
+        raise EmailError("email_presentation_requires_test")
     team = _address(team_recipient)
     if team != TEAM_RECIPIENT:
         raise EmailError("email_recipient_isolation")
@@ -266,6 +269,8 @@ def prepare_email(
         scoring_link=scoring_link, agent_links=agent_links,
         report_access=report_access,
     )
+    if presentation_only:
+        subject = "[PRESENTATION UPDATE] " + subject
     request = EmailRequest(
         delivery_id, recipient, subject, html, mode, report_date, test_run, rerun,
         dict(report_access.descriptor) if report_access is not None else None,

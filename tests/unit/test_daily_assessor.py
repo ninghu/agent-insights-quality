@@ -38,6 +38,7 @@ def write_settings(root, name, settings):
 
 def make_cli(h, monkeypatch, *, after_ports=None):
     h.catalog = replace(h.catalog, targets=tuple(replace(target, expectation={
+        **target.expectation,
         "title": "Synthetic reviewed defect", "root_cause": "Synthetic input contradiction",
         "expected_fix": "Honor the synthetic reviewed input",
     }) for target in h.catalog.targets), _documents=(

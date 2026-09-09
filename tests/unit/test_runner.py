@@ -90,7 +90,10 @@ def catalog(root, *, agents=1, issues=1, hosted=False):
                 UnitId(name, version), "hosted_code" if hosted else "prompt",
                 "model_mediated" if index else "baseline",
                 baseline.parent / "issues" / version if index else baseline,
-                baseline, {"root_cause": "Synthetic input contradiction"},
+                baseline, {
+                    "root_cause": "Synthetic input contradiction",
+                    **({"category": "hallucinations"} if index else {}),
+                },
             ))
     return Catalog(root.resolve(), names, tuple(targets), ({}, {}))
 

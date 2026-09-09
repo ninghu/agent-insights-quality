@@ -26,7 +26,7 @@ from test_runner import fake_storage
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DAY = date(2026, 9, 6)
+DAY = date(2026, 9, 7)
 
 
 @pytest.fixture
@@ -182,7 +182,7 @@ def test_retired_staging_binding_is_preserved_and_new_owner_is_not_evidence_reus
     selections = choose_staging(current, runtime, changes_since=lambda _: SourceChanges(tuple(paths)))
     traffic = {s.target.key for s in selections if s.action == "traffic"}
     assert traffic == {t.key for t in current.for_agent("support-ticket-agent")}
-    assert len(traffic) == 10
-    assert len([s for s in selections if s.action == "reassess"]) == 31
+    assert len(traffic) == 11
+    assert len([s for s in selections if s.action == "reassess"]) == 34
     assert retired not in {s.target.key for s in selections}
     assert runtime.staging_index.read(retired) == retired_index

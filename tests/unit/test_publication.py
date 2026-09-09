@@ -38,12 +38,15 @@ RUN = "daily-2026-09-04-r0"
 METADATA = {"report_date": "2026-09-04", "source_commit": "a" * 40, "region": "Sweden Central"}
 
 
-def quality(excluded=0, *, scoring_policy=SCORING_POLICY):
+def quality(excluded=0, *, scoring_policy=SCORING_POLICY, categorized=False):
     plan = [PlannedUnit(UnitId("synthetic-agent", "v0"))]
     actual = [UnitResult(plan[0].unit_id, (CardVerdict("card-0001", CoreVerdict.INCORRECT),))]
     for number in range(1, 4):
         alias = f"issue-{number:03}"
-        planned = PlannedUnit(UnitId("synthetic-agent", alias), alias)
+        planned = PlannedUnit(
+            UnitId("synthetic-agent", alias), alias,
+            "hallucinations" if categorized else None,
+        )
         plan.append(planned)
         cards = () if number == 2 else (CardVerdict("card-0001", CoreVerdict.CORRECT, alias),)
         if number == 1:
@@ -60,6 +63,26 @@ def event(number=0):
         "kind": "heartbeat", "stage": "traffic", "code": "ok",
         "counters": {"completed_count": number},
     }
+
+
+def test_category_payload_is_published_once_and_bound_to_the_frozen_plan(tmp_path):
+    result, plan = quality(categorized=True)
+    runtime = RuntimeStore("daily", root=tmp_path / "private")
+    client = FakeClient()
+    with runtime.ownership():
+        box = outbox(runtime, allowed_units=plan)
+        box.queue_report(result, **METADATA)
+        assert box.flush(client).delivered == 1
+        row, = client.rows
+        assert row["Payload"]["category_breakdown"] == result.category_breakdown.to_dict()
+        assert box.flush(client).attempted == 0
+        changed = tuple(
+            replace(unit, category="output_quality") if unit.is_issue else unit for unit in plan
+        )
+        other = outbox(runtime, allowed_units=changed)
+        with pytest.raises(StateConflict):
+            other.flush(client)
+        assert len(client.rows) == 1
 
 
 def outbox(runtime, **kwargs):
@@ -604,8 +627,12 @@ def test_versioned_kql_views_use_actual_result_paths_and_keep_legacy_history():
     assert "arg_min(PublishedAt, *) by FrameworkRunId" in current
     assert "by FrameworkRunId, EventId" in current
     assert "array_length(ContentHashes) > 1" in current
-    result = quality(1)[0].to_dict()
-    fixtures = {"Payload": result, "Unit": result["units"][0], "Finding": result["units"][0]["findings"][0]}
+    old = quality(1)[0].to_dict()
+    assert "category_breakdown" not in old
+    assert all("category" not in unit for unit in old["units"])
+    result = quality(1, categorized=True)[0].to_dict()
+    assert "category" not in result["units"][0]
+    fixtures = {"Payload": result, "Unit": result["units"][1], "Finding": result["units"][1]["findings"][0]}
     for alias, fixture in fixtures.items():
         for path in re.findall(rf"\b{alias}\.([a-z_]+(?:\.[a-z_]+)*)", current):
             value = fixture

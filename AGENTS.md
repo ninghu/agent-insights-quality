@@ -1,8 +1,8 @@
 # Contributor guide
 
 This public repository measures Foundry Agent Insights against five synthetic Agents, five
-baselines and 36 reviewed single-root issues. The goal is credible evidence, not a high score.
-Issue counts are Weather 6, Healthcare 5, Finance 8, Travel 8 and Support 9. Issue-007
+baselines and 40 reviewed single-root issues. The goal is credible evidence, not a high score.
+Issue counts are Weather 7, Healthcare 6, Finance 9, Travel 8 and Support 10. Issue-007
 belongs to Support's Hosted implementation; Healthcare remains pure Prompt.
 
 ## Rewrite status
@@ -37,7 +37,7 @@ staging/Daily fallbacks or stale procedural docs/skills as new authority.
 - Reuse the staging and Daily Sweden Central Accounts/Projects and their Agent objects, with
   separate g30 telemetry. Change versions/build artifacts only when deployment inputs change.
 - Staging selects changed, missing or incomplete targets. First use or explicit full staging
-  covers all 41 targets with ten attempts each. No deployed paired-v0 traffic; matched baseline
+  covers all 45 targets with ten attempts each. No deployed paired-v0 traffic; matched baseline
   comparisons belong in local Hosted tests. Retain unchanged results with their actual source/date.
 - An explicitly authorized `run-staging --target <catalog-key> --new-run` measures only that
   target's ten attempts. Its repeated command resumes even after FAIL/INCOMPLETE; another fresh

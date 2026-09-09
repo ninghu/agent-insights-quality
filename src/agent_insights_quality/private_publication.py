@@ -25,7 +25,7 @@ from .privacy import restore_public_result
 from .report_context import ReportMetadata, load_report_context
 from .report_review import RetainedReviewContext
 from .reporting import markdown_view, render_private_markdown
-from .results import PlannedUnit, QualityResult, UnitId
+from .results import PlannedUnit, QualityResult
 from .state import (
     RuntimeStore, StateError, _atomic_write, _confirm_durable, _encode,
     _inside, _open_snapshot, _parts, _unique_object,
@@ -323,18 +323,43 @@ def _write_local(runtime: RuntimeStore, path: Path, data: bytes) -> None:
 
 
 class PrivateReportOutbox:
-    def __init__(self, runtime: RuntimeStore, run_id: str, *, clock=time.monotonic):
+    def __init__(
+        self, runtime: RuntimeStore, run_id: str, *,
+        presentation_id: str | None = None, clock=time.monotonic,
+    ):
         if runtime.environment != "daily" or re.fullmatch(_RUN, run_id) is None:
             raise PrivateReportError("private_report_identity_invalid")
+        if presentation_id is not None and (
+            not isinstance(presentation_id, str) or re.fullmatch(_HASH, presentation_id) is None
+        ):
+            raise PrivateReportError("private_report_presentation_invalid")
         _parts(run_id)
         self.runtime, self.run_id, self.clock = runtime, run_id, clock
+        self.presentation_id = presentation_id
         self.records, self.run = runtime.outbox("private-reports"), runtime.run(run_id)
         self.disabled = False
         self._flush_lock = _directory_lock(self.records.directory / run_id)
 
     @property
     def request_key(self):
-        return "requests/" + self.run_id
+        return "requests/" + self.run_id + (
+            "/presentations/" + self.presentation_id if self.presentation_id is not None else ""
+        )
+
+    def _request_record(self, *, missing_ok=False):
+        request = self.records.read_completed(self.request_key, missing_ok=True)
+        if request is not None:
+            return request, self.request_key
+        if self.presentation_id is not None:
+            original_key = "requests/" + self.run_id
+            original = self.records.read_completed(original_key, missing_ok=True)
+            if original is not None and original.get("presentation_id") == self.presentation_id:
+                return original, original_key
+        if not missing_ok:
+            if self.presentation_id is not None:
+                raise PrivateReportError("private_report_presentation_missing")
+            self.records.read_completed(self.request_key)
+        return None, self.request_key
 
     def _identity(self, result, plan, environment, source_revision, report_date, test_run):
         run = self.run.read_completed("run")
@@ -371,7 +396,7 @@ class PrivateReportOutbox:
             "mode": "test" if test_run else "official" if result.team_report_eligible else "failure",
             "report_date": metadata.report_date, "source_revision": source_revision,
             "region": environment.region_display, "result_sha256": _hash(_json(retained)),
-            "plan_sha256": _hash(_json({"units": [asdict(u) for u in plan]})),
+            "plan_sha256": _hash(_json({"units": [u.to_dict() for u in plan]})),
             "assessment_sha256": _hash(_json(assessment)),
         }
 
@@ -379,6 +404,8 @@ class PrivateReportOutbox:
         self, root: Path, result: QualityResult, *, allowed_units: tuple[PlannedUnit, ...],
         environment: Environment, source_revision: str, report_date: str, test_run: bool,
     ) -> dict:
+        if self.presentation_id is not None:
+            raise PrivateReportError("private_report_original_outbox_required")
         identity = self._identity(
             result, allowed_units, environment, source_revision, report_date, test_run,
         )
@@ -390,10 +417,93 @@ class PrivateReportOutbox:
             return request
         context = load_report_context(root, allowed_units=allowed_units)
         review = RetainedReviewContext(self.runtime, self.run_id, result)
+        request = self._build_request(
+            result, allowed_units=allowed_units, environment=environment, identity=identity,
+            context=context, review=review,
+        )
+        # All bytes and destination are immutable before any provider call.
+        self.records.save_completed(self.request_key, request)
+        self.export_local(request)
+        return request
+
+    def prepare_test_presentation(
+        self, root: Path, result: QualityResult, *, allowed_units: tuple[PlannedUnit, ...],
+        environment: Environment, source_revision: str, report_date: str,
+    ) -> PrivateReportOutbox:
+        """Render only an existing TEST measurement into a separate immutable bundle."""
+        if self.presentation_id is not None:
+            raise PrivateReportError("private_report_original_outbox_required")
+        if self.disabled:
+            raise PrivateReportError("private_report_checkpoint_failed")
+        original = self.request()
+        if original["identity"]["mode"] != "test":
+            raise PrivateReportError("private_report_test_presentation_required")
+        self.read_receipt(original)
+        frozen = self.run.read_completed("delivery-inputs", missing_ok=True)
+        if frozen is None:
+            raise PrivateReportError("private_report_frozen_inputs_missing")
+        identity = self._identity(
+            result, allowed_units, environment, source_revision, report_date, True,
+        )
+        if identity != original["identity"] or (
+            frozen.get("region_display") != environment.region_display
+            or type(frozen.get("rerun")) is not int
+            or frozen["rerun"] != self.run.read_completed("run")["rerun"]
+        ):
+            raise PrivateReportError("private_report_source_mismatch")
+        context = load_report_context(root, allowed_units=allowed_units)
+        retained_context = frozen.get("report_context")
+        if (
+            not isinstance(retained_context, dict)
+            or set(retained_context) != {"catalog_root", "units"}
+            or not isinstance(retained_context["catalog_root"], str)
+            or retained_context["units"] != context.to_private_dict()["units"]
+        ):
+            raise PrivateReportError("private_report_reviewed_context_changed")
+        review = RetainedReviewContext(self.runtime, self.run_id, result)
+        if review.provenance() != original["retained_review"]:
+            raise PrivateReportError("private_report_retained_review_changed")
+        if "presentation" in frozen:
+            presentation = frozen["presentation"]
+            if not isinstance(presentation, dict) or (
+                presentation.get("private_report_artifact") != "presentation/report"
+            ):
+                raise PrivateReportError("private_report_frozen_inputs_invalid")
+            retained_report = self.run.read_artifact("presentation/report")
+            if (
+                retained_report.get("format") != "markdown" or retained_report.get("private") is not True
+                or not isinstance(retained_report.get("markdown"), str)
+                or retained_report.get("retained_review") != review.provenance()
+            ):
+                raise PrivateReportError("private_report_retained_review_changed")
+        request = self._build_request(
+            result, allowed_units=allowed_units, environment=environment, identity=identity,
+            context=context, review=review,
+        )
+        selected = PrivateReportOutbox(
+            self.runtime, self.run_id, presentation_id=request["presentation_id"], clock=self.clock,
+        )
+        previous, _ = selected._request_record(missing_ok=True)
+        if previous is not None:
+            if selected.request() != request:
+                raise PrivateReportError("private_report_presentation_conflict")
+            if request["presentation_id"] == original["presentation_id"]:
+                return selected
+        try:
+            selected.records.save_completed(selected.request_key, request)
+            selected.export_local(request)
+        except StateError:
+            self.disabled = True
+            raise
+        return selected
+
+    def _build_request(self, result, *, allowed_units, environment, identity, context, review):
+        metadata = ReportMetadata(
+            identity["report_date"], environment.region_display, identity["source_revision"],
+        )
         markdown = render_private_markdown(
             result, allowed_units=allowed_units, review_context=review,
-            report_context=context,
-            metadata=ReportMetadata(report_date, environment.region_display, source_revision),
+            report_context=context, metadata=metadata,
             delivery_id=self.run_id,
         )
         from . import reporting
@@ -402,8 +512,7 @@ class PrivateReportOutbox:
         for agent in dict.fromkeys(unit.unit_id.agent for unit in allowed_units):
             detail = render_private_markdown(
                 result, allowed_units=allowed_units, review_context=review,
-                report_context=context,
-                metadata=ReportMetadata(report_date, environment.region_display, source_revision),
+                report_context=context, metadata=metadata,
                 delivery_id=self.run_id, agent=agent,
             )
             files[f"agents/{agent}/report.md"] = detail
@@ -426,28 +535,24 @@ class PrivateReportOutbox:
             raise PrivateReportError("private_report_too_large")
         if any(re.search(r"(?:[?&]|&amp;)sig=", content, re.I) for content in files.values()):
             raise PrivateReportError("private_report_embedded_access_forbidden")
-        request = {
+        return {
             "schema_version": "1.0", "identity": identity, "presentation_id": presentation_id,
             "account": _account(environment.storage_account_name), "container": CONTAINER,
             "prefix": f"reports/daily/{identity['mode']}/{self.run_id}/{presentation_id}",
-            "plan": [asdict(unit) for unit in allowed_units], "files": files,
+            "plan": [unit.to_dict() for unit in allowed_units], "files": files,
             "retained_review": review.provenance(),
         }
-        # All bytes and destination are immutable before any provider call.
-        self.records.save_completed(self.request_key, request)
-        self.export_local(request)
-        return request
 
     def request(self) -> dict:
-        request = self.records.read_completed(self.request_key)
+        request, _ = self._request_record()
         try:
             if set(request) != {
                 "schema_version", "identity", "presentation_id", "account", "container",
                 "prefix", "plan", "files", "retained_review",
             } or request["schema_version"] != "1.0" or request["container"] != CONTAINER:
                 raise ValueError
-            plan = tuple(PlannedUnit(UnitId(**u["unit_id"]), u["expected_issue_alias"]) for u in request["plan"])
-            if request["plan"] != [asdict(unit) for unit in plan]:
+            plan = tuple(PlannedUnit.from_dict(unit) for unit in request["plan"])
+            if request["plan"] != [unit.to_dict() for unit in plan]:
                 raise ValueError
             pointer = self.run.read("quality-result")
             result = restore_public_result(self.run.read_artifact(pointer["artifact"]), allowed_units=plan)
@@ -475,6 +580,7 @@ class PrivateReportOutbox:
             presentation_id = manifest.pop("presentation_id")
             if (
                 presentation_id != request["presentation_id"] or _hash(_json(manifest)) != presentation_id
+                or self.presentation_id is not None and presentation_id != self.presentation_id
                 or set(manifest) != set(identity) | {
                     "schema_version", "renderer", "renderer_sha256", "review_sha256", "files",
                     "access_required", "auth_mode", "human_validation_available",
@@ -536,7 +642,7 @@ class PrivateReportOutbox:
             raise PrivateReportError("private_report_receipt_missing")
         return {
             **state, "presentation_id": request["presentation_id"],
-            "request_path": str(self.records._path("completed", self.request_key)),
+            "request_path": str(self.records._path("completed", self._request_record()[1])),
             "receipt_path": str(self.records._path("completed", base + "/receipt")) if receipt else None,
             "markdown_path": str(directory / "report.md"), "html_path": str(directory / "report.html"),
             "manifest_path": str(directory / "manifest.json"),

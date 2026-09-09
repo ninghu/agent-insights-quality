@@ -16,8 +16,8 @@
     },
     "issues": {
       "type": "array",
-      "minItems": 36,
-      "maxItems": 36,
+      "minItems": 40,
+      "maxItems": 40,
       "items": {
         "type": "object",
         "additionalProperties": false,

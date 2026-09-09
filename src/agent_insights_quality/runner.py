@@ -19,6 +19,7 @@ from .invocation_context import ALGORITHM, POLICY_KEY, enabled_policy, invocatio
 from .performance import ObservedCloud, ObservedSol, RunMetrics, binding, limited, measure, observe, scope
 from .registry import DeploymentRegistry
 from .results import (
+    CATEGORY_POLICY,
     CardVerdict, Contribution, CoreVerdict, DiagnosticVerdict, ExclusionReason,
     PlannedUnit, QualityResult, UnitId, UnitResult, aggregate_results,
 )
@@ -83,11 +84,54 @@ def deployment_revision(catalog: Catalog, target: Target) -> str:
     return result.stdout.strip()
 
 
-def planned_units(targets: tuple[Target, ...]) -> tuple[PlannedUnit, ...]:
+def planned_units(
+    targets: tuple[Target, ...], *, categorized: bool = False,
+) -> tuple[PlannedUnit, ...]:
     return tuple(
-        PlannedUnit(target.unit_id, None if target.is_baseline else target.unit_id.logical_version)
+        PlannedUnit(
+            target.unit_id, None if target.is_baseline else target.unit_id.logical_version,
+            target.expectation["category"] if categorized and not target.is_baseline else None,
+        )
         for target in targets
     )
+
+
+def freeze_daily_plan(
+    records: RecordStore, targets: tuple[Target, ...], *, revision: str,
+) -> tuple[PlannedUnit, ...]:
+    """Freeze category attribution before providers; legacy runs stay uncategorized."""
+    identities = planned_units(targets)
+    existing = records.read_completed("run", missing_ok=True)
+    source = existing["source_revision"] if existing is not None else revision
+    frozen = records.read_completed("result-plan", missing_ok=True)
+    if frozen is None:
+        if existing is not None and "category_policy" in existing:
+            raise StateError("result_plan_missing")
+        plan = planned_units(targets, categorized=existing is None)
+        frozen = {
+            "schema_version": "1.0", "source_revision": source,
+            "units": [unit.to_dict() for unit in plan],
+        }
+        records.save_completed("result-plan", frozen)
+    try:
+        if set(frozen) != {"schema_version", "source_revision", "units"} or (
+            frozen["schema_version"] != "1.0" or frozen["source_revision"] != source
+            or not isinstance(frozen["units"], list)
+        ):
+            raise ValueError("Invalid frozen plan")
+        plan = tuple(PlannedUnit.from_dict(unit) for unit in frozen["units"])
+        if tuple(replace(unit, category=None) for unit in plan) != identities:
+            raise ValueError("Frozen plan identities changed")
+        categorized = any(unit.category is not None for unit in plan)
+        if categorized and any(unit.is_issue and unit.category is None for unit in plan):
+            raise ValueError("Incomplete frozen categories")
+        if existing is not None and existing.get("category_policy") != (
+            CATEGORY_POLICY if categorized else None
+        ):
+            raise ValueError("Frozen category policy changed")
+    except (KeyError, TypeError, ValueError) as error:
+        raise StateError("result_plan_invalid") from error
+    return plan
 
 
 def daily_traffic_intent(
@@ -475,6 +519,8 @@ class Runner:
             if not self.test_run and kind == "daily" and existing["source_revision"] != self.revision:
                 raise QualityError("official_resume_source_changed")
             self.reuse_run_id = existing.get("reuse_run_id")
+        if kind == "daily":
+            self.result_plan = freeze_daily_plan(self.run, targets, revision=self.revision)
         trace_policy = self.run.read_completed(POLICY_KEY, missing_ok=True)
         if trace_policy is None:
             trace_policy = {"algorithm": (
@@ -524,6 +570,9 @@ class Runner:
                 **expected, "source_revision": self.revision, "started_at": self.now().isoformat(),
                 "reuse_run_id": self.reuse_run_id,
                 **({"fresh_traffic": self.fresh_traffic} if kind == "daily" else {}),
+                **({"category_policy": CATEGORY_POLICY} if kind == "daily" and any(
+                    unit.category is not None for unit in self.result_plan
+                ) else {}),
                 "lane_run_id": self.lanes.directory.name,
             })
         self._save(self.run, "progress", "source", {
@@ -2054,7 +2103,7 @@ class Runner:
         self.integrity_failure |= self.run.read_completed("integrity-failure", missing_ok=True) is not None
         with scope(self.metrics, "stage", "report"):
             result = aggregate_results(
-                planned_units(targets), (outcomes[target.key] for target in targets),
+                self.result_plan, (outcomes[target.key] for target in targets),
                 integrity_failure=self.integrity_failure,
             )
             artifact = "results/" + uuid.uuid4().hex
