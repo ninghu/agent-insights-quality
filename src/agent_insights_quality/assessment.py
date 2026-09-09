@@ -40,7 +40,7 @@ from .results import (
     ExclusionReason,
     UnitResult,
 )
-from .telemetry import Snapshot
+from .telemetry import Snapshot, missing_parent_log_refs
 from .staging_policy import ROOT_HYGIENE_POLICY_VERSION, STAGING_POLICY, StagingPolicy
 
 
@@ -326,6 +326,7 @@ def _evidence(
     ):
         raise AssessmentError("assessment_snapshot_invalid")
     scopes = {scope.response_id: scope for scope in snapshot.scopes}
+    missing_log_parents = missing_parent_log_refs(snapshot)
     allowed, endpoints, groups = {}, {}, []
     probes, executed, ready, responses, completed = set(), set(), set(), set(), set()
     keys = set()
@@ -371,6 +372,10 @@ def _evidence(
                 "execution": asdict(invocation) if invocation else None,
                 "scope": asdict(scope) if scope else None,
                 "allowed_citation_refs": sorted(refs),
+                **({"trace_capture": {
+                    "missing_parent_log_refs": sorted(refs & missing_log_parents),
+                    "span_count_does_not_prove_execution_count": True,
+                }} if refs & missing_log_parents else {}),
             })
         if not any(step.phase == "probe" for step in attempt.steps):
             raise AssessmentError("assessment_plan_invalid")

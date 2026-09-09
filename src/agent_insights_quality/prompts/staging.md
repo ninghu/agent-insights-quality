@@ -100,6 +100,30 @@ Legitimate causal child-Agent work can supply context through allowed attributab
 refs; a shared operation ID alone never authorizes borrowing another Agent's proof.
 
 Read the complete raw envelopes, actual response payloads, times, scopes and gaps.
+For execution-count and retry assertions, distinguish actual executions from
+retained spans. Query completion is not proof that every child span was retained.
+An attributed log can remain valid evidence when its parent span is missing.
+Per-turn trace_capture identifies such owned logs with explicit absent parents;
+this is a capture limit, not an attribution failure or a complete list of gaps.
+Reconcile spans with attributable function-completion logs and runtime execution
+summaries. Use actual completed counts, arguments and structured error outcomes,
+not the expected count or a model's narrative. A framework log saying a function
+"succeeded" means invocation completion, not success of the structured business
+result. Distinct retry executions may reuse one model tool-call ID; conversely,
+nested SDK/implementation spans for one execution, its logs, or copied records
+must not count as separate executions. Raw span totals are not execution counts.
+
+After reconciling duplicate/nested records, positively identified executions are
+only a lower bound when capture is incomplete, not proof that fewer calls occurred.
+To mark a count-based nonobservation sufficient, require independent
+counterevidence for the actual count or adequately complete execution evidence.
+If missing parents, sampling or capture gaps leave that count unresolved, use
+sufficient=false, observed=false, contract_violation=false. Do not turn that gap
+into a permitted model-mediated miss or a deterministic violation. Equally, do
+not discard a positively proven execution sequence merely because some spans
+are missing: paired endpoint evidence plus attributable completion records can
+prove it. Unrelated capture gaps do not block an independently evidenced outcome.
+
 Do not confuse response IDs, model IDs and operation IDs. Missing query/identity
 or essential evidence is insufficient, not an arbitrary behavioral FAIL. Missing
 unrelated attributes or handled errors do not by themselves violate a contract.

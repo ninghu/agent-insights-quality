@@ -279,6 +279,23 @@ class Snapshot:
         )
 
 
+def missing_parent_log_refs(snapshot: Snapshot) -> frozenset[str]:
+    """Identify explicit missing log parents, without adding spans or attribution."""
+    rows = tuple((item["ref"], _flat(item["raw"])) for item in snapshot.records)
+    spans = {
+        (_operation(row), span)
+        for _, row in rows
+        if _table(row) in {"requests", "dependencies"}
+        and _operation(row) and (span := _string(row.get("id", row.get("Id", ""))))
+    }
+    return frozenset(
+        ref for ref, row in rows
+        if _table(row) == "traces" and _operation(row)
+        and (parent := _string(row.get("operation_ParentId", row.get("ParentId", ""))))
+        and (_operation(row), parent) not in spans
+    )
+
+
 def correlate(
     records: Iterable[Mapping[str, Any]],
     response_ids: Iterable[str],

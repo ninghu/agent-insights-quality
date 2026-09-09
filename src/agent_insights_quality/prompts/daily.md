@@ -64,6 +64,16 @@ to manufacture a pair, or append an unrelated probe as proof. Card text,
 request text, anomaly/self-report labels and catalog claims alone cannot prove
 runtime defects. Unrelated sibling/history records are never current proof.
 
+For count/retry diagnoses, retained span totals are not actual execution totals.
+Reconcile nested SDK/implementation spans and copied records with attributable
+completion logs and actual runtime execution summaries. One model tool-call ID
+can cover multiple physical retries. Per-turn trace_capture can identify owned
+logs whose parent spans are missing; it does not invent spans or authorize new
+citations. Fewer retained spans alone cannot disprove a count claim. Use unknown
+when essential count evidence remains unresolved, while retaining positively
+proven outcomes despite unrelated gaps. This does not raise the six-probe
+readiness requirement or require complete child trees.
+
 The reviewed healthy behavior and external task define whether a business-output
 failure exists. The injected defect describes intended test activation, not an
 additional healthy requirement. Failing to follow an injected harmful override

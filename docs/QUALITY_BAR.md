@@ -16,6 +16,16 @@ Evaluate all ten attempts, not just the first eight successes.
 Missing evidence is not the same as a behavior failure. Preserve PASS, FAIL and INCOMPLETE
 separately, and never resample a behavioral miss until it passes.
 
+Retained span totals do not establish execution counts when telemetry is missing.
+Reconcile nested instrumentation and copied records before counting executions. An attributable
+function-completion log can survive the loss of its parent span; per-turn assessment
+context points to such owned logs without synthesizing spans or granting new citation
+authority. Reconcile actual completion records, arguments and structured outcomes before
+judging retry counts. A model tool-call ID can cover repeated physical executions.
+Fewer retained spans alone do not prove fewer calls: unresolved count evidence is
+INCOMPLETE, while independently proven behavior can remain scorable despite unrelated
+capture gaps. A complete query does not certify complete telemetry retention.
+
 For example, seven observations plus three sufficiently evidenced nonobservations fail the
 observation threshold. Six observations plus four insufficient attempts are INCOMPLETE, not a
 proven behavioral failure. Eight healthy observations cannot hide a proven baseline violation.
