@@ -133,6 +133,267 @@ def prepared(tmp_path, monkeypatch):
         yield SimpleNamespace(runtime=runtime, root=root, result=result, plan=plan, build=build)
 
 
+def freeze_delivery(prepared, outbox, request):
+    outbox.run.save_artifact("presentation/report", {
+        "format": "markdown", "private": True, "markdown": request["files"]["report.md"],
+        "retained_review": request["retained_review"],
+    })
+    outbox.run.save_completed("delivery-inputs", {
+        "report": outbox.run.read_artifact("results/final"),
+        "test_run": request["identity"]["mode"] == "test",
+        "rerun": outbox.run.read_completed("run")["rerun"],
+        "report_date": request["identity"]["report_date"],
+        "region_display": ENVIRONMENT.region_display, "source_revision": SOURCE,
+        "private_context": None, "warnings": [], "recipient": "synthetic@example.invalid",
+        "report_context": module.load_report_context(
+            prepared.root, allowed_units=prepared.plan,
+        ).to_private_dict(),
+        "configured_assessor": None,
+        "presentation": {
+            "assignments": {}, "foundry_links": {}, "scoring_link": None, "blockers": [],
+            "private_report_artifact": "presentation/report",
+        },
+    })
+
+
+def revision(prepared, outbox, **kwargs):
+    return outbox.prepare_test_presentation(
+        prepared.root, kwargs.pop("result", prepared.result),
+        **{
+            "allowed_units": prepared.plan, "environment": ENVIRONMENT,
+            "source_revision": SOURCE, "report_date": DAY, **kwargs,
+        },
+    )
+
+
+def restyle(monkeypatch):
+    render = module.render_private_markdown
+    monkeypatch.setattr(
+        module, "render_private_markdown",
+        lambda *args, **kwargs: render(*args, **kwargs) + "\nUpdated synthetic presentation.\n",
+    )
+
+
+def saved_files(runtime):
+    return {
+        path: (path.read_bytes(), path.stat().st_mtime_ns)
+        for directory in (runtime.directory / "runs", runtime.directory / "outboxes")
+        for path in directory.rglob("*") if path.is_file()
+    }
+
+
+@pytest.mark.parametrize("selector", ["", "A" * 64, "a" * 63, "a" * 65, "../request", 1])
+def test_presentation_selector_requires_content_address(prepared, selector):
+    with pytest.raises(PrivateReportError, match="presentation_invalid"):
+        PrivateReportOutbox(prepared.runtime, RUN, presentation_id=selector)
+
+
+def test_explicit_original_lookup_preserves_request_schema_and_path(prepared):
+    original, request = prepared.build()
+    original.flush(FakeBlob())
+    before = saved_files(prepared.runtime)
+    selected = PrivateReportOutbox(
+        prepared.runtime, RUN, presentation_id=request["presentation_id"],
+    )
+    assert original.request_key == "requests/" + RUN
+    assert selected.request_key == "requests/" + RUN + "/presentations/" + request["presentation_id"]
+    assert selected.request() == request
+    assert selected.status() == original.status()
+    assert set(request) == {
+        "schema_version", "identity", "presentation_id", "account", "container",
+        "prefix", "plan", "files", "retained_review",
+    }
+    assert saved_files(prepared.runtime) == before
+    with pytest.raises(PrivateReportError, match="presentation_missing"):
+        PrivateReportOutbox(prepared.runtime, RUN, presentation_id="f" * 64).request()
+    with pytest.raises(PrivateReportError, match="original_outbox_required"):
+        revision(prepared, selected)
+    with pytest.raises(PrivateReportError, match="original_outbox_required"):
+        selected.prepare(
+            prepared.root, prepared.result, allowed_units=prepared.plan,
+            environment=ENVIRONMENT, source_revision=SOURCE, report_date=DAY, test_run=False,
+        )
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "files", "wrong_pid"])
+def test_present_selected_request_never_falls_back_to_original(prepared, damage):
+    original, request = prepared.build()
+    selector = "f" * 64 if damage == "wrong_pid" else request["presentation_id"]
+    selected = PrivateReportOutbox(prepared.runtime, RUN, presentation_id=selector)
+    damaged = deepcopy(request)
+    if damage == "files":
+        damaged["files"]["agents/synthetic-agent/report.md"] += "\nChanged."
+    selected.records.save_completed(selected.request_key, damaged)
+    if damage == "corrupt":
+        selected.records._path("completed", selected.request_key).write_text("{invalid")
+    with pytest.raises(module.QualityError, match="state_record_corrupt|request_invalid"):
+        selected.request()
+    assert original.request() == request
+
+
+def test_identical_test_presentation_reuses_original_without_writes(prepared):
+    outbox, request = prepared.build(test_run=True)
+    client = FakeBlob()
+    status = outbox.flush(client)
+    freeze_delivery(prepared, outbox, request)
+    before, writes = saved_files(prepared.runtime), list(client.writes)
+    selected = revision(prepared, outbox)
+    assert selected.presentation_id == request["presentation_id"]
+    assert selected.request() == request
+    assert selected.flush(client) == status
+    assert selected.records.read_completed(selected.request_key, missing_ok=True) is None
+    assert saved_files(prepared.runtime) == before and client.writes == writes
+
+
+def test_test_restyle_preserves_all_original_bytes_and_measurement(prepared, monkeypatch):
+    from agent_insights_quality.email import prepare_email
+    from agent_insights_quality.report_access import prepare_report_access
+
+    official, _ = prepared.build()
+    outbox, request = prepared.build(test_run=True)
+    client = FakeBlob()
+    official.flush(client)
+    outbox.flush(client)
+    access = prepare_report_access(outbox, client)
+    freeze_delivery(prepared, outbox, request)
+    prepare_email(
+        prepared.runtime.outbox("email"), outbox.run_id, prepared.result,
+        allowed_units=prepared.plan, report_date=DAY, test_run=True, rerun=1,
+        test_recipient="synthetic@example.invalid", report_access=access,
+    )
+    before, blobs = saved_files(prepared.runtime), dict(client.blobs)
+    restyle(monkeypatch)
+    selected = revision(prepared, outbox)
+    updated = selected.request()
+    assert updated["presentation_id"] != request["presentation_id"]
+    assert updated["identity"] == request["identity"]
+    assert updated["plan"] == request["plan"] and updated["retained_review"] == request["retained_review"]
+    assert updated["identity"]["source_revision"] == SOURCE
+    assert selected.run_id == outbox.run_id and selected.run.directory == outbox.run.directory
+    assert updated["prefix"].startswith(f"reports/daily/test/{outbox.run_id}/")
+    assert set(updated["files"]) == set(request["files"])
+    for name in ("report.md", "agents/synthetic-agent/report.md"):
+        assert "Updated synthetic presentation." in updated["files"][name]
+        assert updated["files"][name.removesuffix(".md") + ".html"] == module.markdown_view(
+            updated["files"][name],
+        )
+    assert selected.flush(client)["status"] == "delivered"
+    assert revision(prepared, outbox).request() == updated
+    writes = list(client.writes)
+    assert selected.flush(client)["status"] == "delivered"
+    assert client.writes == writes and all(client.blobs[key] == value for key, value in blobs.items())
+    after = saved_files(prepared.runtime)
+    assert all(after[path] == value for path, value in before.items())
+    assert outbox.request() == request
+    assert outbox.run.read_artifact("results/final") == prepared.result.to_dict()
+    assert all("sig=" not in content for content in updated["files"].values())
+    assert LATEST not in [key for key, *_ in client.writes[len(blobs):]]
+
+
+@pytest.mark.parametrize("excluded", [0, 3])
+def test_non_test_presentation_revision_is_rejected_without_rendering(prepared, monkeypatch, excluded):
+    outbox, _ = prepared.build(excluded=excluded)
+    outbox.flush(FakeBlob())
+    before = saved_files(prepared.runtime)
+    monkeypatch.setattr(module, "render_private_markdown", lambda *a, **k: pytest.fail("render"))
+    with pytest.raises(PrivateReportError, match="test_presentation_required"):
+        revision(prepared, outbox)
+    assert saved_files(prepared.runtime) == before
+
+
+@pytest.mark.parametrize("missing", ["request", "receipt", "frozen"])
+def test_presentation_requires_verified_source_and_frozen_delivery(prepared, missing):
+    outbox, request = prepared.build(test_run=True)
+    outbox.flush(FakeBlob())
+    if missing == "request":
+        outbox.records._path("completed", outbox.request_key).unlink()
+    elif missing == "receipt":
+        outbox.records._path("completed", outbox._base(request) + "/receipt").unlink()
+    before = saved_files(prepared.runtime)
+    with pytest.raises(module.QualityError, match="missing"):
+        revision(prepared, outbox)
+    assert saved_files(prepared.runtime) == before
+
+
+@pytest.mark.parametrize("change", [
+    "caller_plan", "caller_result", "caller_source", "frozen_result", "frozen_test",
+    "frozen_rerun", "frozen_region", "reviewed_context", "review_artifact", "current_review",
+])
+def test_presentation_refuses_changed_measurement_context_or_provenance(prepared, monkeypatch, change):
+    outbox, request = prepared.build(test_run=True)
+    outbox.flush(FakeBlob())
+    freeze_delivery(prepared, outbox, request)
+    before = saved_files(prepared.runtime)
+    kwargs = {}
+    if change.startswith("caller_"):
+        kwargs = {
+            "caller_plan": {"allowed_units": prepared.plan[:-1]},
+            "caller_result": {"result": publishing.quality(excluded=3)[0]},
+            "caller_source": {"source_revision": "b" * 40},
+        }[change]
+    original_read = RecordStore.read_completed
+    def changed(records, key, **options):
+        value = original_read(records, key, **options)
+        if key == "delivery-inputs" and records.directory == outbox.run.directory:
+            value = deepcopy(value)
+            if change == "frozen_result":
+                value["report"] = publishing.quality(excluded=3)[0].to_dict()
+            elif change == "frozen_test":
+                value["test_run"] = False
+            elif change == "frozen_rerun":
+                value["rerun"] = 2
+            elif change == "frozen_region":
+                value["region_display"] = "Other"
+            elif change == "reviewed_context":
+                value["report_context"]["units"][1]["expected_symptom"] = "Changed reviewed root cause."
+        return value
+    monkeypatch.setattr(RecordStore, "read_completed", changed)
+    if change == "review_artifact":
+        read_artifact = RecordStore.read_artifact
+        def artifact(records, key, **options):
+            value = read_artifact(records, key, **options)
+            return {**value, "retained_review": {}} if key == "presentation/report" else value
+        monkeypatch.setattr(RecordStore, "read_artifact", artifact)
+    elif change == "current_review":
+        monkeypatch.setattr(module.RetainedReviewContext, "provenance", lambda self: {})
+    with pytest.raises(module.QualityError):
+        revision(prepared, outbox, **kwargs)
+    assert saved_files(prepared.runtime) == before
+
+
+def test_presentation_allows_moved_checkout_with_same_reviewed_units(prepared, monkeypatch):
+    outbox, request = prepared.build(test_run=True)
+    outbox.flush(FakeBlob())
+    freeze_delivery(prepared, outbox, request)
+    original_read = RecordStore.read_completed
+    def moved(records, key, **options):
+        value = original_read(records, key, **options)
+        if key == "delivery-inputs":
+            value = deepcopy(value)
+            value["report_context"]["catalog_root"] = "C:\\synthetic\\old-checkout"
+        return value
+    monkeypatch.setattr(RecordStore, "read_completed", moved)
+    assert revision(prepared, outbox).request() == request
+
+
+def test_presentation_checkpoint_failure_disables_further_preparation(prepared, monkeypatch):
+    outbox, request = prepared.build(test_run=True)
+    outbox.flush(FakeBlob())
+    freeze_delivery(prepared, outbox, request)
+    restyle(monkeypatch)
+    original_save = RecordStore.save_completed
+    def fail(records, key, value):
+        if "/presentations/" in key:
+            raise CheckpointError()
+        original_save(records, key, value)
+    monkeypatch.setattr(RecordStore, "save_completed", fail)
+    with pytest.raises(CheckpointError):
+        revision(prepared, outbox)
+    with pytest.raises(PrivateReportError, match="checkpoint_failed"):
+        revision(prepared, outbox)
+    assert outbox.request() == request
+
+
 @pytest.mark.parametrize("test_run,excluded,mode", [(False, 0, "official"), (True, 0, "test"), (False, 3, "failure")])
 def test_immutable_private_bundle_and_namespace(prepared, test_run, excluded, mode):
     outbox, request = prepared.build(test_run=test_run, excluded=excluded)

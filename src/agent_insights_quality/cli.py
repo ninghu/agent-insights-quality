@@ -83,11 +83,24 @@ def parser() -> argparse.ArgumentParser:
         "--scoring-revision",
         help="Verify a published GitHub commit's QUALITY_BAR.md against the reviewed local file",
     )
+    linked = commands.add_parser(
+        "prepare-test-presentation",
+        help="Publish linked HTML and prepare a separate TEST presentation email; no traffic or send",
+    )
+    linked.add_argument("--delivery-id", required=True)
+    linked.add_argument(
+        "--access-revision",
+        help="Explicit signing recovery before a presentation email is frozen; otherwise resume its grant",
+    )
     for command in ("email-claim", "email-result"):
         child = commands.add_parser(command, help="Claim app-native send" if command == "email-claim"
                                     else "Record actual app-native send evidence")
         child.add_argument("--delivery-id", required=True)
         child.add_argument("--claim-id", required=True)
+        child.add_argument(
+            "--presentation-id",
+            help="Select a separately prepared linked TEST presentation, not the original email",
+        )
         if command == "email-result":
             child.add_argument("--outcome", choices=("accepted", "delivered", "rejected", "unknown"), required=True)
             child.add_argument("--result-file", type=Path, required=True)
@@ -611,8 +624,20 @@ def main(
                     scoring_revision=args.scoring_revision, rescore=args.rescore,
                 )
                 value, code = preview.to_dict(), 0
+            elif args.command == "prepare-test-presentation":
+                from .linked_presentation import prepare_linked_test_presentation
+                with command_status(runtime, args.command):
+                    value = prepare_linked_test_presentation(
+                        runtime, args.delivery_id, root=root, access_revision=args.access_revision,
+                    )
+                code = 0
             elif args.command == "email-claim":
-                outbox = runtime.outbox("email")
+                if args.presentation_id is not None:
+                    from .linked_presentation import presentation_email_outbox, validate_presentation_email
+                    outbox = presentation_email_outbox(runtime, args.presentation_id)
+                    validate_presentation_email(outbox, args.delivery_id, args.presentation_id)
+                else:
+                    outbox = runtime.outbox("email")
                 request = claim_email(outbox, args.delivery_id, claim_id=args.claim_id)
                 artifact = f"claims/{args.delivery_id}/{args.claim_id}"
                 outbox.save_artifact(artifact, request.to_private_dict())
@@ -622,8 +647,14 @@ def main(
                 }, 0
             else:
                 path = _private_path(runtime, args.result_file)
+                if args.presentation_id is not None:
+                    from .linked_presentation import presentation_email_outbox, validate_presentation_email
+                    outbox = presentation_email_outbox(runtime, args.presentation_id)
+                    validate_presentation_email(outbox, args.delivery_id, args.presentation_id)
+                else:
+                    outbox = runtime.outbox("email")
                 record = record_email_outcome(
-                    runtime.outbox("email"), args.delivery_id, claim_id=args.claim_id,
+                    outbox, args.delivery_id, claim_id=args.claim_id,
                     outcome=args.outcome, provider_result=_read_object(path),
                     reconciliation=args.reconciliation,
                 )

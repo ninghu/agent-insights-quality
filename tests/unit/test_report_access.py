@@ -28,7 +28,8 @@ from agent_insights_quality.results import PlannedUnit, UnitResult, aggregate_re
 from agent_insights_quality.selection import select_daily
 from agent_insights_quality.state import CheckpointError, RecordStore, RuntimeStore
 from test_private_publication import (
-    DAY, ENVIRONMENT, RUN, SOURCE, FakeBlob, seed, synthetic_sas,
+    DAY, ENVIRONMENT, RUN, SOURCE, FakeBlob, freeze_delivery, restyle, revision,
+    saved_files, seed, synthetic_sas,
 )
 from test_private_publication import prepared as prepared, sdk as sdk
 import test_runner as fake
@@ -46,6 +47,148 @@ def grant(prepared, monkeypatch):
     return SimpleNamespace(
         outbox=outbox, request=request, client=client, access=access, prepared=prepared,
     )
+
+
+@pytest.fixture
+def test_presentation(prepared, monkeypatch):
+    monkeypatch.setattr(module, "utc_now", lambda: NOW)
+    original, source = prepared.build(test_run=True)
+    client = FakeBlob()
+    original.flush(client)
+    original_access = prepare_report_access(original, client, now=NOW - timedelta(days=2))
+    freeze_delivery(prepared, original, source)
+    restyle(monkeypatch)
+    selected = revision(prepared, original)
+    selected.flush(client)
+    return SimpleNamespace(
+        original=original, source=source, original_access=original_access,
+        outbox=selected, request=selected.request(), client=client, prepared=prepared,
+    )
+
+
+def test_each_presentation_restores_only_its_own_grant_without_changing_old_records(test_presentation):
+    grant = test_presentation
+    before = saved_files(grant.prepared.runtime)
+    access = prepare_report_access(grant.outbox, grant.client)
+    run_id = grant.outbox.run_id
+    assert access.descriptor["record_key"] == run_id + "/" + grant.request["presentation_id"] + "/access/initial"
+    assert set(access.descriptor) == {"record_key", "sha256", "expires_at"}
+    assert access.expires_at != grant.original_access.expires_at
+    for outbox, original_access in (
+        (grant.outbox, access), (grant.original, grant.original_access),
+    ):
+        restored = module.read_report_access(
+            grant.prepared.runtime, original_access.descriptor, delivery_id=run_id,
+        )
+        assert restored.descriptor == original_access.descriptor
+        for kind, href in restored.for_agents(["synthetic-agent"], run_id)["synthetic-agent"].items():
+            assert outbox.request()["prefix"] in urlsplit(href).path
+            assert urlsplit(href).path.endswith(".html" if kind == "html" else ".md")
+    signings = list(grant.client.signings)
+    assert prepare_report_access(grant.outbox, grant.client).descriptor == access.descriptor
+    assert prepare_report_access(grant.original, grant.client).descriptor == grant.original_access.descriptor
+    assert grant.client.signings == signings
+    after = saved_files(grant.prepared.runtime)
+    assert all(after[path] == value for path, value in before.items())
+    assert all(b"sig=" not in snapshot.data for snapshot in grant.client.blobs.values())
+    with pytest.raises(ReportAccessError, match="descriptor_invalid"):
+        module.read_report_access(grant.prepared.runtime, access.descriptor, delivery_id=RUN)
+    with pytest.raises(ReportAccessError, match="agent_scope_mismatch"):
+        access.for_agents(["synthetic-agent"], RUN)
+
+
+@pytest.mark.parametrize("damage,code", [
+    ("missing_request", "presentation_missing"),
+    ("wrong_pid", "presentation_missing"),
+    ("wrong_request", "request_invalid"),
+    ("files", "request_invalid"),
+    ("receipt", "receipt_missing"),
+    ("signature", "descriptor_mismatch"),
+    ("wrong_blob", "sas_invalid"),
+])
+def test_selected_access_rejects_wrong_identity_and_tampering_without_fallback(
+    test_presentation, damage, code,
+):
+    grant = test_presentation
+    access = prepare_report_access(grant.outbox, grant.client)
+    descriptor = dict(access.descriptor)
+    records = grant.outbox.records
+    request_path = records._path("completed", grant.outbox.request_key)
+    if damage == "missing_request":
+        request_path.unlink()
+    elif damage == "wrong_pid":
+        descriptor["record_key"] = descriptor["record_key"].replace(
+            grant.request["presentation_id"], "f" * 64,
+        )
+    elif damage in {"wrong_request", "files"}:
+        value = deepcopy(grant.source if damage == "wrong_request" else grant.request)
+        if damage == "files":
+            value["files"]["agents/synthetic-agent/report.html"] += "<p>Changed file</p>"
+        request_path.write_text(json.dumps(value))
+    elif damage == "receipt":
+        records._path("completed", grant.outbox._base(grant.request) + "/receipt").unlink()
+    else:
+        path = records._path("completed", descriptor["record_key"])
+        value = json.loads(path.read_text())
+        key = (
+            grant.source["prefix"] if damage == "wrong_blob" else grant.request["prefix"]
+        ) + "/agents/synthetic-agent/report.html"
+        value["links"]["synthetic-agent"]["html"] = synthetic_sas(
+            key, value["starts_at"], value["expires_at"],
+            changes={"sig": b64encode(b"x" * 32).decode()},
+        )
+        path.write_text(json.dumps(value))
+    with pytest.raises(QualityError, match=code):
+        module.read_report_access(
+            grant.prepared.runtime, descriptor, delivery_id=grant.outbox.run_id,
+        )
+    assert module.read_report_access(
+        grant.prepared.runtime, grant.original_access.descriptor, delivery_id=grant.outbox.run_id,
+    ).descriptor == grant.original_access.descriptor
+
+
+def test_selected_grant_still_requires_byte_readback_before_signing(test_presentation):
+    grant = test_presentation
+    signings = list(grant.client.signings)
+    key = grant.request["prefix"] + "/agents/synthetic-agent/report.html"
+    grant.client.put(key, grant.source["files"]["agents/synthetic-agent/report.html"].encode("utf-8"))
+    with pytest.raises(ReportAccessError, match="blob_unverified"):
+        prepare_report_access(grant.outbox, grant.client)
+    assert grant.client.signings == signings
+
+
+def test_selected_interrupted_signing_is_not_repeated_and_does_not_reuse_original(test_presentation):
+    grant = test_presentation
+    grant.client.sign_error = ReportAccessError("report_access_delegation_denied")
+    with pytest.raises(ReportAccessError, match="delegation_denied"):
+        prepare_report_access(grant.outbox, grant.client)
+    signings = list(grant.client.signings)
+    grant.client.sign_error = None
+    resumed = PrivateReportOutbox(
+        grant.prepared.runtime, grant.outbox.run_id, presentation_id=grant.request["presentation_id"],
+    )
+    with pytest.raises(ReportAccessError, match="interrupted_needs_new_revision"):
+        prepare_report_access(resumed, grant.client)
+    assert grant.client.signings == signings
+    refreshed = prepare_report_access(resumed, grant.client, revision="reviewed-retry")
+    assert refreshed.descriptor["record_key"].startswith(grant.outbox._base(grant.request) + "/access/")
+    assert grant.original_access.status()["status"] == "ready"
+
+
+def test_selected_expiry_is_enforced_without_automatic_resigning(test_presentation, monkeypatch):
+    grant = test_presentation
+    access = prepare_report_access(grant.outbox, grant.client)
+    assert module._time(access.expires_at) == NOW - CLOCK_SKEW + MAX_LIFETIME
+    monkeypatch.setattr(module, "utc_now", lambda: module._time(access.expires_at))
+    signings, writes = list(grant.client.signings), list(grant.client.writes)
+    restored = module.read_report_access(
+        grant.prepared.runtime, access.descriptor, delivery_id=grant.outbox.run_id,
+    )
+    assert restored.expired()
+    assert restored.status()["status"] == "expired_needs_explicit_new_access_revision"
+    assert not restored.status()["human_validation_available"]
+    assert prepare_report_access(grant.outbox, grant.client).descriptor == access.descriptor
+    assert grant.client.signings == signings and grant.client.writes == writes
 
 
 def test_seven_day_cap_includes_skew_and_grant_is_readonly_blob_specific(grant):

@@ -184,6 +184,48 @@ evidence-reference checkpoint before freezing delivery inputs. Daily status expo
 unchanged. Native HTML handoff does not claim to attach a report: verified time-limited links
 are inline; when unavailable, that limitation is disclosed. Local EML export supplies the attachment.
 
+## Linked TEST presentation updates
+
+`email-preview --restyle` remains local-only. Its EML intentionally uses an attached
+Markdown report rather than browser-relative links. Do not use that attachment-only
+EML when a recipient needs working **View report** and issue/gap links in email.
+
+For an explicitly requested presentation update of an already accepted/delivered
+private TEST, without new Agent traffic or judgments:
+
+```powershell
+python -m agent_insights_quality prepare-test-presentation --delivery-id <completed-test-id>
+python -m agent_insights_quality email-claim --delivery-id <completed-test-id> --presentation-id <returned-presentation-id> --claim-id <opaque-claim-id>
+python -m agent_insights_quality email-result --delivery-id <completed-test-id> --presentation-id <returned-presentation-id> --claim-id <same-claim-id> --outcome <actual-outcome> --result-file <private-provider-result-path>
+```
+
+Python checks the frozen result, reviewed unit context, source and retained review,
+then publishes a separate content-addressed MD/HTML bundle using the existing private
+container and conditional-write/readback rules. It signs fresh, blob-specific read
+grants only after verified publication. It never overwrites the original request,
+reports, access records, measurement, or accepted email; official runs are not supported
+by this presentation-only command and no official latest pointer is updated.
+
+Both issue/gap labels and Human Validation use the verified per-Agent HTML links.
+Email still has no **Download MD** link or separate **Notes** column. Publication or
+access failures block this linked delivery rather than falling back to attachment-only
+text. The returned private `email_html_path` previews the actual sendable HTML.
+
+The separately claimable email is labelled **PRESENTATION UPDATE** and keeps the
+original TEST recipient, report date, counts and score. The app sends only the exact
+claimed recipient/subject/HTML through its native email capability, then records the
+actual outcome. Always include the returned presentation ID when claiming or recording
+this sidecar delivery. Repeating preparation preserves an existing sidecar; claimed or
+unknown sends require reconciliation, not another send. A new presentation is not a new
+Daily measurement or permission to run traffic, rescore, publish to ADX, or schedule.
+
+The active presentation is tracked by source TEST delivery. Changing the renderer or
+presentation ID cannot bypass an unfinished/prepared/claimed/unknown sidecar. If access
+signing was interrupted before email inputs were frozen, explicitly select a new grant
+with `prepare-test-presentation --delivery-id <id> --access-revision <new-revision>`.
+An omitted revision resumes the previously selected grant. Once email inputs are frozen,
+the access selection cannot be changed to rewrite or resend that email.
+
 ## Automatic private report publication
 
 Daily no longer writes `reports/` in Git or prepares generated branches, PRs or merge requests.
