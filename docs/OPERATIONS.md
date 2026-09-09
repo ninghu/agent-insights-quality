@@ -117,17 +117,25 @@ old-region fallback. No catch-all Run notes, Other findings, methodology body or
 section is inserted, including hidden private context.
 
 The authoritative detail is `report.md`: one table per Agent with stable Agent-name anchors and
-five rows for the baseline plus four issue versions. Run num, actual Agent version, Expected
-insight, Generated insight(s), Assessment and short Notes keep review compact. Each row represents
-ten attempts, not one call. New/updated cards are listed with aligned Correct/Noise/Duplicate
+five rows for the baseline plus four issue versions. Run num, actual Agent version, Issue definition,
+Expected insight, Generated insight(s) and Assessment keep review compact. Issue definition uses the
+reviewed catalog's root-cause description; baselines show a dash because no issue is injected.
+Without reviewed context, the definition is explicitly unavailable, not inferred from a card.
+Each row represents
+ten attempts, not one call. In Agent version, reviewed issue IDs link to their `ISSUE_CATALOG.md`
+anchor at the report's recorded source commit; native version numbers and `v0` remain plain text.
+Without reviewed catalog context or source metadata, IDs remain plain text rather than guessing.
+New/updated cards are listed with aligned Correct/Noise/Duplicate
 labels; unchanged historical cards are omitted. Missed and unscored cases remain distinct.
 Assessment numbers align with generated cards: "1. Matched", "2. Noise", "3. Duplicate".
 "Missed" marks an undetected expected defect; "Unconfirmed" rows are excluded, not misses.
 A separate "Unexpected" is a saved valid non-target finding, not expected-detection credit
 or an automatic Agent-fix request. Private Agent headings link to verified Foundry objects,
 and the report overview uses a short bullet list.
-Routine Notes are empty. Exceptional findings expose full saved rationales under collapsed
-Assessment details; disagreements show both passes without changing the resolved judgment.
+There is no separate Notes column. Assessment retains applicable observation counts, exclusion
+reasons and duplicate-root references. Exceptional findings expose full saved rationales under
+collapsed Assessment details in that same cell; disagreements show both passes without changing
+the resolved judgment. Ordinary rows show only their assessment labels.
 Detailed evidence and complete judgments stay in the original private artifacts referenced by
 the preview manifest, not repeated payload/provenance sections in the MD.
 Private detail is rendered through a separate boundary; public Markdown receives only approved
@@ -186,7 +194,8 @@ runs only. TEST never touches ADX, public reports/trends, generated PRs or the t
 After measurement, Python freezes the private overview Markdown from the final `QualityResult`
 and `RetainedReviewContext`, five independent per-Agent Markdown documents, their derived HTML,
 and a minimal manifest. Each Agent document contains only that Agent's five compact version rows,
-owner, actual versions and saved classifications/Notes. It does not recompute a per-Agent score.
+owner, actual versions, reviewed issue definitions and saved assessment details. It does not
+recompute a per-Agent score.
 Any global score/counts/coverage are explicitly labelled **Overall Daily**; Agent counts are sums
 of that same result's units. It binds exact UTF-8 bytes,
 hashes, source revision, reviewed plan, report date, run ID, profile, assessment identity and
@@ -245,9 +254,11 @@ issuance—not seven days plus skew. The actual UTC expiry and URLs are frozen i
 versioned access record, bound by hash to the prepared email. Keys/token credentials themselves
 are never persisted. The provider is closed before email preparation.
 
-Each email Human Validation cell has **View report** and **Download MD**, each pointing to that
-Agent's own blob with its own read grant, not a fragment in the overview. The email shows the
-exact expiry and a forwarding warning. No SAS URL appears in another report's body, the uploaded
+Each email Human Validation cell has **View report**, pointing to that Agent's own HTML blob
+with its read grant, not a fragment in the overview. Markdown archives and their private access
+records remain available, including through the separate access-refresh preview; email does not
+duplicate them with a **Download MD** link. The email shows the exact expiry and a forwarding
+warning. No SAS URL appears in another report's body, the uploaded
 manifest, Git, ADX, operational events or CLI output. Status exposes only the access record/preview
 paths, expiry and readiness under `private_report.access`. Bare storage references still require
 authenticated storage access; the separate, approved SAS grants provide browser access directly

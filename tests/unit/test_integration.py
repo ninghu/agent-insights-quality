@@ -559,7 +559,7 @@ def test_real_official_artifacts_and_email_use_one_result_and_private_context_ne
             report_path = adapters.records._path("artifacts", "presentation/report").with_suffix(".md")
             assert report_path.read_text(encoding="utf-8") == detail["markdown"]
             assert DAY.isoformat() in email.request.html
-            assert "View report" in email.request.html and "Download MD" in email.request.html
+            assert "View report" in email.request.html and "Download MD" not in email.request.html
             assert "Anyone holding a link" in email.request.html
             assert "human_validation_link_unavailable" not in adapters.records.read_completed(
                 "delivery-inputs",

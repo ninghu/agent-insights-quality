@@ -2,6 +2,7 @@ from copy import deepcopy
 from base64 import b64encode
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
+from html import unescape
 import json
 from pathlib import Path
 import sys
@@ -115,6 +116,22 @@ def test_unverified_or_changed_blob_never_gets_signed(prepared, monkeypatch):
     assert not client.signings
 
 
+def test_email_links_only_html_while_private_markdown_access_remains(grant):
+    email = prepare_email(
+        grant.prepared.runtime.outbox("email"), RUN, grant.prepared.result,
+        allowed_units=grant.prepared.plan, report_date=DAY, report_access=grant.access,
+    )
+    links = grant.access.for_agents(
+        {unit.unit_id.agent for unit in grant.prepared.plan}, RUN,
+    )
+    for references in links.values():
+        assert references["html"] in unescape(email.html)
+        assert references["markdown"] not in unescape(email.html)
+    assert "View report" in email.html and "Download MD" not in email.html
+    assert grant.access.expires_at in email.html and "Anyone holding a link" in email.html
+    assert len(grant.client.signings[0][0]) == 2
+
+
 def test_expired_claim_requires_explicit_revision_and_never_rewrites_email(grant, monkeypatch):
     runtime = grant.prepared.runtime
     box = runtime.outbox("email")
@@ -122,7 +139,7 @@ def test_expired_claim_requires_explicit_revision_and_never_rewrites_email(grant
         box, RUN, grant.prepared.result, allowed_units=grant.prepared.plan,
         report_date=DAY, report_access=grant.access,
     )
-    assert "View report" in email.html and "Download MD" in email.html
+    assert "View report" in email.html and "Download MD" not in email.html
     assert grant.access.expires_at in email.html and "Anyone holding a link" in email.html
     original = box.read(RUN)
     monkeypatch.setattr(module, "utc_now", lambda: module._time(grant.access.expires_at) + timedelta(seconds=1))
