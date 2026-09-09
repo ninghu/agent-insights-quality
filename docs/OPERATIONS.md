@@ -602,6 +602,10 @@ The [Daily two-slot call journal](#bounded-daily-judgment-correction) and
 [targeted-staging source/predecessor checks](#explicit-single-target-staging) remain unchanged.
 None of these rules authorizes native acceptance, a deployment or a schedule.
 
+All Insights API requests send `Foundry-Features: AgentInsights=V1Preview`, including
+monitor listing/creation/reset, run submission/polling, and every page of insight cards.
+This header is separate from Hosted Agent requests' `HostedAgents=V1Preview` feature.
+
 New Insights polling has a separate `insights_poll_timeout_seconds` budget (default 1200).
 Deployment polling retains `poll_timeout_seconds` (default 600); trace hydration is separate.
 A local wait timeout is not a native failed run. Resume queries the original accepted operation

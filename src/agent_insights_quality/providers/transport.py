@@ -363,7 +363,13 @@ class JsonClient:
         check_status(response, {200, 201, 202, 204}, read_only=method == "GET")
         return response.object()
 
-    async def pages(self, path: str, *, hosted: bool = False) -> list[JsonObject]:
+    async def pages(
+        self,
+        path: str,
+        *,
+        hosted: bool = False,
+        headers: Mapping[str, str] | None = None,
+    ) -> list[JsonObject]:
         url = self.url(path)
         seen: set[str] = set()
         values: list[JsonObject] = []
@@ -371,7 +377,7 @@ class JsonClient:
             if url in seen:
                 raise QualityError("provider_pagination_cycle")
             seen.add(url)
-            page = await self.object("GET", url, hosted=hosted)
+            page = await self.object("GET", url, hosted=hosted, headers=headers)
             items = next(
                 (page[key] for key in ("data", "value", "items") if key in page), None
             )
