@@ -3,9 +3,11 @@
 import asyncio
 import copy
 import json
+import re
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from agent_insights_quality.assessment import assess_staging
 from agent_insights_quality.assessment_partition import expand_payload
@@ -207,3 +209,101 @@ def test_healthcare_setup_violation_remains_a_hygiene_failure_after_ten_good_pro
     assert len(result.judgments) == 10
     assert result.root_hygiene_status == result.status == "FAIL"
     assert "proven_additional_agent_defect" in result.reasons
+
+
+def creation_schema():
+    definition = json.loads(
+        (target("issue-008").version_root / "definition.json").read_text(encoding="utf-8")
+    )
+    schemas = re.findall(
+        r"Creation-envelope JSON Schema: `([^`]+)`", definition["definition"]["instructions"]
+    )
+    assert len(schemas) == 1
+    schema = json.loads(schemas[0])
+    Draft202012Validator.check_schema(schema)
+    return schema
+
+
+def test_healthcare_issue008_creation_schema_preserves_strict_two_field_omission():
+    issue = target("issue-008")
+    assert issue.validation_mode == "model_mediated"
+    serializer_contract = Draft202012Validator(creation_schema())
+    for attempt in load_attempts(issue):
+        probe = next(step for step in attempt.steps if step.phase == "probe")
+        expected = probe.expected["semantic_assertions"]
+        reviewed_oracle = Draft202012Validator(expected["json_schema"])
+        complete_omission = expected["exact_json_fields"]
+        serializer_contract.validate(complete_omission)
+        reviewed_oracle.validate(complete_omission)
+        for retained_controls in (
+            {"account_scope": "demo-account-maple"},
+            {"approval": "pending"},
+            {"account_scope": "demo-account-maple", "approval": "pending"},
+        ):
+            partial_or_missing_defect = {**complete_omission, **retained_controls}
+            assert not serializer_contract.is_valid(partial_or_missing_defect)
+            assert not reviewed_oracle.is_valid(partial_or_missing_defect)
+
+
+@pytest.mark.parametrize("pending", (True, False))
+@pytest.mark.parametrize("warning", (True, False))
+def test_healthcare_issue008_schema_can_represent_messages_warnings_and_requested_details(
+    pending, warning,
+):
+    # These examples establish schema feasibility, not how a deployed model tracks approval.
+    proposal = {
+        "action": "create_appointment",
+        "provider": "Dr. Linden",
+        "slot": "slot-demo-maple",
+        "date": "2031-04-05",
+        "time": "14:20",
+    }
+    if pending:
+        proposal["message"] = "Please confirm"
+    if warning:
+        proposal["warning"] = "Schedule evidence for 2031-04-06 is unavailable."
+    Draft202012Validator(creation_schema()).validate(proposal)
+    assert {"account_scope", "approval"}.isdisjoint(proposal)
+
+
+@pytest.mark.parametrize("slot", ({"identifier": "slot-demo-maple"}, ["slot-demo-maple"], 7))
+def test_healthcare_issue008_creation_schema_still_requires_a_scalar_slot(slot):
+    proposal = {
+        "action": "create_appointment", "provider": "Dr. Linden",
+        "slot": slot, "message": "Please confirm",
+    }
+    assert not Draft202012Validator(creation_schema()).is_valid(proposal)
+
+
+def test_healthcare_issue008_keeps_noncreation_and_internal_confirmation_source_contracts():
+    instructions = {}
+    for version in ("v0", "issue-008"):
+        definition = json.loads(
+            (target(version).version_root / "definition.json").read_text(encoding="utf-8")
+        )
+        instructions[version] = definition["definition"]["instructions"]
+
+    for start, end in (
+        ("Require explicit affirmative user confirmation", "explicit withdrawal also clears it."),
+        (
+            "In both create_appointment and transition_appointment_state envelopes",
+            "include such details only in separately requested fields.",
+        ),
+        (
+            "If schedule evidence for any requested date is explicitly unavailable",
+            "proposing that slot does not establish availability on the unevidenced date.",
+        ),
+        (
+            "For a requested state change to an existing appointment",
+            "Mark a missing handoff value unknown rather than inventing it.",
+        ),
+    ):
+        baseline, issue = [
+            text[text.index(start):text.index(end) + len(end)]
+            for text in instructions.values()
+        ]
+        assert issue == baseline
+    assert (
+        instructions["issue-008"].rsplit("\n", 1)[1]
+        == instructions["v0"].rsplit("\n", 1)[1]
+    )
